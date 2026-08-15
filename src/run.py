@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 import pandas as pd
+import requests
 
 from .schema import CompanyRecord, FundamentalYear
 from .providers.yahoo import YahooProvider
@@ -51,20 +52,71 @@ def load_config(cfg_dir: str = "config"):
     return universe, thresholds
 
 
-def sp500_constituents(fallback: List[str]) -> List[str]:
-    """S&P 500 membership churns; pin nothing, fetch it, fall back if that fails."""
+def _http_get(url: str, timeout: int = 30) -> Optional[str]:
+    """Fetch with a descriptive User-Agent.
+
+    This matters more than it looks: pandas.read_html(url) fetches via urllib
+    with a default Python user-agent, and Wikipedia returns 403 to those. The
+    result is a silent fall-through to the 20-name seed list, a one-minute run,
+    and a screener that looks like it covered the S&P 500 but covered 4% of it.
+    """
+    ua = os.environ.get("SEC_USER_AGENT") or "investor-screener/1.0 (+github actions)"
     try:
-        tables = pd.read_html(
-            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
-        for t in tables:
-            if "Symbol" in t.columns:
-                syms = [str(s).strip().replace(".", "-") for s in t["Symbol"].tolist()]
-                syms = [s for s in syms if s and s.lower() != "nan"]
-                if len(syms) > 400:
-                    log.info("Fetched %d S&P 500 constituents", len(syms))
-                    return syms
+        r = requests.get(url, headers={"User-Agent": ua}, timeout=timeout)
+        if r.status_code == 200:
+            return r.text
+        log.warning("GET %s -> HTTP %s", url, r.status_code)
     except Exception as e:                      # noqa: BLE001
-        log.warning("S&P 500 constituent fetch failed (%s) — using seed fallback", e)
+        log.warning("GET %s failed: %s", url, e)
+    return None
+
+
+def sp500_constituents(fallback: List[str]) -> List[str]:
+    """Resolve S&P 500 membership. Membership churns, so fetch rather than pin.
+
+    Two independent sources are tried before giving up, because a single
+    unauthenticated scrape is not something to hang a 500-name universe on.
+    """
+    # 1) Wikipedia, fetched properly and parsed from HTML text.
+    html = _http_get("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+    if html:
+        try:
+            from io import StringIO
+            for t in pd.read_html(StringIO(html)):
+                if "Symbol" in t.columns:
+                    syms = [str(s).strip().upper().replace(".", "-")
+                            for s in t["Symbol"].tolist()]
+                    syms = [s for s in syms if s and s != "NAN"]
+                    if len(syms) > 400:
+                        log.info("S&P 500: %d constituents from Wikipedia", len(syms))
+                        return syms
+        except Exception as e:                  # noqa: BLE001
+            log.warning("Wikipedia parse failed: %s", e)
+
+    # 2) A plain CSV mirror — no scraping, no user-agent games.
+    csv = _http_get("https://raw.githubusercontent.com/datasets/"
+                    "s-and-p-500-companies/main/data/constituents.csv")
+    if csv:
+        try:
+            from io import StringIO
+            df = pd.read_csv(StringIO(csv))
+            col = next((c for c in df.columns if c.lower() in ("symbol", "ticker")), None)
+            if col:
+                syms = [str(s).strip().upper().replace(".", "-") for s in df[col]]
+                syms = [s for s in syms if s and s != "NAN"]
+                if len(syms) > 400:
+                    log.info("S&P 500: %d constituents from CSV mirror", len(syms))
+                    return syms
+        except Exception as e:                  # noqa: BLE001
+            log.warning("CSV mirror parse failed: %s", e)
+
+    # Loud, not a buried warning. A 20-name "S&P 500" screen is worse than none,
+    # because it looks complete.
+    log.error("=" * 72)
+    log.error("S&P 500 CONSTITUENT FETCH FAILED ON ALL SOURCES.")
+    log.error("Falling back to a %d-name seed list. The US screen is NOT the", len(fallback))
+    log.error("S&P 500 this run — treat its results as a sample, not a universe.")
+    log.error("=" * 72)
     return fallback
 
 
@@ -201,6 +253,17 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     macro = fred.snapshot(universe_cfg.get("macro_series", {}))
 
     tickers_by_market = resolve_universe(universe_cfg, markets)
+
+    # State the universe up front. A run that quietly covers 20 names instead of
+    # 500 still finishes green, and the only way to notice is to read the size.
+    total_universe = sum(len(v) for v in tickers_by_market.values())
+    log.info("UNIVERSE for region '%s': %d tickers — %s", region, total_universe,
+             ", ".join(f"{k}={len(v)}" for k, v in tickers_by_market.items()))
+    if "US" in markets and len(tickers_by_market.get("US", [])) < 100 and not limit:
+        log.error("US universe is only %d names — expected ~500. "
+                  "Constituent fetch almost certainly failed.",
+                  len(tickers_by_market.get("US", [])))
+
     records: List[CompanyRecord] = []
     ok = fail = 0
 
