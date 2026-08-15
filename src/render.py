@@ -155,8 +155,14 @@ background:transparent;color:var(--tx2);cursor:pointer;font-weight:500}
 .chip:hover{border-color:var(--acc);color:var(--tx)}
 .chip.on{background:var(--acc);border-color:var(--acc);color:#fff}
 .sep{width:1px;height:20px;background:var(--line);margin:0 4px}
+.searchwrap{display:flex;align-items:center;gap:7px;flex:1;min-width:230px}
 input[type=search]{background:var(--panel2);border:1px solid var(--line);border-radius:7px;
-padding:5px 10px;color:var(--tx);font-size:13px;min-width:150px}
+padding:7px 11px;color:var(--tx);font-size:13.5px;flex:1;min-width:170px}
+input[type=search]:focus{outline:none;border-color:var(--acc);background:var(--panel)}
+.linkbtn{font-size:12px;padding:5px 11px;border-radius:7px;border:1px solid var(--line);
+background:transparent;color:var(--tx2);cursor:pointer;white-space:nowrap}
+.linkbtn:hover{border-color:var(--acc);color:var(--tx)}
+.searchnote{font-size:11.5px;color:var(--tx3);margin:-2px 0 0 2px;width:100%}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;padding:8px 8px;color:var(--tx3);font-size:10.5px;letter-spacing:.06em;
 text-transform:uppercase;border-bottom:1px solid var(--line);white-space:nowrap;font-weight:600}
@@ -218,7 +224,12 @@ __GATE__
   <button class="chip" id="techOnly">Technical pass</button>
   <button class="chip on" id="surfOnly">Surfaced only</button>
   <span class="sep"></span>
-  <input type="search" id="q" placeholder="ticker or name">
+  <span class="searchwrap">
+    <input type="search" id="q" placeholder="Search ticker or name — e.g. MSFT, DBS, 0700">
+    <button class="linkbtn" id="copylink">Copy link to this view</button>
+  </span>
+  <div class="searchnote">Search looks across the whole universe, including names that
+    failed every screen — so you can always check a stock you already hold.</div>
 </div>
 
 <table id="tbl"><thead><tr>
@@ -248,15 +259,48 @@ let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="";
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 
 function visible(){
+  // A search must reach the WHOLE universe, not just what survived the filters.
+  // Otherwise looking up a stock you hold returns nothing and you can't tell
+  // "it failed the screens" from "it isn't covered" — two very different facts.
+  const searching = fQ.trim().length > 0;
   return DATA.filter(r=>{
+    if(searching){
+      const q=fQ.trim().toLowerCase();
+      return r.ticker.toLowerCase().includes(q) || r.name.toLowerCase().includes(q);
+    }
     if(fSurf && !r.surfaced) return false;
     if(fMkt!=="ALL" && r.market!==fMkt) return false;
     if(fTech && !r.tech_pass) return false;
     for(const f of fFw){ if(r.fw[f]!=="pass") return false; }
-    if(fQ){ const q=fQ.toLowerCase();
-      if(!r.ticker.toLowerCase().includes(q) && !r.name.toLowerCase().includes(q)) return false; }
     return true;
   });
+}
+
+// ---- shareable deep links -------------------------------------------------
+function syncUrl(){
+  const p=new URLSearchParams();
+  if(fMkt!=="ALL") p.set('market',fMkt);
+  if(fFw.size) p.set('pass',[...fFw].join(','));
+  if(fTech) p.set('tech','1');
+  if(!fSurf) p.set('all','1');
+  if(fQ.trim()) p.set('q',fQ.trim());
+  const s=p.toString();
+  history.replaceState(null,'',s?('?'+s):location.pathname);
+}
+
+function loadUrl(){
+  const p=new URLSearchParams(location.search);
+  const m=p.get('market');
+  if(m){ fMkt=m;
+    document.querySelectorAll('[data-mkt]').forEach(b=>
+      b.classList.toggle('on', b.dataset.mkt===m)); }
+  const pass=p.get('pass');
+  if(pass) pass.split(',').filter(Boolean).forEach(k=>{ fFw.add(k);
+    const b=document.querySelector(`[data-fw="${k}"]`); if(b) b.classList.add('on'); });
+  if(p.get('tech')==='1'){ fTech=true; document.getElementById('techOnly').classList.add('on'); }
+  if(p.get('all')==='1'){ fSurf=false; document.getElementById('surfOnly').classList.remove('on'); }
+  const q=p.get('q');
+  if(q){ fQ=q; document.getElementById('q').value=q; }
 }
 
 function stats(rows){
@@ -265,6 +309,9 @@ function stats(rows){
   const tech=rows.filter(r=>r.tech_pass).length;
   let h=`<div class="stat"><div class="v">${rows.length}</div><div class="l">Names shown</div></div>`;
   h+=`<div class="stat"><div class="v">${tech}</div><div class="l">Technical pass</div></div>`;
+  // Universe size makes an empty result readable: 0 of 700 is a strict filter,
+  // 0 of 25 means the last run only covered a fraction of the universe.
+  h+=`<div class="stat"><div class="v">${DATA.length}</div><div class="l">In universe</div></div>`;
   Object.keys(byMkt).sort().forEach(k=>{
     h+=`<div class="stat"><div class="v">${byMkt[k]}</div><div class="l">${esc(k)}</div></div>`;});
   document.getElementById('statbar').innerHTML=h;
@@ -305,9 +352,20 @@ function detail(r){
 }
 
 function render(){
-  const rows=visible(); stats(rows);
+  const rows=visible(); stats(rows); syncUrl();
   const tb=document.getElementById('tbody'); tb.innerHTML='';
-  document.getElementById('empty').style.display=rows.length?'none':'block';
+  const emptyEl=document.getElementById('empty');
+  emptyEl.style.display=rows.length?'none':'block';
+  if(!rows.length){
+    emptyEl.innerHTML = fQ.trim()
+      ? `Nothing matching <b>${esc(fQ.trim())}</b> among the ${DATA.length} names in
+         the last run.<br><span style="font-size:12.5px">Either it isn't an index
+         constituent, or the most recent refresh didn't reach it — check
+         <code>config/universe.yml</code>.</span>`
+      : `No names match these filters.<br><span style="font-size:12.5px">Try turning off
+         <b>Surfaced only</b> to see every name in the universe with its per-test
+         results.</span>`;
+  }
   rows.forEach((r,i)=>{
     const tr=document.createElement('tr'); tr.className='row';
     let cells=`<td class="tk">${esc(r.ticker)}</td><td class="nm" title="${esc(r.name)}">${esc(r.name)}</td>
@@ -338,6 +396,13 @@ document.getElementById('techOnly').onclick=function(){
 document.getElementById('surfOnly').onclick=function(){
   fSurf=!fSurf; this.classList.toggle('on',fSurf); render();};
 document.getElementById('q').oninput=e=>{fQ=e.target.value; render();};
+document.getElementById('copylink').onclick=function(){
+  const btn=this;
+  navigator.clipboard.writeText(location.href).then(()=>{
+    btn.textContent='Copied'; setTimeout(()=>btn.textContent='Copy link to this view',1600);
+  }).catch(()=>{ btn.textContent=location.href; });
+};
+loadUrl();
 render();
 </script></body></html>
 """
