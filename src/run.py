@@ -1,0 +1,308 @@
+"""Pipeline entry point.
+
+    python -m src.run --region asia     # 18:30 SGT job: SG, HK, TH, ID
+    python -m src.run --region us       # 07:00 SGT job: S&P 500
+    python -m src.run --region all      # both, for a manual full rebuild
+
+Regions are split because the markets close 11 hours apart. Running Asia at
+18:30 SGT (after SET closes at 17:30) and the US at 07:00 SGT (after the NYSE
+close lands at 04:00/05:00 SGT) means each screen reads that market's most
+recent settled close rather than a stale one. Each job only touches its own
+universe, so total API volume is unchanged versus a single combined run.
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import sys
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import yaml
+import pandas as pd
+
+from .schema import CompanyRecord, FundamentalYear
+from .providers.yahoo import YahooProvider
+from .providers.edgar import EdgarProvider
+from .providers.fred import FredProvider
+from .store import Store
+from . import technicals as ta
+from . import metrics as mx
+from . import screens as sc
+from . import render as rn
+
+log = logging.getLogger("screener")
+
+REGION_MARKETS = {
+    "us": ["US"],
+    "asia": ["SG", "HK", "TH", "ID"],
+    "all": ["US", "SG", "HK", "TH", "ID"],
+}
+
+
+def load_config(cfg_dir: str = "config"):
+    with open(os.path.join(cfg_dir, "universe.yml")) as f:
+        universe = yaml.safe_load(f)
+    with open(os.path.join(cfg_dir, "thresholds.yml")) as f:
+        thresholds = yaml.safe_load(f)
+    return universe, thresholds
+
+
+def sp500_constituents(fallback: List[str]) -> List[str]:
+    """S&P 500 membership churns; pin nothing, fetch it, fall back if that fails."""
+    try:
+        tables = pd.read_html(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+        for t in tables:
+            if "Symbol" in t.columns:
+                syms = [str(s).strip().replace(".", "-") for s in t["Symbol"].tolist()]
+                syms = [s for s in syms if s and s.lower() != "nan"]
+                if len(syms) > 400:
+                    log.info("Fetched %d S&P 500 constituents", len(syms))
+                    return syms
+    except Exception as e:                      # noqa: BLE001
+        log.warning("S&P 500 constituent fetch failed (%s) — using seed fallback", e)
+    return fallback
+
+
+def resolve_universe(universe_cfg: Dict, markets: List[str]) -> Dict[str, List[str]]:
+    out: Dict[str, List[str]] = {}
+    for mkt in markets:
+        m = universe_cfg["markets"].get(mkt)
+        if not m:
+            continue
+        if m.get("constituents_source") == "dynamic":
+            out[mkt] = sp500_constituents(m.get("seed_fallback", []))
+        else:
+            out[mkt] = list(m.get("constituents", []))
+    return out
+
+
+def refresh_fx(yahoo: YahooProvider, store: Store, fx_pairs: Dict[str, Optional[str]]):
+    """One conversion point for the whole system. Cached so a Yahoo FX blip
+    doesn't invalidate the market-cap gates."""
+    for ccy, pair in fx_pairs.items():
+        if ccy == "USD" or not pair:
+            store.save_fx("USD", 1.0)
+            continue
+        rate = yahoo.fx_rate(pair)
+        if rate:
+            store.save_fx(ccy, rate)
+            log.info("FX %s -> USD = %.6f", ccy, rate)
+        else:
+            cached = store.latest_fx(ccy)
+            log.warning("FX %s fetch failed; using cached %s", ccy, cached)
+
+
+def build_record(ticker: str, market_cfg: Dict, market_key: str,
+                 store: Store, yahoo: YahooProvider, edgar: Optional[EdgarProvider],
+                 index_df, fx_to_usd: Optional[float],
+                 refresh_fundamentals: bool = True) -> Optional[CompanyRecord]:
+    ccy = market_cfg.get("currency", "USD")
+    rec = CompanyRecord(ticker=ticker, market=market_key, currency=ccy,
+                        standard="us-gaap" if market_key == "US" else "ifrs")
+
+    # ---- prices: fetch, persist, then read back so we always screen on the
+    # full stored history rather than only on what today's call returned.
+    df = yahoo.prices(ticker, period="10y")
+    if df is not None and not df.empty:
+        store.save_prices(ticker, df)
+    stored = store.load_prices(ticker)
+    if stored is None or stored.empty:
+        log.warning("%s: no price history available, skipping", ticker)
+        return None
+    if df is None:
+        stale = store.price_staleness_days(ticker)
+        rec.warnings.append(f"price fetch failed; using stored data ({stale}d old)")
+
+    # ---- profile
+    prof = yahoo.profile(ticker)
+    if prof:
+        store.save_profile(ticker, prof)
+    else:
+        prof = store.load_profile(ticker) or {}
+        if prof:
+            rec.warnings.append("profile fetch failed; using cached profile")
+    rec.name = prof.get("name") or ticker
+    rec.sector = prof.get("sector")
+    rec.industry = prof.get("industry")
+    if prof.get("currency"):
+        rec.currency = prof["currency"]
+    rec.financial_currency = prof.get("financial_currency") or rec.currency
+    rec.shares_outstanding = prof.get("shares_outstanding")
+    rec.market_cap = prof.get("market_cap")
+
+    # ---- technicals on this market's own calendar
+    rec.technicals = ta.compute(stored, index_df=index_df, fx_to_usd=fx_to_usd)
+    rec.price = rec.technicals.get("price") or prof.get("price")
+    if not rec.market_cap and rec.price and rec.shares_outstanding:
+        rec.market_cap = rec.price * rec.shares_outstanding
+
+    # ---- fundamentals: EDGAR for US (audited), Yahoo for Asia (only option)
+    years: List[FundamentalYear] = []
+    source = market_cfg.get("fundamentals_provider", "yahoo")
+    if refresh_fundamentals:
+        if source == "edgar" and edgar is not None:
+            years = edgar.fetch(ticker, years=12)
+            if not years:
+                rec.warnings.append("no SEC filings found; falling back to Yahoo")
+                years = yahoo.fundamentals(ticker, currency=rec.currency)
+                source = "yahoo"
+        else:
+            years = yahoo.fundamentals(ticker, currency=rec.currency)
+        if years:
+            store.save_fundamentals(ticker, years, source)
+
+    if not years:
+        cached = store.load_fundamentals(ticker)
+        if cached:
+            age = store.fundamentals_age_days(ticker)
+            rec.warnings.append(f"fundamentals fetch failed; using cache ({age}d old)")
+            for c in cached:
+                fy = FundamentalYear(
+                    ticker=ticker, fiscal_year=c["fiscal_year"],
+                    period_end=c.get("period_end", ""),
+                    standard=c.get("standard", "ifrs"),
+                    currency=c.get("currency", ccy), source=c.get("source", "cache"))
+                for k, v in c.items():
+                    if hasattr(fy, k) and k not in ("ticker", "fiscal_year"):
+                        try:
+                            setattr(fy, k, v)
+                        except Exception:      # noqa: BLE001
+                            pass
+                years.append(fy)
+        else:
+            rec.warnings.append("no fundamentals available — value screens cannot run")
+
+    years.sort(key=lambda y: y.fiscal_year, reverse=True)
+    rec.years = years
+    return rec
+
+
+def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
+        db_path: str = "data/screener.db", limit: Optional[int] = None,
+        skip_fundamentals: bool = False) -> Dict[str, Any]:
+    universe_cfg, thresholds = load_config(cfg_dir)
+    markets = REGION_MARKETS[region]
+
+    store = Store(db_path)
+    yahoo = YahooProvider()
+    edgar = EdgarProvider() if "US" in markets else None
+    fred = FredProvider()
+
+    run_id = f"{region}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
+    store.start_run(run_id, region)
+    t0 = time.time()
+
+    refresh_fx(yahoo, store, universe_cfg.get("fx_pairs", {}))
+    macro = fred.snapshot(universe_cfg.get("macro_series", {}))
+
+    tickers_by_market = resolve_universe(universe_cfg, markets)
+    records: List[CompanyRecord] = []
+    ok = fail = 0
+
+    for mkt in markets:
+        mcfg = universe_cfg["markets"][mkt]
+        tickers = tickers_by_market.get(mkt, [])
+        if limit:
+            tickers = tickers[:limit]
+        log.info("=== %s (%s): %d tickers ===", mkt, mcfg.get("name"), len(tickers))
+
+        idx_df = yahoo.prices(mcfg["index_ticker"], period="5y")
+        if idx_df is not None:
+            store.save_prices(mcfg["index_ticker"], idx_df)
+        else:
+            idx_df = store.load_prices(mcfg["index_ticker"])
+            log.warning("%s index fetch failed; relative strength may be stale", mkt)
+
+        fx = store.latest_fx(mcfg.get("currency", "USD"))
+
+        for i, t in enumerate(tickers, 1):
+            try:
+                rec = build_record(t, mcfg, mkt, store, yahoo, edgar, idx_df, fx,
+                                   refresh_fundamentals=not skip_fundamentals)
+                if rec:
+                    records.append(rec)
+                    ok += 1
+                else:
+                    fail += 1
+            except Exception as e:                     # noqa: BLE001
+                log.exception("%s failed: %s", t, e)
+                fail += 1
+            if i % 25 == 0:
+                log.info("  %s: %d/%d", mkt, i, len(tickers))
+
+    # ---- metrics, then screens
+    # One FX table for the whole run, so ratio reconciliation and the USD size
+    # gates use identical rates. Includes reporting currencies (CNY, USD, ...)
+    # that no market in the universe actually trades in.
+    fx_rates: Dict[str, float] = {"USD": 1.0}
+    for ccy in set(list(universe_cfg.get("fx_pairs", {}).keys())
+                   + [m.get("currency") for m in universe_cfg["markets"].values()]):
+        if not ccy:
+            continue
+        r = store.latest_fx(ccy)
+        if r:
+            fx_rates[ccy.upper()] = r
+
+    metrics_by_ticker: Dict[str, Dict[str, Any]] = {}
+    for rec in records:
+        m = mx.compute_metrics(rec, fx_rates=fx_rates)
+        fx = fx_rates.get((rec.currency or "USD").upper()) or 1.0
+        m["market_cap_usd"] = rec.market_cap * fx if rec.market_cap else None
+        m["fx_to_usd"] = fx
+        metrics_by_ticker[rec.ticker] = m
+
+    screened = sc.screen_universe(records, metrics_by_ticker, thresholds, macro)
+    store.save_screen_results(run_id, screened["results"])
+
+    # Merge in the other region's most recent results so the published page
+    # always shows all five markets, each as fresh as its own last run.
+    merged = store.latest_results()
+    merged.update(screened["results"])
+
+    os.makedirs(out_dir, exist_ok=True)
+    html_path = rn.render(merged, metrics_by_ticker, screened, thresholds,
+                          universe_cfg, out_dir=out_dir, region=region, run_id=run_id)
+
+    elapsed = time.time() - t0
+    notes = f"{len(records)} records, {elapsed:.0f}s, macro_gate={'open' if screened['macro_gate_open'] else 'CLOSED'}"
+    store.end_run(run_id, ok, fail, notes)
+    log.info("Run %s complete: %s", run_id, notes)
+    log.info("Wrote %s", html_path)
+
+    store.close()
+    return {"run_id": run_id, "ok": ok, "fail": fail, "html": html_path,
+            "surfaced": sum(1 for v in merged.values() if v.get("surfaced"))}
+
+
+def main():
+    p = argparse.ArgumentParser(description="Multi-market value + technical screener")
+    p.add_argument("--region", choices=["us", "asia", "all"], default="all")
+    p.add_argument("--config", default="config")
+    p.add_argument("--out", default="out")
+    p.add_argument("--db", default="data/screener.db")
+    p.add_argument("--limit", type=int, default=None,
+                   help="cap tickers per market (for testing)")
+    p.add_argument("--skip-fundamentals", action="store_true",
+                   help="prices/technicals only; reuse stored fundamentals")
+    p.add_argument("-v", "--verbose", action="store_true")
+    a = p.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if a.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        stream=sys.stdout)
+    logging.getLogger("yfinance").setLevel(logging.ERROR)
+    logging.getLogger("urllib3").setLevel(logging.ERROR)
+
+    res = run(a.region, a.config, a.out, a.db, a.limit, a.skip_fundamentals)
+    print(f"\n{res['ok']} ok / {res['fail']} failed · {res['surfaced']} names surfaced")
+    print(f"Output: {res['html']}")
+
+
+if __name__ == "__main__":
+    main()
