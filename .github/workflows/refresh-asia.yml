@@ -1,0 +1,76 @@
+name: Refresh Asia (18:30 SGT)
+
+# 18:30 SGT = 10:30 UTC. Singapore does not observe daylight saving, so this
+# is a fixed offset year-round — no seasonal drift to correct for.
+#
+# Why 18:30: HKEX closes 16:00 SGT, IDX ~17:00, SGX 17:00, SET 17:30. Running
+# at 18:30 means all four Asian closes are settled and Yahoo has published
+# adjusted bars.
+on:
+  schedule:
+    - cron: '30 10 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Cap tickers per market (blank = all)'
+        required: false
+
+concurrency:
+  group: screener-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore data store
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: screener-store-${{ github.run_id }}
+          restore-keys: screener-store-
+
+      - name: Run Asia refresh
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: |
+          python -m src.run --region asia \
+            ${{ github.event.inputs.limit && format('--limit {0}', github.event.inputs.limit) || '' }}
+
+      - name: Save data store
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: screener-store-${{ github.run_id }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Archive results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-asia-${{ github.run_number }}
+          path: out/results.json
+          retention-days: 90
