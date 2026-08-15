@@ -39,11 +39,15 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      # The store is what makes a Yahoo outage cost one day of freshness
+      # rather than the whole history. Restore before the run, save after.
+      # run_attempt is in the key so a re-run can save instead of colliding
+      # with the cache its own first attempt already wrote.
       - name: Restore data store
         uses: actions/cache/restore@v4
         with:
           path: data
-          key: screener-store-${{ github.run_id }}
+          key: screener-store-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: screener-store-
 
       - name: Run US refresh
@@ -59,7 +63,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: data
-          key: screener-store-${{ github.run_id }}
+          key: screener-store-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
