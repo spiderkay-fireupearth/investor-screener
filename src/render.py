@@ -124,6 +124,8 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             },
             "surfaced": bool(r.get("surfaced")),
             "has_report": ticker in report_tickers,
+            "themes": r.get("themes") or [],
+            "is_fund": bool(r.get("is_fund")),
             "gates": r.get("gates_failed", []),
             "warnings": r.get("warnings", []),
             "key_metrics": {
@@ -225,6 +227,9 @@ tr.detail>td{background:var(--panel);padding:0;border-bottom:2px solid var(--lin
 padding:8px 11px;margin-bottom:12px;font-size:12px;color:var(--warn)}
 .note{background:var(--panel);border-left:3px solid var(--acc);border-radius:0 8px 8px 0;
 padding:11px 15px;margin:14px 0;font-size:13px;color:var(--tx2)}
+.tagrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.tag{font-size:10.5px;padding:2px 8px;border-radius:20px;background:var(--panel2);
+ color:var(--tx2);border:1px solid var(--line)}
 .ddbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .ddbtn{font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:7px;
  border:1px solid var(--line);color:var(--tx2);text-decoration:none;white-space:nowrap}
@@ -250,6 +255,7 @@ __GATE__
   <span class="sep"></span>
   <span class="fl">Must pass</span>
   __FWCHIPS__
+  __THEMEROW__
   <span class="sep"></span>
   <button class="chip" id="techOnly">Technical pass</button>
   <button class="chip on" id="surfOnly">Surfaced only</button>
@@ -286,7 +292,7 @@ const DATA = __DATA__;
 const FWS = __FWS__;
 const WF_URL = __WFURL__;
 const ISSUE_URL = __ISSUEURL__;
-let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="";
+let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="", fTheme="ALL";
 
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 
@@ -302,6 +308,7 @@ function visible(){
     }
     if(fSurf && !r.surfaced) return false;
     if(fMkt!=="ALL" && r.market!==fMkt) return false;
+    if(fTheme!=="ALL" && !(r.themes||[]).includes(fTheme)) return false;
     if(fTech && !r.tech_pass) return false;
     for(const f of fFw){ if(r.fw[f]!=="pass") return false; }
     return true;
@@ -312,6 +319,7 @@ function visible(){
 function syncUrl(){
   const p=new URLSearchParams();
   if(fMkt!=="ALL") p.set('market',fMkt);
+  if(fTheme!=="ALL") p.set('theme',fTheme);
   if(fFw.size) p.set('pass',[...fFw].join(','));
   if(fTech) p.set('tech','1');
   if(!fSurf) p.set('all','1');
@@ -322,6 +330,10 @@ function syncUrl(){
 
 function loadUrl(){
   const p=new URLSearchParams(location.search);
+  const th=p.get('theme');
+  if(th){ fTheme=th;
+    document.querySelectorAll('[data-theme]').forEach(b=>
+      b.classList.toggle('on', b.dataset.theme===th)); }
   const m=p.get('market');
   if(m){ fMkt=m;
     document.querySelectorAll('[data-mkt]').forEach(b=>
@@ -372,6 +384,13 @@ function detail(r){
         <span class="ddhint">opens a pre-filled request &mdash; press <b>Create</b> and the report builds itself (~2 min)</span>`;
   }
   h+='</div>';
+  if(r.themes && r.themes.length)
+    h+='<div class="tagrow">'+r.themes.map(t=>`<span class="tag">${esc(t)}</span>`).join('')+'</div>';
+  if(r.is_fund)
+    h+='<div class="warn"><b>This is a fund, not an operating company.</b> Revenue, '
+      +'equity, ROE and EV/EBIT are undefined for an ETF, so the six value '
+      +'frameworks show n/a rather than fail. Prices, technicals and the Soros '
+      +'regime read still apply.</div>';
   if(r.warnings && r.warnings.length)
     h+=`<div class="warn"><b>Data quality:</b> ${r.warnings.map(esc).join(' · ')}</div>`;
   if(r.gates && r.gates.length)
@@ -434,6 +453,9 @@ function render(){
 document.querySelectorAll('[data-mkt]').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('[data-mkt]').forEach(x=>x.classList.remove('on'));
   b.classList.add('on'); fMkt=b.dataset.mkt; render();});
+document.querySelectorAll('[data-theme]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('[data-theme]').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); fTheme=b.dataset.theme; render();});
 document.querySelectorAll('[data-fw]').forEach(b=>b.onclick=()=>{
   const k=b.dataset.fw;
   if(fFw.has(k)){fFw.delete(k);b.classList.remove('on');}else{fFw.add(k);b.classList.add('on');}
@@ -455,6 +477,12 @@ render();
 """
 
 
+def e_attr(s: str) -> str:
+    """Escape for an HTML attribute AND for the JS string comparison it feeds."""
+    import html as _h
+    return _h.escape(str(s), quote=True)
+
+
 def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
            screened: Dict[str, Any], thresholds: Dict[str, Any],
            universe_cfg: Dict[str, Any], out_dir: str = "out",
@@ -472,6 +500,14 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     mkt_chips = "".join(
         f'<button class="chip" data-mkt="{m}">{MARKET_LABELS.get(m, m)}</button>'
         for m in markets_present)
+    themes = list((universe_cfg.get("themes") or {}).keys())
+    theme_row = ""
+    if themes:
+        theme_row = ('<span class="sep"></span><span class="fl">Theme</span>'
+                     '<button class="chip on" data-theme="ALL">All</button>'
+                     + "".join(f'<button class="chip" data-theme="{e_attr(t)}">'
+                               f'{e_attr(t)}</button>' for t in themes))
+
     fw_chips = "".join(
         f'<button class="chip" data-fw="{k}">{lbl}</button>' for k, lbl in FRAMEWORKS)
     fw_head = "".join(f'<th class="c">{lbl[:4]}</th>' for _k, lbl in FRAMEWORKS)
@@ -493,6 +529,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__MKTCHIPS__", mkt_chips)
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
+            .replace("__THEMEROW__", theme_row)
             .replace("__GATE__", gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
