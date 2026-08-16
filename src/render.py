@@ -42,13 +42,22 @@ def _test_rows(fw: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows = []
     for t in fw.get("tests", []):
         res = t.get("result")
+        if t.get("insufficient"):
+            # Not enough YEARS to judge — a property of the data feed, not the
+            # company. Shown greyed and excluded from the score, so a shallow
+            # feed never masquerades as a failing business.
+            state = "na"
+            thresh = t.get("note") or "insufficient history"
+        else:
+            state = "pass" if res is True else ("fail" if res is False else "unknown")
+            thresh = (("rank " + str(t.get("rank"))) if t.get("operator") == "rank"
+                      else f"{t.get('operator', '')} {_fmt_num(t.get('threshold'), 3)}")
         rows.append({
             "name": t["name"].replace("_", " "),
             "metric": t.get("metric") or "",
-            "value": _fmt_num(t.get("value"), 3),
-            "threshold": ("rank " + str(t.get("rank"))) if t.get("operator") == "rank"
-                         else f"{t.get('operator', '')} {_fmt_num(t.get('threshold'), 3)}",
-            "state": "pass" if res is True else ("fail" if res is False else "unknown"),
+            "value": "—" if t.get("insufficient") else _fmt_num(t.get("value"), 3),
+            "threshold": thresh,
+            "state": state,
             "alt": bool(t.get("via_alt")),
         })
     return rows
@@ -73,12 +82,20 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 fw_state[key] = "unknown"
             else:
                 fw_state[key] = "fail"
+            eff = f.get("effective_total", f.get("n_total", 0))
+            note = f.get("ineligible_reason") or f.get("macro_gate_blocked") or ""
+            if f.get("limited_history") and not note:
+                note = (f"judged on {m.get('history_years', '?')} years of statements — "
+                        f"{f.get('n_insufficient')} test(s) need a longer window and "
+                        f"were excluded, with the bar scaled down to match")
             fw_detail[key] = {
                 "label": f.get("label", key),
                 "passed": bool(f.get("passed")),
-                "summary": f"{f.get('n_passed', 0)}/{f.get('n_total', 0)} tests"
-                           + (f", need {f.get('required')}" if f.get("required") else ""),
-                "note": f.get("ineligible_reason") or f.get("macro_gate_blocked") or "",
+                "summary": f"{f.get('n_passed', 0)}/{eff} tests"
+                           + (f", need {f.get('required')}" if f.get("required") else "")
+                           + (f" · {f.get('n_insufficient')} n/a" if f.get("n_insufficient") else ""),
+                "note": note,
+                "limited": bool(f.get("limited_history")),
                 "rank": f.get("combined_rank"),
                 "tests": _test_rows(f),
             }
@@ -194,6 +211,8 @@ tr.detail>td{background:var(--panel);padding:0;border-bottom:2px solid var(--lin
 .tn{color:var(--tx2);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tv{font-variant-numeric:tabular-nums;white-space:nowrap}
 .tv.pass{color:var(--ok)}.tv.fail{color:var(--bad)}.tv.unknown{color:var(--warn)}
+.tv.na{color:var(--tx3);opacity:.75;font-style:italic}
+.dcard .lim{font-size:10.5px;color:var(--tx3);font-style:italic;margin-bottom:5px}
 .kmet{display:grid;grid-template-columns:repeat(auto-fit,minmax(115px,1fr));gap:7px;margin-bottom:14px}
 .kmet div{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:7px 9px}
 .kmet .kl{font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em}
