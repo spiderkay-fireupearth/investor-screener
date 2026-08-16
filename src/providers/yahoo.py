@@ -215,6 +215,10 @@ class YahooProvider:
                 info["sector"] = full.get("sector")
                 info["industry"] = full.get("industry")
                 info["trailing_pe"] = full.get("trailingPE")
+                # ETF / MUTUALFUND / EQUITY. A fund has no revenue, equity or
+                # ROE, so the value frameworks must be skipped rather than
+                # failed on missing data.
+                info["quote_type"] = full.get("quoteType")
             except Exception:                            # noqa: BLE001
                 pass
             return info
