@@ -42,6 +42,191 @@ markets:
       - COST
       - WMT
 
+  JP:
+    name: Japan
+    index_ticker: "^N225"
+    index_name: Nikkei 225
+    currency: JPY
+    timezone: Asia/Tokyo
+    close_local: "15:30"        # TSE extended the cash close to 15:30 JST in Nov 2024
+    fundamentals_provider: yahoo
+    price_provider: yahoo
+    # 225 names churn on the September and March reviews, so fetch rather than
+    # pin. seed_fallback below is used only if the fetch fails, and the run logs
+    # loudly when that happens.
+    constituents_source: wikipedia
+    constituents_url: "https://en.wikipedia.org/wiki/Nikkei_225"
+    ticker_suffix: ".T"
+    ticker_pad: 4               # Yahoo wants 4-digit TSE codes: 7203.T not 7203
+    min_expected: 150
+    seed_fallback:
+      # Autos and suppliers
+      - 7203.T   # Toyota
+      - 7267.T   # Honda
+      - 7269.T   # Suzuki
+      - 7270.T   # Subaru
+      - 7201.T   # Nissan
+      - 7202.T   # Isuzu
+      - 7261.T   # Mazda
+      - 6902.T   # Denso
+      - 7259.T   # Aisin
+      - 5108.T   # Bridgestone
+      - 7276.T   # Koito
+      - 7272.T   # Yamaha Motor
+      # Electronics, semis and equipment
+      - 6758.T   # Sony
+      - 6501.T   # Hitachi
+      - 6503.T   # Mitsubishi Electric
+      - 6702.T   # Fujitsu
+      - 6752.T   # Panasonic
+      - 6954.T   # Fanuc
+      - 6857.T   # Advantest
+      - 8035.T   # Tokyo Electron
+      - 6146.T   # Disco
+      - 6920.T   # Lasertec
+      - 7735.T   # SCREEN Holdings
+      - 6723.T   # Renesas
+      - 6963.T   # Rohm
+      - 6762.T   # TDK
+      - 6971.T   # Kyocera
+      - 6981.T   # Murata
+      - 4062.T   # Ibiden
+      - 6506.T   # Yaskawa
+      - 6645.T   # Omron
+      - 6479.T   # Nidec
+      - 7751.T   # Canon
+      - 7752.T   # Ricoh
+      - 4901.T   # Fujifilm
+      - 4902.T   # Konica Minolta
+      - 6841.T   # Yokogawa
+      - 6988.T   # Nitto Denko
+      # Industrials and machinery
+      - 6301.T   # Komatsu
+      - 6326.T   # Kubota
+      - 6367.T   # Daikin
+      - 6273.T   # SMC
+      - 7011.T   # Mitsubishi Heavy
+      - 7012.T   # Kawasaki Heavy
+      - 7013.T   # IHI
+      - 6305.T   # Hitachi Construction Machinery
+      - 6113.T   # Amada
+      - 5631.T   # Japan Steel Works
+      # Telecoms, internet and games
+      - 9432.T   # NTT
+      - 9433.T   # KDDI
+      - 9434.T   # SoftBank Corp
+      - 9984.T   # SoftBank Group
+      - 9613.T   # NTT Data
+      - 6098.T   # Recruit
+      - 4689.T   # LY Corporation
+      - 4704.T   # Trend Micro
+      - 4751.T   # CyberAgent
+      - 7974.T   # Nintendo
+      - 9766.T   # Konami
+      - 9697.T   # Capcom
+      - 7832.T   # Bandai Namco
+      - 3659.T   # Nexon
+      - 2432.T   # DeNA
+      # Banks, insurers and brokers
+      - 8306.T   # Mitsubishi UFJ
+      - 8316.T   # Sumitomo Mitsui
+      - 8411.T   # Mizuho
+      - 8308.T   # Resona
+      - 8309.T   # Sumitomo Mitsui Trust
+      - 8591.T   # ORIX
+      - 8601.T   # Daiwa Securities
+      - 8604.T   # Nomura Holdings
+      - 8630.T   # Sompo
+      - 8725.T   # MS&AD
+      - 8750.T   # Dai-ichi Life
+      - 8766.T   # Tokio Marine
+      - 8697.T   # Japan Exchange Group
+      - 7182.T   # Japan Post Bank
+      # Trading houses
+      - 8058.T   # Mitsubishi Corporation
+      - 8031.T   # Mitsui & Co
+      - 8053.T   # Sumitomo Corporation
+      - 8001.T   # Itochu
+      - 8002.T   # Marubeni
+      - 2768.T   # Sojitz
+      # Pharma, chemicals and materials
+      - 4502.T   # Takeda
+      - 4503.T   # Astellas
+      - 4507.T   # Shionogi
+      - 4519.T   # Chugai
+      - 4523.T   # Eisai
+      - 4568.T   # Daiichi Sankyo
+      - 4578.T   # Otsuka
+      - 4151.T   # Kyowa Kirin
+      - 4063.T   # Shin-Etsu Chemical
+      - 4005.T   # Sumitomo Chemical
+      - 4021.T   # Nissan Chemical
+      - 4183.T   # Mitsui Chemicals
+      - 3407.T   # Asahi Kasei
+      - 3402.T   # Toray
+      - 3405.T   # Kuraray
+      - 4452.T   # Kao
+      - 4911.T   # Shiseido
+      - 5201.T   # AGC
+      - 5333.T   # NGK Insulators
+      # Steel, mining and energy
+      - 5401.T   # Nippon Steel
+      - 5411.T   # JFE Holdings
+      - 5406.T   # Kobe Steel
+      - 5713.T   # Sumitomo Metal Mining
+      - 5711.T   # Mitsubishi Materials
+      - 1605.T   # INPEX
+      - 5020.T   # ENEOS
+      - 5019.T   # Idemitsu Kosan
+      # Utilities
+      - 9501.T   # TEPCO
+      - 9502.T   # Chubu Electric
+      - 9503.T   # Kansai Electric
+      - 9531.T   # Tokyo Gas
+      - 9532.T   # Osaka Gas
+      # Transport and logistics
+      - 9020.T   # JR East
+      - 9021.T   # JR West
+      - 9022.T   # JR Central
+      - 9101.T   # Nippon Yusen
+      - 9104.T   # Mitsui O.S.K. Lines
+      - 9107.T   # Kawasaki Kisen
+      - 9201.T   # Japan Airlines
+      - 9202.T   # ANA Holdings
+      - 9064.T   # Yamato Holdings
+      - 9147.T   # NX Holdings
+      # Construction and real estate
+      - 1801.T   # Taisei
+      - 1802.T   # Obayashi
+      - 1803.T   # Shimizu
+      - 1812.T   # Kajima
+      - 1925.T   # Daiwa House
+      - 1928.T   # Sekisui House
+      - 1963.T   # JGC
+      - 8801.T   # Mitsui Fudosan
+      - 8802.T   # Mitsubishi Estate
+      - 8830.T   # Sumitomo Realty
+      # Food, retail and consumer
+      - 2502.T   # Asahi Group
+      - 2503.T   # Kirin
+      - 2801.T   # Kikkoman
+      - 2802.T   # Ajinomoto
+      - 2871.T   # Nichirei
+      - 2914.T   # Japan Tobacco
+      - 2269.T   # Meiji
+      - 3382.T   # Seven & i
+      - 8267.T   # Aeon
+      - 9843.T   # Nitori
+      - 9983.T   # Fast Retailing
+      - 7532.T   # Pan Pacific International
+      # Services and other
+      - 4324.T   # Dentsu
+      - 9735.T   # Secom
+      - 4661.T   # Oriental Land
+      - 7912.T   # Dai Nippon Printing
+      - 7911.T   # TOPPAN
+      - 3861.T   # Oji Holdings
+
   SG:
     name: Singapore
     index_ticker: "^STI"
