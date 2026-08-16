@@ -171,7 +171,33 @@ def resolve_universe(universe_cfg: Dict, markets: List[str]) -> Dict[str, List[s
         seed = m.get("seed_fallback", []) or list(m.get("constituents", []))
 
         if src == "dynamic":            # S&P 500 — its own two-source resolver
-            out[mkt] = sp500_constituents(seed)
+            names = [str(t).upper() for t in sp500_constituents(seed)
+                     if t is not None and not isinstance(t, bool)]
+            # Union any extra indices, deduplicated and order-preserving. Most
+            # of the Nasdaq-100 is already in the S&P 500; only the difference
+            # is added, so nothing is fetched or screened twice.
+            seen = {t.upper() for t in names}
+            for extra in (m.get("extra_indices") or []):
+                got = wikipedia_constituents(
+                    extra["url"], suffix=extra.get("ticker_suffix", ""),
+                    min_expected=extra.get("min_expected", 80),
+                    pad_to=extra.get("ticker_pad"))
+                if not got:
+                    got = extra.get("seed_fallback", [])
+                    log.warning("%s fetch failed — using %d seed names",
+                                extra.get("name"), len(got))
+                # YAML 1.1 turns bare ON/OFF/YES/NO/Y/N into booleans, so
+                # ON Semiconductor arrives as True unless it was quoted in the
+                # config. Coerce here as well — config should not be able to
+                # put a non-string into a ticker list.
+                got = [str(t).upper() for t in got
+                       if t is not None and not isinstance(t, bool)]
+                added = [t for t in got if t.upper() not in seen]
+                seen.update(t.upper() for t in added)
+                names.extend(added)
+                log.info("%s: %d constituents, %d new after dedupe against the S&P 500",
+                         extra.get("name"), len(got), len(added))
+            out[mkt] = names
         elif src == "wikipedia":
             syms = wikipedia_constituents(
                 m["constituents_url"],
