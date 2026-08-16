@@ -19,7 +19,8 @@ FRAMEWORKS = [
     ("soros", "Soros"),
 ]
 
-MARKET_LABELS = {"US": "S&P 500", "SG": "SGX", "HK": "HKEX", "TH": "SET", "ID": "IDX"}
+MARKET_LABELS = {"US": "S&P 500", "JP": "Nikkei 225", "SG": "SGX",
+                 "HK": "HKEX", "TH": "SET", "ID": "IDX"}
 
 
 def _fmt_num(v, dp=2, pct=False, money=False):
