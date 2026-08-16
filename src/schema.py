@@ -157,6 +157,8 @@ class CompanyRecord:
     currency: str = "USD"            # currency the SHARES TRADE in
     financial_currency: Optional[str] = None   # currency the STATEMENTS use
     standard: str = "ifrs"
+    quote_type: Optional[str] = None      # EQUITY | ETF | MUTUALFUND ...
+    themes: List[str] = field(default_factory=list)
 
     years: List[FundamentalYear] = field(default_factory=list)   # newest first
 
