@@ -10,6 +10,12 @@
 
 global:
   unknown_counts_as: fail          # fail | skip
+  # Fundamentals depth differs by SOURCE, not by company: EDGAR gives 10+ years
+  # for US filers, Yahoo about 4 for the Asian markets. Tests needing a deeper
+  # window than a company's feed provides are marked unevaluable and drop out of
+  # the denominator, and the pass bar scales down with them. Without this,
+  # Buffett and Lynch are arithmetically impossible for every Asian name.
+  min_history_years: 4
   min_market_cap_usd: 300000000    # 300m USD floor, applied to all markets
   min_median_daily_turnover_usd: 1000000
   # Financials and REITs distort EV/EBIT, ROIC and net-working-capital maths.
@@ -51,6 +57,7 @@ buffett:
       metric: share_count_change_5y
       threshold: 0.0              # count today <= count 5y ago
       operator: lte
+      min_history_years: 6        # needs a year -5 to compare against
 
 # ---------------------------------------------------------------------------
 munger:
@@ -104,6 +111,7 @@ schloss:
       metric: years_of_data
       threshold: 10
       operator: gte
+      min_history_years: 10       # can't tell a young company from a short feed
     earnings_durability:
       metric: loss_years_in_10
       threshold: 2
@@ -144,14 +152,17 @@ lynch:
       metric: peg_ratio
       threshold: 1.0
       operator: lte
+      min_history_years: 6        # PEG needs a 5-year EPS CAGR
     growth_band_lower:
       metric: eps_cagr_5y
       threshold: 0.10
       operator: gte
+      min_history_years: 6
     growth_band_upper:
       metric: eps_cagr_5y
       threshold: 0.40             # >40% is rarely sustainable — Lynch's own caution
       operator: lte
+      min_history_years: 6
     leverage:
       metric: debt_to_equity
       threshold: 0.50
