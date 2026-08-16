@@ -39,8 +39,8 @@ log = logging.getLogger("screener")
 
 REGION_MARKETS = {
     "us": ["US"],
-    "asia": ["SG", "HK", "TH", "ID"],
-    "all": ["US", "SG", "HK", "TH", "ID"],
+    "asia": ["JP", "SG", "HK", "TH", "ID"],
+    "all": ["US", "JP", "SG", "HK", "TH", "ID"],
 }
 
 
@@ -120,14 +120,70 @@ def sp500_constituents(fallback: List[str]) -> List[str]:
     return fallback
 
 
+def wikipedia_constituents(url: str, suffix: str = "",
+                           min_expected: int = 100,
+                           pad_to: Optional[int] = None) -> List[str]:
+    """Pull an index's members from a Wikipedia components table.
+
+    Generic on purpose: adding a new index should be a config edit, not a code
+    change. Returns [] on any failure so the caller can fall back — never a
+    partial list, because a half-populated index reads as a complete one.
+    """
+    html = _http_get(url)
+    if not html:
+        return []
+    from io import StringIO
+    try:
+        tables = pd.read_html(StringIO(html))
+    except Exception as e:                      # noqa: BLE001
+        log.warning("Could not parse tables at %s: %s", url, e)
+        return []
+
+    for t in tables:
+        cols = {str(c).strip().lower(): c for c in t.columns}
+        col = next((cols[k] for k in ("code", "ticker", "symbol", "ticker symbol")
+                    if k in cols), None)
+        if col is None:
+            continue
+        syms = []
+        for v in t[col].tolist():
+            s = str(v).strip().upper().replace(".0", "")
+            if not s or s == "NAN":
+                continue
+            if pad_to and s.isdigit():
+                s = s.zfill(pad_to)
+            syms.append(f"{s}{suffix}")
+        if len(syms) >= min_expected:
+            log.info("Fetched %d constituents from %s", len(syms), url)
+            return syms
+    log.warning("No usable constituent table found at %s", url)
+    return []
+
+
 def resolve_universe(universe_cfg: Dict, markets: List[str]) -> Dict[str, List[str]]:
     out: Dict[str, List[str]] = {}
     for mkt in markets:
         m = universe_cfg["markets"].get(mkt)
         if not m:
             continue
-        if m.get("constituents_source") == "dynamic":
-            out[mkt] = sp500_constituents(m.get("seed_fallback", []))
+        src = m.get("constituents_source")
+        seed = m.get("seed_fallback", []) or list(m.get("constituents", []))
+
+        if src == "dynamic":            # S&P 500 — its own two-source resolver
+            out[mkt] = sp500_constituents(seed)
+        elif src == "wikipedia":
+            syms = wikipedia_constituents(
+                m["constituents_url"],
+                suffix=m.get("ticker_suffix", ""),
+                min_expected=m.get("min_expected", 100),
+                pad_to=m.get("ticker_pad"))
+            if syms:
+                out[mkt] = syms
+            else:
+                log.error("%s constituent fetch failed — falling back to %d "
+                          "seed names. This market is a SAMPLE, not the index.",
+                          mkt, len(seed))
+                out[mkt] = seed
         else:
             out[mkt] = list(m.get("constituents", []))
     return out
