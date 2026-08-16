@@ -161,6 +161,45 @@ def wikipedia_constituents(url: str, suffix: str = "",
     return []
 
 
+SUFFIX_MARKET = {".T": "JP", ".SI": "SG", ".HK": "HK", ".BK": "TH", ".JK": "ID"}
+
+
+def theme_map(universe_cfg: Dict) -> Dict[str, List[str]]:
+    """ticker -> [theme names]. A ticker may carry several tags."""
+    out: Dict[str, List[str]] = {}
+    for name, block in (universe_cfg.get("themes") or {}).items():
+        for t in (block.get("tickers") or []):
+            out.setdefault(str(t).upper(), []).append(name)
+    return out
+
+
+def merge_themes(universe_cfg: Dict, resolved: Dict[str, List[str]],
+                 markets: List[str]) -> Dict[str, List[str]]:
+    """Union thematic tickers into whichever market they list on.
+
+    Deduplicated: a name already in the S&P 500 or Nasdaq-100 gains a tag and
+    is NOT fetched twice. Names whose market isn't in this run are skipped —
+    the Asia job shouldn't pull US tickers.
+    """
+    tm = theme_map(universe_cfg)
+    if not tm:
+        return resolved
+    added_total = 0
+    for ticker in tm:
+        mkt = next((m for suf, m in SUFFIX_MARKET.items()
+                    if ticker.endswith(suf)), "US")
+        if mkt not in markets:
+            continue
+        pool = resolved.setdefault(mkt, [])
+        if ticker not in {t.upper() for t in pool}:
+            pool.append(ticker)
+            added_total += 1
+    if added_total:
+        log.info("Themes: %d tagged tickers, %d new after dedupe against the indices",
+                 len(tm), added_total)
+    return resolved
+
+
 def resolve_universe(universe_cfg: Dict, markets: List[str]) -> Dict[str, List[str]]:
     out: Dict[str, List[str]] = {}
     for mkt in markets:
@@ -267,6 +306,7 @@ def build_record(ticker: str, market_cfg: Dict, market_key: str,
     if prof.get("currency"):
         rec.currency = prof["currency"]
     rec.financial_currency = prof.get("financial_currency") or rec.currency
+    rec.quote_type = prof.get("quote_type")
     rec.shares_outstanding = prof.get("shares_outstanding")
     rec.market_cap = prof.get("market_cap")
 
@@ -335,7 +375,10 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     refresh_fx(yahoo, store, universe_cfg.get("fx_pairs", {}))
     macro = fred.snapshot(universe_cfg.get("macro_series", {}))
 
-    tickers_by_market = resolve_universe(universe_cfg, markets)
+    tickers_by_market = merge_themes(universe_cfg, 
+                                     resolve_universe(universe_cfg, markets), markets)
+    themes_by_ticker = theme_map(universe_cfg)
+    fund_tickers = {str(t).upper() for t in (universe_cfg.get("etfs") or [])}
 
     # State the universe up front. A run that quietly covers 20 names instead of
     # 500 still finishes green, and the only way to notice is to read the size.
@@ -371,6 +414,11 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
                 rec = build_record(t, mcfg, mkt, store, yahoo, edgar, idx_df, fx,
                                    refresh_fundamentals=not skip_fundamentals)
                 if rec:
+                    rec.themes = themes_by_ticker.get(t.upper(), [])
+                    # Trust the config's ETF list over Yahoo's quoteType, which
+                    # is occasionally absent; fall back to it when not listed.
+                    if t.upper() in fund_tickers:
+                        rec.quote_type = "ETF"
                     records.append(rec)
                     ok += 1
                 else:
