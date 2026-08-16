@@ -563,6 +563,7 @@ themes:
       - GLW
       - DELL
       - SMCI
+      - MU
 
   "Chip foundries":
     description: Advanced-node manufacture of GPUs and AI accelerators.
@@ -591,6 +592,17 @@ themes:
     tickers:
       - DELL
       - SMCI
+
+  "Memory & storage":
+    description: >
+      High-bandwidth memory is the tightest bottleneck in the AI stack — an
+      accelerator is throttled by what it can feed itself. The two largest HBM
+      makers, Samsung and SK Hynix, list in Seoul and are outside this
+      universe; Micron is the accessible pure-play.
+    tickers:
+      - MU
+      - WDC
+      - STX
 
   "Uranium & nuclear":
     description: >
