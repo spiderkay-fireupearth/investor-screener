@@ -20,6 +20,45 @@ markets:
     # S&P 500 constituents are fetched dynamically (500 names is impractical to
     # pin here and membership churns). seed_fallback is used only if the fetch fails.
     constituents_source: dynamic
+    # Additional US indices unioned in and deduplicated. Most of the Nasdaq-100
+    # already sits in the S&P 500; the value here is the ~25 names the S&P
+    # cannot hold because they are foreign-domiciled — PDD, MELI, ARM, AZN,
+    # BIDU, JD, NTES — plus recent listings not yet added.
+    extra_indices:
+      - name: Nasdaq-100
+        url: "https://en.wikipedia.org/wiki/Nasdaq-100"
+        min_expected: 80
+        seed_fallback:
+          - PDD
+          - MELI
+          - ARM
+          - AZN
+          - BIDU
+          - JD
+          - NTES
+          - ASML
+          - CCEP
+          - GFS
+          - ZS
+          - TEAM
+          - MDB
+          - DDOG
+          - SMCI
+          - APP
+          - TTD
+          - AXON
+          - MSTR
+          - PLTR
+          - ILMN
+          - BIIB
+          - MRNA
+          - SIRI
+          - WBD
+          - LCID
+          - CSGP
+          - "ON"          # quoted: bare ON is the YAML boolean true
+          - ANSS
+          - DXCM
     seed_fallback:
       - AAPL
       - MSFT
