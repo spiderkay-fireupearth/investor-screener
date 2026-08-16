@@ -385,12 +385,15 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     merged.update(screened["results"])
 
     os.makedirs(out_dir, exist_ok=True)
+    # Which names already have a deep dive, so their rows can link to it.
+    data_dir = os.path.dirname(db_path) or "data"
+    have_reports = {r["ticker"] for r in lib.list_reports(data_dir) if r.get("ticker")}
     html_path = rn.render(merged, metrics_by_ticker, screened, thresholds,
-                          universe_cfg, out_dir=out_dir, region=region, run_id=run_id)
+                          universe_cfg, out_dir=out_dir, region=region, run_id=run_id,
+                          report_tickers=have_reports)
 
     # Republish stored deep dives. Without this a nightly refresh publishes an
     # out/ with no deepdive/ folder and silently deletes every report.
-    data_dir = os.path.dirname(db_path) or "data"
     n_reports = lib.publish(data_dir, out_dir)
     if n_reports:
         log.info("Republished %d deep-dive report(s)", n_reports)
