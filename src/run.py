@@ -34,6 +34,7 @@ from . import technicals as ta
 from . import metrics as mx
 from . import screens as sc
 from . import render as rn
+from . import library as lib
 
 log = logging.getLogger("screener")
 
@@ -386,6 +387,13 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     os.makedirs(out_dir, exist_ok=True)
     html_path = rn.render(merged, metrics_by_ticker, screened, thresholds,
                           universe_cfg, out_dir=out_dir, region=region, run_id=run_id)
+
+    # Republish stored deep dives. Without this a nightly refresh publishes an
+    # out/ with no deepdive/ folder and silently deletes every report.
+    data_dir = os.path.dirname(db_path) or "data"
+    n_reports = lib.publish(data_dir, out_dir)
+    if n_reports:
+        log.info("Republished %d deep-dive report(s)", n_reports)
 
     elapsed = time.time() - t0
     notes = f"{len(records)} records, {elapsed:.0f}s, macro_gate={'open' if screened['macro_gate_open'] else 'CLOSED'}"
