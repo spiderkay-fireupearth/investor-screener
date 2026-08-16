@@ -228,7 +228,7 @@ padding:11px 15px;margin:14px 0;font-size:13px;color:var(--tx2)}
 
 <div class="eyebrow">__REGION__ refresh · run __RUNID__</div>
 <h1>Value + Technical Screener</h1>
-<div class="meta">S&amp;P 500 · SGX · HKEX · SET · IDX &nbsp;·&nbsp; generated __TS__</div>
+<div class="meta">S&amp;P 500 · Nikkei 225 · SGX · HKEX · SET · IDX &nbsp;·&nbsp; generated __TS__ &nbsp;·&nbsp; <a href="deepdive/">Deep dives &rarr;</a></div>
 
 <div class="statbar" id="statbar"></div>
 __GATE__
