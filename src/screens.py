@@ -303,10 +303,16 @@ def screen_universe(records: List[Any],
                                 thresholds.get("greenblatt", {}), excluded)
 
     framework_names = ["buffett", "munger", "schloss", "klarman", "lynch", "soros"]
+    # Frameworks that read a company's accounts. A fund has none of the inputs,
+    # so these are marked not-applicable rather than failed — failing an ETF on
+    # "missing ROE" is noise dressed as a finding.
+    COMPANY_FRAMEWORKS = {"buffett", "munger", "schloss", "klarman", "lynch"}
     results: Dict[str, Any] = {}
 
     for rec in records:
         m = metrics_by_ticker.get(rec.ticker, {})
+        is_fund = str(getattr(rec, "quote_type", "") or "").upper() in (
+            "ETF", "MUTUALFUND", "INDEX")
         gates: List[str] = []
 
         cap_usd = m.get("market_cap_usd")
@@ -322,6 +328,10 @@ def screen_universe(records: List[Any],
             if not cfg:
                 continue
             r = run_framework(name, cfg, m, unknown_mode)
+            if is_fund and name in COMPANY_FRAMEWORKS:
+                r["passed"] = False
+                r["ineligible_reason"] = ("fund, not an operating company — "
+                                          "revenue, equity and ROE are undefined")
             if name == "soros" and not gate_open:
                 r["passed"] = False
                 r["macro_gate_blocked"] = gate_reason
@@ -330,9 +340,15 @@ def screen_universe(records: List[Any],
                 r["ineligible_reason"] = "sector excluded (financials/REITs/utilities)"
             fw[name] = r
 
-        fw["greenblatt"] = greenblatt.get(rec.ticker, {
+        if is_fund:
+            fw["greenblatt"] = {
+                "framework": "greenblatt", "label": "Magic Formula",
+                "passed": False, "n_passed": 0, "n_total": 2, "tests": [],
+                "ineligible_reason": "fund, not an operating company"}
+        else:
+            fw["greenblatt"] = greenblatt.get(rec.ticker, {
             "framework": "greenblatt", "passed": False, "n_passed": 0,
-            "n_total": 2, "tests": [], "ineligible_reason": "not evaluated"})
+                "n_total": 2, "tests": [], "ineligible_reason": "not evaluated"})
 
         tech_cfg = thresholds.get("technical", {})
         tech = run_framework("technical", tech_cfg, m, unknown_mode)
@@ -363,6 +379,9 @@ def screen_universe(records: List[Any],
             "ticker": rec.ticker,
             "name": rec.name,
             "market": rec.market,
+            "themes": list(getattr(rec, "themes", []) or []),
+            "quote_type": getattr(rec, "quote_type", None),
+            "is_fund": is_fund,
             "sector": rec.sector,
             "currency": rec.currency,
             "price": rec.price,
