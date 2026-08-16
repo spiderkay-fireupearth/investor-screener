@@ -40,8 +40,6 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      # Read-only here: the deep dive uses the nightly store for peers and
-      # breadth but must not overwrite it, so there is no matching save step.
       - name: Restore data store
         uses: actions/cache/restore@v4
         with:
@@ -70,6 +68,16 @@ jobs:
           echo "### Deep dive ready" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "https://${{ github.repository_owner }}.github.io/investor-screener/deepdive/$T.html" >> $GITHUB_STEP_SUMMARY
+
+      # The library of reports lives in data/deepdive/, so this save is what
+      # makes a new report survive tomorrow's refresh. The concurrency group at
+      # the top stops this racing the nightly jobs for the same cache.
+      - name: Save data store
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: screener-store-${{ github.run_id }}-${{ github.run_attempt }}
 
       - uses: actions/upload-pages-artifact@v3
         with:
