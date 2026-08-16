@@ -1,0 +1,87 @@
+name: Deep dive (on demand)
+
+# Manual only — there is no schedule. Run it from the Actions tab, type a
+# ticker, and the report lands at:
+#   https://<user>.github.io/investor-screener/deepdive/<TICKER>.html
+#
+# It reads the SQLite store the nightly jobs build, so peer comparison and the
+# breadth statistics need at least one full refresh to have run first.
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: 'Ticker as Yahoo writes it — AAPL, 7203.T, D05.SI, 0700.HK'
+        required: true
+      horizon:
+        description: 'Monte Carlo horizon in trading days (252 = 1 year)'
+        required: false
+        default: '252'
+
+concurrency:
+  group: screener-refresh          # never race the nightly jobs for the store
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deepdive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Read-only here: the deep dive uses the nightly store for peers and
+      # breadth but must not overwrite it, so there is no matching save step.
+      - name: Restore data store
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: screener-store-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: screener-store-
+
+      - name: Rebuild screener page
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: python -m src.run --region asia --skip-fundamentals || true
+
+      - name: Deep dive
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: |
+          python -m src.deepdive \
+            --ticker "${{ github.event.inputs.ticker }}" \
+            --horizon "${{ github.event.inputs.horizon }}"
+
+      - name: Report location
+        run: |
+          T=$(echo "${{ github.event.inputs.ticker }}" | tr '[:lower:]' '[:upper:]')
+          echo "### Deep dive ready" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "https://${{ github.repository_owner }}.github.io/investor-screener/deepdive/$T.html" >> $GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Archive report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepdive-${{ github.run_number }}
+          path: out/deepdive/
+          retention-days: 90
