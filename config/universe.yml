@@ -519,6 +519,8 @@ fx_pairs:
   THB: "THBUSD=X"
   IDR: "IDRUSD=X"
   CNY: "CNYUSD=X"
+  CAD: "CADUSD=X"          # Cameco, NexGen, Denison and Teck file in CAD
+  TWD: "TWDUSD=X"          # TSMC files in New Taiwan dollars, trades as a USD ADR
   EUR: "EURUSD=X"
   GBP: "GBPUSD=X"
   JPY: "JPYUSD=X"
@@ -534,3 +536,94 @@ macro_series:
   ig_credit_spread: BAMLC0A0CM
   usd_broad_index: DTWEXBGS
   vix: VIXCLS
+
+
+# ---------------------------------------------------------------------------
+# Thematic tags. These names are unioned into their listing market (all US
+# here) and deduplicated — a name already in the S&P 500 or Nasdaq-100 simply
+# gains a tag rather than being fetched twice. Themes filter independently of
+# markets in the UI, so "Uranium + Greenblatt" or "Copper + Technical pass" work.
+#
+# A ticker may appear in several themes; tags are a list, not a single value.
+themes:
+  "AI infrastructure":
+    description: >
+      The supply chain powering AI build-out — silicon, interconnect, servers,
+      and the power and metals underneath them.
+    tickers:
+      - TSM
+      - ASML
+      - AMAT
+      - LRCX
+      - KLAC
+      - ANET
+      - APH
+      - LITE
+      - COHR
+      - GLW
+      - DELL
+      - SMCI
+
+  "Chip foundries":
+    description: Advanced-node manufacture of GPUs and AI accelerators.
+    tickers:
+      - TSM
+
+  "Fab equipment":
+    description: Lithography, deposition, etch and inspection tools.
+    tickers:
+      - ASML
+      - AMAT
+      - LRCX
+      - KLAC
+
+  "Optical & networking":
+    description: Switching, transceivers, connectors and fibre inside GPU clusters.
+    tickers:
+      - ANET
+      - APH
+      - LITE
+      - COHR
+      - GLW
+
+  "Server systems":
+    description: Rack integration and liquid cooling for GPU density.
+    tickers:
+      - DELL
+      - SMCI
+
+  "Uranium & nuclear":
+    description: >
+      Fuel cycle and reactor hardware. Data-centre baseload demand is the
+      thesis; several of these are pre-revenue developers.
+    tickers:
+      - CCJ
+      - NXE
+      - UUUU
+      - DNN
+      - LEU
+      - BWXT
+      - URA
+      - URNM
+
+  "Copper":
+    description: >
+      Grid, transformers, switchgear and busbars. A hyperscale site consumes
+      copper in tens of thousands of tonnes.
+    tickers:
+      - FCX
+      - SCCO
+      - BHP
+      - RIO
+      - TECK
+      - ERO
+      - COPX
+
+# Funds, not companies. Revenue, equity, ROE and EV/EBIT are undefined for an
+# ETF, so the six value frameworks are marked n/a rather than failed — the same
+# treatment financials get for Greenblatt. Prices, technicals, the Soros regime
+# read and the full deep-dive quantitative suite all still apply.
+etfs:
+  - URA
+  - URNM
+  - COPX
