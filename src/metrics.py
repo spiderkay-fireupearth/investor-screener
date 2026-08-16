@@ -157,6 +157,12 @@ def compute_metrics(rec: CompanyRecord,
     m["roe_series"] = roe_series[:10]
     m["roe_ttm"] = roe_series[0] if roe_series else None
     m["roe_years_above_15"] = sum(1 for v in roe_series[:10] if _n(v) and v >= 0.15)
+    # How many years could actually be evaluated, as distinct from how many
+    # passed. EDGAR gives 10+; Yahoo gives ~4. Without this denominator an
+    # "8 of the last 10 years" test is unreachable for every Asian name, and
+    # they fail on data depth rather than on merit.
+    m["roe_years_evaluated"] = sum(1 for v in roe_series[:10] if _n(v))
+    m["history_years"] = len(ys)
 
     m["roic_series"] = roic_series[:10]
     valid_roic = [v for v in roic_series[:5] if _n(v)]
@@ -170,6 +176,7 @@ def compute_metrics(rec: CompanyRecord,
 
     m["free_cash_flow_ttm"] = fcf_series[0] if fcf_series else None
     m["fcf_years_positive"] = sum(1 for v in fcf_series[:10] if _n(v) and v > 0)
+    m["fcf_years_evaluated"] = sum(1 for v in fcf_series[:10] if _n(v))
     m["loss_years_in_10"] = sum(1 for v in ni_series[:10] if _n(v) and v < 0)
 
     # ------------------------------------------------------------- leverage
