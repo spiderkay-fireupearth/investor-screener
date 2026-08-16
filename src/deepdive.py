@@ -38,6 +38,7 @@ from . import metrics as mx
 from . import screens as sc
 from . import analytics as an
 from . import deepdive_render as dr
+from . import library as lib
 
 log = logging.getLogger("deepdive")
 
@@ -392,11 +393,27 @@ def analyse(ticker: str, cfg_dir: str = "config", out_dir: str = "out",
         },
     }
 
+    # Write into the persistent library first, then mirror the whole library
+    # into out/. Reports accumulate instead of each publish wiping the last.
     outp = os.path.join(out_dir, "deepdive")
     os.makedirs(outp, exist_ok=True)
     html_path = dr.render_deepdive(payload, outp)
     with open(os.path.join(outp, f"{ticker}.json"), "w") as f:
         json.dump(payload, f, indent=2, default=str)
+
+    data_dir = os.path.dirname(db_path) or "data"
+    lib.save_report(ticker, open(html_path, encoding="utf-8").read(), {
+        "ticker": ticker, "name": rec.name, "market": market,
+        "market_label": {"US": "S&P 500", "JP": "Nikkei 225", "SG": "SGX",
+                         "HK": "HKEX", "TH": "SET", "ID": "IDX"}.get(market, market),
+        "call": rx["call"], "score": round(rx["score"], 1),
+        "frameworks_passed": sum(1 for v in fw.values() if v.get("passed")),
+        "price": round(rec.price, 2) if rec.price else None,
+        "currency": rec.currency,
+        "generated_utc": payload["generated_utc"],
+    }, data_dir)
+    n = lib.publish(data_dir, out_dir)
+    log.info("Published %d report(s) to the deep-dive library", n)
 
     store.close()
     return {"ticker": ticker, "html": html_path,
