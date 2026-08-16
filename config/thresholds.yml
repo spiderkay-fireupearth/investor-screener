@@ -16,8 +16,11 @@ global:
   # the denominator, and the pass bar scales down with them. Without this,
   # Buffett and Lynch are arithmetically impossible for every Asian name.
   min_history_years: 4
-  min_market_cap_usd: 300000000    # 300m USD floor, applied to all markets
-  min_median_daily_turnover_usd: 1000000
+  # Floors set low so they still bite if the universe is broadened to mid
+  # and small caps later. On the current large-cap universe every name
+  # clears these by orders of magnitude, so today they are inert.
+  min_market_cap_usd: 100000000    # 100m USD
+  min_median_daily_turnover_usd: 250000
   # Financials and REITs distort EV/EBIT, ROIC and net-working-capital maths.
   # These sectors are excluded from Greenblatt and Klarman but kept elsewhere.
   capital_intensive_excluded_sectors:
