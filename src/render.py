@@ -19,7 +19,7 @@ FRAMEWORKS = [
     ("soros", "Soros"),
 ]
 
-MARKET_LABELS = {"US": "S&P 500", "JP": "Nikkei 225", "SG": "SGX",
+MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
                  "HK": "HKEX", "TH": "SET", "ID": "IDX"}
 
 
@@ -238,7 +238,7 @@ padding:11px 15px;margin:14px 0;font-size:13px;color:var(--tx2)}
 
 <div class="eyebrow">__REGION__ refresh · run __RUNID__</div>
 <h1>Value + Technical Screener</h1>
-<div class="meta">S&amp;P 500 · Nikkei 225 · SGX · HKEX · SET · IDX &nbsp;·&nbsp; generated __TS__ &nbsp;·&nbsp; <a href="deepdive/">Deep dives &rarr;</a></div>
+<div class="meta">S&amp;P 500 + Nasdaq 100 · Nikkei 225 · SGX · HKEX · SET · IDX &nbsp;·&nbsp; generated __TS__ &nbsp;·&nbsp; <a href="deepdive/">Deep dives &rarr;</a></div>
 
 <div class="statbar" id="statbar"></div>
 __GATE__
@@ -285,6 +285,7 @@ Macro: FRED. Not investment advice — a screen is a starting point for research
 const DATA = __DATA__;
 const FWS = __FWS__;
 const WF_URL = __WFURL__;
+const ISSUE_URL = __ISSUEURL__;
 let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="";
 
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
@@ -362,9 +363,13 @@ function detail(r){
   h+='<div class="ddbar">';
   if(r.has_report){
     h+=`<a class="ddbtn primary" href="deepdive/${esc(r.ticker)}.html">Open deep dive &rarr;</a>`;
-  } else if(WF_URL){
-    h+=`<a class="ddbtn" href="${WF_URL}" target="_blank" rel="noopener">Run a deep dive &rarr;</a>
-        <span class="ddhint">Run workflow &rarr; paste <code>${esc(r.ticker)}</code></span>`;
+  } else if(ISSUE_URL){
+    // Pre-filled new-issue form: opening the issue is what starts the workflow.
+    // Two clicks, no token on the page.
+    const u = ISSUE_URL + '?title=' + encodeURIComponent('deepdive: ' + r.ticker)
+            + '&body=' + encodeURIComponent('Requested from the screener. This issue closes itself when the report is ready.');
+    h+=`<a class="ddbtn primary" href="${u}" target="_blank" rel="noopener">Run a deep dive &rarr;</a>
+        <span class="ddhint">opens a pre-filled request &mdash; press <b>Create</b> and the report builds itself (~2 min)</span>`;
   }
   h+='</div>';
   if(r.warnings && r.warnings.length)
@@ -461,6 +466,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     repo = os.environ.get("GITHUB_REPOSITORY")
     wf_url = (f"https://github.com/{repo}/actions/workflows/deep-dive.yml"
               if repo else None)
+    issue_url = f"https://github.com/{repo}/issues/new" if repo else None
 
     markets_present = sorted({r["market"] for r in rows if r["market"]})
     mkt_chips = "".join(
@@ -483,6 +489,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__DATA__", json.dumps(rows, default=str))
             .replace("__FWS__", json.dumps(FRAMEWORKS))
             .replace("__WFURL__", json.dumps(wf_url))
+            .replace("__ISSUEURL__", json.dumps(issue_url))
             .replace("__MKTCHIPS__", mkt_chips)
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
