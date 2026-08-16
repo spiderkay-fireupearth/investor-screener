@@ -35,10 +35,19 @@ OPS = {
 
 # Tests whose config shape (lookback_years + min_years_above) maps onto a
 # pre-counted metric rather than a direct comparison.
+#   name -> (count_metric, threshold_key, evaluated_years_metric)
 COUNT_METRICS = {
-    "roe_consistency": ("roe_years_above_15", "min_years_above"),
-    "fcf_consistency": ("fcf_years_positive", "min_years_above"),
+    "roe_consistency": ("roe_years_above_15", "min_years_above", "roe_years_evaluated"),
+    "fcf_consistency": ("fcf_years_positive", "min_years_above", "fcf_years_evaluated"),
 }
+
+# Below this many years of statements a history-dependent test is reported as
+# unevaluable rather than failed. Four is what Yahoo typically returns.
+MIN_HISTORY_FLOOR = 4
+
+
+def _round_half_up(x: float) -> int:
+    return int(x + 0.5)
 
 
 def _is_num(x) -> bool:
@@ -48,12 +57,46 @@ def _is_num(x) -> bool:
 
 def evaluate_test(name: str, spec: Dict[str, Any],
                   metrics: Dict[str, Any]) -> Dict[str, Any]:
-    """Evaluate one test. `result` is True, False or None (unknown)."""
+    """Evaluate one test.
+
+    `result` is True, False or None. None means either "data missing" (which
+    counts against the company under the strict default) or "not enough years
+    of history to judge" — flagged separately as `insufficient`, and excluded
+    from the denominator rather than held against the company.
+
+    The distinction matters because fundamentals depth is a property of the
+    DATA SOURCE, not the business. US names come from EDGAR with 10+ years;
+    Asian names come from Yahoo with about 4. Treating a short history as a
+    failure silently makes every Asian company look worse than every American
+    one, which is a statement about our plumbing, not about the companies.
+    """
+    history = metrics.get("history_years") or 0
+    insufficient = False
+
+    # Tests that need a minimum window before they mean anything at all.
+    need_years = spec.get("min_history_years")
+    if need_years and history < need_years:
+        return {"name": name, "metric": spec.get("metric"), "value": None,
+                "threshold": spec.get("threshold"), "operator": spec.get("operator", "gte"),
+                "result": UNKNOWN, "via_alt": False, "insufficient": True,
+                "note": f"needs {need_years}y of statements, have {history}"}
+
     if name in COUNT_METRICS:
-        metric_key, thr_key = COUNT_METRICS[name]
+        metric_key, thr_key, evaluated_key = COUNT_METRICS[name]
         value = metrics.get(metric_key)
-        threshold = spec.get(thr_key, spec.get("threshold"))
+        evaluated = metrics.get(evaluated_key) or 0
+        lookback = spec.get("lookback_years", 10) or 10
+        required_full = spec.get(thr_key, spec.get("threshold"))
+        if evaluated < MIN_HISTORY_FLOOR:
+            return {"name": name, "metric": metric_key, "value": value,
+                    "threshold": required_full, "operator": "gte",
+                    "result": UNKNOWN, "via_alt": False, "insufficient": True,
+                    "note": f"only {evaluated}y of data"}
+        # Scale the bar to the window we actually have: "8 of 10" becomes
+        # "4 of 4" at 80%, so the standard holds without punishing shallow data.
+        threshold = max(1, _round_half_up(required_full * evaluated / lookback))
         op = "gte"
+        metric_key = metric_key
     else:
         metric_key = spec.get("metric")
         value = metrics.get(metric_key)
@@ -84,6 +127,7 @@ def evaluate_test(name: str, spec: Dict[str, Any],
         "operator": op,
         "result": result,
         "via_alt": alt_used,
+        "insufficient": insufficient,
     }
 
 
@@ -95,18 +139,30 @@ def run_framework(fw_name: str, cfg: Dict[str, Any],
 
     passed = sum(1 for r in results if r["result"] is True)
     failed = sum(1 for r in results if r["result"] is False)
-    unknown = sum(1 for r in results if r["result"] is UNKNOWN)
+    insufficient = sum(1 for r in results if r.get("insufficient"))
+    unknown = sum(1 for r in results if r["result"] is UNKNOWN
+                  and not r.get("insufficient"))
+
+    n_total = len(tests_cfg)
+    base_required = cfg.get("min_tests_passed", n_total)
+
+    # Tests we couldn't evaluate for lack of history leave the denominator, and
+    # the bar drops proportionally. Missing DATA still counts against the
+    # company under the strict default; missing YEARS does not, because that is
+    # our provider's limitation rather than the company's.
+    effective_total = n_total - insufficient
+    if insufficient and effective_total > 0:
+        required = max(1, _round_half_up(base_required * effective_total / n_total))
+    else:
+        required = base_required
 
     if unknown_counts_as == "skip":
         denominator = passed + failed
-        required = cfg.get("min_tests_passed", len(tests_cfg))
-        # Scale the requirement down proportionally when tests were skipped.
-        if denominator > 0 and len(tests_cfg) > 0:
-            required = int(round(required * denominator / len(tests_cfg)))
-        overall = denominator > 0 and passed >= max(required, 1)
+        if denominator > 0 and effective_total > 0:
+            required = max(1, _round_half_up(required * denominator / effective_total))
+        overall = denominator > 0 and passed >= required
     else:
-        required = cfg.get("min_tests_passed", len(tests_cfg))
-        overall = passed >= required
+        overall = effective_total > 0 and passed >= required
 
     return {
         "framework": fw_name,
@@ -115,8 +171,11 @@ def run_framework(fw_name: str, cfg: Dict[str, Any],
         "n_passed": passed,
         "n_failed": failed,
         "n_unknown": unknown,
-        "n_total": len(tests_cfg),
+        "n_insufficient": insufficient,
+        "n_total": n_total,
+        "effective_total": effective_total,
         "required": required,
+        "limited_history": bool(insufficient),
         "tests": results,
     }
 
@@ -295,6 +354,7 @@ def screen_universe(records: List[Any],
             "pe_ttm", "price_to_tangible_book", "price_to_book", "ev_to_ebit",
             "roe_ttm", "roic_5y_avg", "debt_to_equity", "fcf_yield", "peg_ratio",
             "eps_cagr_5y", "rsi_14", "price_above_sma200", "sma50_above_sma200",
+            "history_years",
             "rs_vs_market_index_6m", "pct_above_5y_low", "pct_below_52w_high",
             "net_cash_to_market_cap", "ncav_to_market_cap", "statement_currency",
             "macd_histogram", "atr_pct_percentile")}
