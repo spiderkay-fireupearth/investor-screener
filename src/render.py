@@ -65,7 +65,9 @@ def _test_rows(fw: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
-                  screened: Dict[str, Any]) -> List[Dict[str, Any]]:
+                  screened: Dict[str, Any],
+                  report_tickers: Optional[set] = None) -> List[Dict[str, Any]]:
+    report_tickers = report_tickers or set()
     rows = []
     for ticker, r in results.items():
         # Prefer metrics persisted in the result. Rows merged in from the other
@@ -121,6 +123,7 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "tests": _test_rows(tech),
             },
             "surfaced": bool(r.get("surfaced")),
+            "has_report": ticker in report_tickers,
             "gates": r.get("gates_failed", []),
             "warnings": r.get("warnings", []),
             "key_metrics": {
@@ -222,6 +225,13 @@ tr.detail>td{background:var(--panel);padding:0;border-bottom:2px solid var(--lin
 padding:8px 11px;margin-bottom:12px;font-size:12px;color:var(--warn)}
 .note{background:var(--panel);border-left:3px solid var(--acc);border-radius:0 8px 8px 0;
 padding:11px 15px;margin:14px 0;font-size:13px;color:var(--tx2)}
+.ddbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.ddbtn{font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:7px;
+ border:1px solid var(--line);color:var(--tx2);text-decoration:none;white-space:nowrap}
+.ddbtn:hover{border-color:var(--acc);color:var(--tx)}
+.ddbtn.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+.ddhint{font-size:11.5px;color:var(--tx3)}
+.dd{color:var(--acc);font-size:11px;margin-left:5px}
 .empty{text-align:center;padding:50px;color:var(--tx3)}
 .foot{color:var(--tx3);font-size:12px;margin-top:32px;padding-top:14px;border-top:1px solid var(--line)}
 </style></head><body><div class="wrap">
@@ -274,6 +284,7 @@ Macro: FRED. Not investment advice — a screen is a starting point for research
 <script>
 const DATA = __DATA__;
 const FWS = __FWS__;
+const WF_URL = __WFURL__;
 let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="";
 
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
@@ -345,6 +356,17 @@ function testList(tests){
 
 function detail(r){
   let h='<div class="dwrap">';
+  // A static page on a public repo cannot hold a GitHub token, so it cannot
+  // trigger a workflow. It can link to an existing report, and it can send you
+  // to the workflow with the ticker ready to copy.
+  h+='<div class="ddbar">';
+  if(r.has_report){
+    h+=`<a class="ddbtn primary" href="deepdive/${esc(r.ticker)}.html">Open deep dive &rarr;</a>`;
+  } else if(WF_URL){
+    h+=`<a class="ddbtn" href="${WF_URL}" target="_blank" rel="noopener">Run a deep dive &rarr;</a>
+        <span class="ddhint">Run workflow &rarr; paste <code>${esc(r.ticker)}</code></span>`;
+  }
+  h+='</div>';
   if(r.warnings && r.warnings.length)
     h+=`<div class="warn"><b>Data quality:</b> ${r.warnings.map(esc).join(' · ')}</div>`;
   if(r.gates && r.gates.length)
@@ -388,7 +410,7 @@ function render(){
   }
   rows.forEach((r,i)=>{
     const tr=document.createElement('tr'); tr.className='row';
-    let cells=`<td class="tk">${esc(r.ticker)}</td><td class="nm" title="${esc(r.name)}">${esc(r.name)}</td>
+    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}</td><td class="nm" title="${esc(r.name)}">${esc(r.name)}</td>
       <td><span class="mk">${esc(r.market_label)}</span></td>
       <td class="num">${esc(r.price)}</td><td class="num">${esc(r.mcap_usd)}</td>`;
     for(const [key] of FWS){
@@ -431,8 +453,14 @@ render();
 def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
            screened: Dict[str, Any], thresholds: Dict[str, Any],
            universe_cfg: Dict[str, Any], out_dir: str = "out",
-           region: str = "all", run_id: str = "") -> str:
-    rows = build_payload(results, metrics, screened)
+           region: str = "all", run_id: str = "",
+           report_tickers: Optional[set] = None) -> str:
+    rows = build_payload(results, metrics, screened, report_tickers)
+
+    # GITHUB_REPOSITORY is set inside Actions; omit the link when absent.
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    wf_url = (f"https://github.com/{repo}/actions/workflows/deep-dive.yml"
+              if repo else None)
 
     markets_present = sorted({r["market"] for r in rows if r["market"]})
     mkt_chips = "".join(
@@ -454,6 +482,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     html = (TEMPLATE
             .replace("__DATA__", json.dumps(rows, default=str))
             .replace("__FWS__", json.dumps(FRAMEWORKS))
+            .replace("__WFURL__", json.dumps(wf_url))
             .replace("__MKTCHIPS__", mkt_chips)
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
