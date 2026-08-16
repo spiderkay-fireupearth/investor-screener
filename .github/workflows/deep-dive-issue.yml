@@ -1,0 +1,97 @@
+name: Deep dive (from screener link)
+
+# One-click trigger from the static screener page.
+#
+# A public static page cannot hold a GitHub token, so it cannot call the API to
+# start a workflow. It CAN link to a pre-filled new-issue form, and GitHub can
+# run a workflow when an issue opens. So the screener's "Run a deep dive" button
+# opens an issue titled "deepdive: TICKER", this job picks it up, builds the
+# report, comments the link and closes the issue. No token ever leaves the repo.
+on:
+  issues:
+    types: [opened]
+
+concurrency:
+  group: screener-refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  pages: write
+  id-token: write
+
+jobs:
+  deepdive:
+    # Ignore every issue that isn't one of ours.
+    if: startsWith(github.event.issue.title, 'deepdive:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract ticker
+        id: t
+        run: |
+          RAW="${{ github.event.issue.title }}"
+          TICKER=$(echo "$RAW" | sed 's/^deepdive://I' | tr -d ' ' | tr '[:lower:]' '[:upper:]')
+          # Whitelist the shape: letters, digits, dot and dash only. The title is
+          # attacker-controlled on a public repo, so it never reaches a shell
+          # unvalidated.
+          if ! echo "$TICKER" | grep -qE '^[A-Z0-9.-]{1,12}$'; then
+            echo "Rejected ticker: $TICKER"
+            exit 1
+          fi
+          echo "ticker=$TICKER" >> $GITHUB_OUTPUT
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore data store
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: screener-store-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: screener-store-
+
+      - name: Deep dive
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: python -m src.deepdive --ticker "${{ steps.t.outputs.ticker }}"
+
+      - name: Save data store
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: screener-store-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Comment and close
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const t = '${{ steps.t.outputs.ticker }}';
+            const ok = '${{ job.status }}' === 'success';
+            const url = `https://${context.repo.owner}.github.io/${context.repo.repo}/deepdive/${t}.html`;
+            await github.rest.issues.createComment({
+              ...context.repo, issue_number: context.issue.number,
+              body: ok
+                ? `Deep dive for **${t}** is ready.\n\n${url}\n\nGive Pages a minute if it 404s.`
+                : `Deep dive for **${t}** failed — see the [run log](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`
+            });
+            await github.rest.issues.update({
+              ...context.repo, issue_number: context.issue.number, state: 'closed'
+            });
