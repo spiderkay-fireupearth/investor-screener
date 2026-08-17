@@ -37,6 +37,7 @@ from . import render as rn
 from . import library as lib
 from . import cycle as cyc
 from . import debtcycle as dbt
+from . import commodities as cmd
 
 log = logging.getLogger("screener")
 
@@ -466,8 +467,18 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         log.warning("breadth for cycle gauge failed: %s", e)
     vix_df = store.load_prices("^VIX")
     vix = float(vix_df["Close"].iloc[-1]) if vix_df is not None and len(vix_df) else None
+    # Marks's gauge now votes on five markers, not three. Credit spreads and
+    # CAPE are computed below for the debt cycle anyway, so feeding them in
+    # costs nothing and removes the two biggest blind spots in the first
+    # version — what credit charges for risk, and what equities cost.
+    _hy = macro.get("hy_spread")
+    _hy_bp = _hy * 100.0 if isinstance(_hy, (int, float)) else None
+    _cape_pre = dbt.universe_cape(
+        records, metrics_by_ticker,
+        fred.history("CPIAUCSL", limit=400) if fred.enabled else []).get("cape")
     cycle_state = cyc.assess(primary_idx, breadth, vix,
-                             thresholds.get("market_cycle", {}))
+                             thresholds.get("market_cycle", {}),
+                             hy_oas=_hy_bp, cape=_cape_pre)
     log.info("Market cycle: %s (%s)", cycle_state.get("mode"),
              cycle_state.get("evidence"))
 
@@ -503,6 +514,17 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     screened = sc.screen_universe(records, metrics_by_ticker, thresholds, macro,
                                   cycle=cycle_state)
     screened["debt_cycle"] = debt_state
+
+    # Rogers: "Why not just stop after that analysis and buy or sell the
+    # commodity itself?" The board shows the underlying beside the instrument.
+    try:
+        screened["commodity_board"] = cmd.build(yahoo, store)
+        log.info("Commodity board: %d rows, %d symbols unavailable",
+                 len(screened["commodity_board"]["rows"]),
+                 len(screened["commodity_board"]["missing"]))
+    except Exception as e:                        # noqa: BLE001
+        log.warning("commodity board failed: %s", e)
+        screened["commodity_board"] = {}
     store.save_screen_results(run_id, screened["results"])
 
     # Merge in the other region's most recent results so the published page

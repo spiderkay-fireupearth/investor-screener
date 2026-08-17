@@ -635,7 +635,33 @@ themes:
 # ETF, so the six value frameworks are marked n/a rather than failed — the same
 # treatment financials get for Greenblatt. Prices, technicals, the Soros regime
 # read and the full deep-dive quantitative suite all still apply.
+# Rogers argues the commodity beats the miner three to one over 41 years, so
+# the buyable vehicles are carried in the universe as well as on the board.
+# These are ETFs: they have no accounts, so every company framework reports
+# not-applicable rather than failing them on a missing balance sheet.
 etfs:
   - URA
   - URNM
   - COPX
+  # broad baskets
+  - DBC        # optimised roll
+  - PDBC       # same exposure, no K-1
+  - GSG
+  - COMT
+  - RJI        # Rogers International Commodity Index — an ETN
+  # single commodity
+  - CPER       # copper
+  - USO        # WTI
+  - BNO        # Brent
+  - UNG        # natural gas
+  - GLD        # gold, physical
+  - IAU
+  - SLV        # silver, physical
+  - PPLT       # platinum
+  - PALL       # palladium
+  - DBA        # agriculture basket
+  - WEAT
+  - CORN
+  - SOYB
+  - CANE       # sugar — Rogers's own example
+  - JO         # coffee, an ETN

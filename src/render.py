@@ -215,6 +215,21 @@ padding:5px 3px;border-radius:5px;background:var(--panel2);color:var(--tx3);
 border:1px solid var(--line)}
 .stages i.on{background:var(--acc);color:#fff;border-color:var(--acc);font-weight:700}
 .dnote{font-size:12.5px;color:var(--tx2);margin-top:11px;line-height:1.6}
+.cmd table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px}
+.cmd th{text-align:left;padding:7px 8px;color:var(--tx3);font-size:10px;
+letter-spacing:.07em;text-transform:uppercase;border-bottom:1px solid var(--line)}
+.cmd td{padding:7px 8px;border-bottom:1px solid var(--line);
+font-variant-numeric:tabular-nums}
+.cmd tr:last-child td{border-bottom:none}
+.cmd .nm{font-weight:600;font-variant-numeric:normal}
+.cmd .sym{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--tx2)}
+.cmd .r{text-align:right}
+.up{color:var(--ok)} .dn{color:var(--bad)}
+.kind{font-size:9.5px;padding:1px 6px;border-radius:20px;border:1px solid var(--line);
+color:var(--tx3);text-transform:uppercase;letter-spacing:.05em}
+.kind.equity{background:rgba(226,88,94,.13);color:var(--bad);border-color:rgba(226,88,94,.4)}
+.kind.etn{background:rgba(201,162,39,.14);color:var(--warn);border-color:rgba(201,162,39,.4)}
+.kind.physical{background:rgba(63,191,127,.12);color:var(--ok);border-color:rgba(63,191,127,.35)}
 .filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:16px 0 10px;
 padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
 .fl{font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;margin-right:2px}
@@ -532,6 +547,72 @@ DALIO_STAGES = ["Early", "Bubble", "Top", "Depression", "Beautiful\ndeleverage",
                 "Pushing on\na string", "Normalise"]
 
 
+
+def _pct_cell(v, dp=1):
+    if v is None or (isinstance(v, float) and v != v):
+        return '<td class="r">—</td>'
+    cls = "up" if v > 0 else ("dn" if v < 0 else "")
+    return f'<td class="r {cls}">{v * 100:+.{dp}f}%</td>'
+
+
+def _commodity_panel(cb: Dict[str, Any]) -> str:
+    """The commodity board — the underlying beside the instrument.
+
+    Collapsed by default. The column that earns its place is the last one:
+    what the fund returned minus what the commodity returned, over a year.
+    """
+    rows = (cb or {}).get("rows") or []
+    if not rows:
+        return ""
+    body = ""
+    for r in rows:
+        fut = (f'<span class="sym">{e_attr(r["future"])}</span> '
+               f'{_fmt_num(r.get("future_price"))}' if r.get("future_price")
+               else '<span class="muted-ink">no futures line</span>')
+        etf = (f'<span class="sym">{e_attr(r["etf"])}</span> '
+               f'{_fmt_num(r.get("etf_price"))}' if r.get("etf_price")
+               else '<span class="muted-ink">—</span>')
+        gap = r.get("tracking_gap_12m")
+        gap_cell = ('<td class="r">—</td>' if gap is None
+                    else f'<td class="r {"up" if gap > -0.02 else "dn"}" '
+                         f'title="{e_attr(str(r.get("tracking_reading", "")))}">'
+                         f'{gap * 100:+.1f}%</td>')
+        body += (f'<tr><td class="nm">{e_attr(r["name"])}'
+                 + (f'<br><span class="muted-ink" style="font-size:11px">'
+                    f'{e_attr(r["note"])}</span>' if r.get("note") else "")
+                 + f'</td><td>{fut}</td>'
+                 + _pct_cell(r.get("future_12m"))
+                 + f'<td>{etf} <span class="kind {e_attr(r["kind"])}">'
+                   f'{e_attr(r["kind"])}</span></td>'
+                 + _pct_cell(r.get("etf_12m"))
+                 + gap_cell + '</tr>')
+
+    miss = cb.get("missing") or []
+    foot = (f'<div class="dnote"><span class="muted-ink">{len(miss)} symbol(s) '
+            f'unavailable this run: {e_attr(", ".join(miss))}. Their rows show '
+            f'blanks rather than stale prices.</span></div>' if miss else "")
+
+    return (
+        '<details class="dalio cmd"><summary>'
+        '<span class="stg">Commodities &middot; the thing vs the instrument</span>'
+        '<span class="muted-ink">Rogers: buy the commodity, not the miner &mdash; '
+        'so here is what each costs and what the fund actually returned</span>'
+        '<span class="muted-ink" style="margin-left:auto">details &#9662;</span>'
+        '</summary><div class="body">'
+        '<table><thead><tr><th>Commodity</th><th>Futures</th>'
+        '<th class="r">12m</th><th>Buyable ETF</th><th class="r">12m</th>'
+        '<th class="r">Fund &minus; commodity</th></tr></thead>'
+        f'<tbody>{body}</tbody></table>'
+        f'<div class="dnote">{e_attr(cb.get("caveat", ""))}</div>'
+        '<div class="dnote"><b>Reading the last column.</b> It is the ETF\'s '
+        'twelve-month return minus the commodity\'s. It already contains roll '
+        'cost, fees, tracking error and storage, so it is what you got versus '
+        'what the headline price did. A large negative number on a '
+        '<b>futures</b> fund is contango, and it is the single best argument '
+        'against holding one for the long term.</div>'
+        + foot + '</div></details>')
+
+
 def _dalio_panel(d: Dict[str, Any]) -> str:
     """Ray Dalio's Big Debt Cycle stage, recomputed on every run.
 
@@ -738,6 +819,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             f'<span class="muted-ink">{shift_txt}</span></div>')
 
     debt_html = _dalio_panel(screened.get("debt_cycle") or {})
+    cmd_html = _commodity_panel(screened.get("commodity_board") or {})
 
     gate = (f'<div class="gate {"open" if open_ else "closed"}">'
             f'<b>Soros macro gate: {"OPEN" if open_ else "CLOSED"}</b> — {reason}.'
@@ -755,7 +837,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
-            .replace("__GATE__", debt_html + cycle_html + gate)
+            .replace("__GATE__", debt_html + cmd_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
             .replace("__TS__", datetime.now(timezone.utc)

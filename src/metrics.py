@@ -419,6 +419,75 @@ def compute_metrics(rec: CompanyRecord,
         if all(_n(x) for x in (e0, e5, ic0, ic5)) and (ic0 - ic5) > 0:
             m["incremental_roic_5y"] = (e0 - e5) / (ic0 - ic5)
 
+    # ------------------------------------------------------------------------
+    # CNAV and the POF score — the value guide's own proprietary method, which
+    # I skipped on the first pass and should not have.
+    #
+    #   "we only count the full value of cash and properties, and half the
+    #    value for equipment, receivables, investments, inventories and
+    #    intangibles (income generating intangibles). Goodwill and other
+    #    non-income generating intangibles are excluded."
+    #
+    # The idea is Graham's NCAV taken one step further: instead of counting
+    # current assets at face and ignoring everything else, haircut each class
+    # by how confident you are of realising it.
+    #
+    # APPROXIMATION, stated because it changes the number: the guide splits
+    # PP&E into "properties" at 100% and "equipment" at 50%. No free feed
+    # separates them, so net PP&E is taken at 50% throughout. That is the
+    # conservative side of his split — a property-heavy company will score
+    # lower here than under his method, never higher.
+    if ys:
+        y0 = ys[0]
+        full = sum(v for v in (y0.cash_and_equivalents,
+                               y0.short_term_investments) if _n(v))
+        half_items = [y0.net_ppe, y0.receivables, y0.inventory]
+        # Intangibles EXCLUDING goodwill: goodwill is scored at zero.
+        if _n(y0.intangibles):
+            gw = y0.goodwill if _n(y0.goodwill) else 0.0
+            half_items.append(max(0.0, y0.intangibles - gw))
+        half = sum(v for v in half_items if _n(v))
+        if _n(y0.total_liabilities) and (full or half):
+            cnav_total = full + 0.5 * half - y0.total_liabilities
+            m["cnav"] = cnav_total
+            m["cnav_per_share"] = _safe_div(cnav_total, y0.shares_diluted)
+            # Below 1.0 means the price is below conservative asset value.
+            m["price_to_cnav"] = _safe_div(rec.price, m["cnav_per_share"]) \
+                if (_n(m.get("cnav_per_share")) and m["cnav_per_share"] > 0) else None
+            m["cnav_discount"] = (1.0 - m["price_to_cnav"]) \
+                if _n(m.get("price_to_cnav")) else None
+        else:
+            m["cnav"] = m["cnav_per_share"] = None
+            m["price_to_cnav"] = m["cnav_discount"] = None
+
+        # POF: "A 3-point system based on Dr Joseph Piotroski's F-score to find
+        # fundamentally strong low price-to-book stocks." P = profitable,
+        # O = positive operating cash flow, F = "the lower debt the better".
+        # The guide gives NO numeric cutoff for any of the three; all three
+        # below are mine, and deliberately the mildest reading of his words.
+        pof = 0
+        pof_detail = []
+        if _n(y0.net_income):
+            ok = y0.net_income > 0
+            pof += int(ok)
+            pof_detail.append(("profitable", ok))
+        if _n(y0.cfo):
+            ok = y0.cfo > 0
+            pof += int(ok)
+            pof_detail.append(("positive operating cash flow", ok))
+        de = m.get("debt_to_equity")
+        if _n(de):
+            ok = de <= 1.0
+            pof += int(ok)
+            pof_detail.append(("debt not above equity", ok))
+        m["pof_score"] = pof if len(pof_detail) == 3 else None
+        m["pof_detail"] = pof_detail
+    else:
+        for k in ("cnav", "cnav_per_share", "price_to_cnav", "cnav_discount",
+                  "pof_score"):
+            m[k] = None
+        m["pof_detail"] = []
+
     # Graham's own yardsticks. NOT from the uploaded books — see the note above.
     bvps = _safe_div(y0.total_equity, y0.shares_diluted) if ys else None
     eps0 = ys[0].eps_diluted if ys else None

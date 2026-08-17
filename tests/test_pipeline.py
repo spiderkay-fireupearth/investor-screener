@@ -1080,7 +1080,7 @@ def test_buffett_additions_and_graham():
     th = yaml.safe_load(open("config/thresholds.yml"))
     check("Buffett now has 8 tests", len(th["buffett"]["tests"]), 8)
     check("Buffett bar is 6 of 8", th["buffett"]["min_tests_passed"], 6)
-    check("Graham has 7 tests", len(th["graham"]["tests"]), 7)
+    check("Graham has 9 tests", len(th["graham"]["tests"]), 9)
     check("renderer shows 11 frameworks", len(rn.FRAMEWORKS), 11)
 
     def mk(**over):
@@ -1193,6 +1193,107 @@ def test_buffett_additions_and_graham():
           True)
 
 
+
+def test_commodities_cnav_and_gauge():
+    """Rogers's board, the guide's CNAV/POF method, and the 5-signal gauge."""
+    from src import commodities as cm, cycle as cy
+    th = yaml.safe_load(open("config/thresholds.yml"))
+
+    # ---- the board -------------------------------------------------------
+    syms = cm.all_symbols()
+    check("board covers both futures and ETFs", "HG=F" in syms and "CPER" in syms, True)
+    check("symbols are deduplicated", len(syms), len(set(syms)))
+    kinds = {r["kind"] for r in cm.BOARD}
+    check("instrument structure is declared", kinds >= {"futures", "physical", "etn", "equity"}, True)
+    ura = next(r for r in cm.BOARD if r["etf"] == "URA")
+    check("URA is flagged as MINERS, not the commodity", ura["kind"], "equity")
+    check("and the note says so", "MINERS" in ura["note"], True)
+
+    class FakeStore:
+        def __init__(s_, frames): s_.f = frames
+        def save_prices(s_, t, df): pass
+        def load_prices(s_, t): return s_.f.get(t)
+
+    idx = pd.bdate_range("2024-01-01", periods=300)
+    # Commodity up 30% over the year; the fund up only 5% -> 25pp of drag.
+    fut = pd.DataFrame({"Close": pd.Series(
+        [100.0 * (1.30 ** (i / 252)) for i in range(300)], index=idx)})
+    etf = pd.DataFrame({"Close": pd.Series(
+        [50.0 * (1.05 ** (i / 252)) for i in range(300)], index=idx)})
+    board = cm.build(None, FakeStore({"NG=F": fut, "UNG": etf}))
+    row = next(r for r in board["rows"] if r["etf"] == "UNG")
+    check("futures 12m return computed", round(row["future_12m"], 2), 0.30)
+    check("ETF 12m return computed", round(row["etf_12m"], 2), 0.05)
+    check("tracking gap is ETF minus commodity", round(row["tracking_gap_12m"], 2), -0.25)
+    check("severe drag is called severe", "severe" in row["tracking_reading"], True)
+    check("absent symbols are named, not blanked silently",
+          len(board["missing"]) > 0, True)
+    gold = next(r for r in board["rows"] if r["etf"] == "GLD")
+    check("a symbol with no data has no price rather than a stale one",
+          gold.get("future_price"), None)
+    check("panel renders", "the thing vs the instrument" in rn._commodity_panel(board), True)
+    check("empty board renders nothing", rn._commodity_panel({}), "")
+
+    # ---- CNAV, hand-computed --------------------------------------------
+    def yy(fy):
+        return mkyear(fy, cash_and_equivalents=100.0, short_term_investments=20.0,
+                      net_ppe=200.0, receivables=60.0, inventory=40.0,
+                      intangibles=30.0, goodwill=10.0, total_liabilities=150.0,
+                      total_assets=500.0, total_equity=350.0, total_debt=120.0,
+                      net_income=25.0, cfo=40.0, revenue=400.0,
+                      eps_diluted=0.25, shares_diluted=100.0,
+                      current_assets=220.0, current_liabilities=90.0,
+                      operating_income=35.0, pretax_income=30.0)
+    rec = CompanyRecord(ticker="SG1", market="SG", years=[yy(2025 - i) for i in range(5)])
+    rec.price, rec.market_cap = 1.20, 120.0
+    m = mx.compute_metrics(rec)
+    # full = 100+20 = 120; half = (200+60+40+(30-10)) x 0.5 = 160; less 150.
+    check("CNAV counts cash at full and the rest at half", m["cnav"], 130.0)
+    check("goodwill is excluded entirely", m["cnav_per_share"], 1.30)
+    check("price/CNAV", round(m["price_to_cnav"], 4), round(1.20 / 1.30, 4))
+    check("CNAV discount", round(m["cnav_discount"], 4), round(1 - 1.20 / 1.30, 4))
+    check("POF is 3 when profitable, cash-generative and not over-levered",
+          m["pof_score"], 3)
+    check("POF components are itemised", len(m["pof_detail"]), 3)
+
+    lossy = CompanyRecord(ticker="SG2", market="SG",
+                          years=[mkyear(2025 - i, net_income=-5.0, cfo=-2.0,
+                                        total_equity=100.0, total_debt=300.0,
+                                        total_liabilities=400.0,
+                                        cash_and_equivalents=10.0,
+                                        shares_diluted=100.0, revenue=100.0)
+                                 for i in range(5)])
+    lossy.price, lossy.market_cap = 1.0, 100.0
+    m2 = mx.compute_metrics(lossy)
+    check("a loss-making, over-levered name scores POF 0", m2["pof_score"], 0)
+    check("and fails the POF test",
+          sc.evaluate_test("x", th["graham"]["tests"]["pof_score"], m2)["result"], False)
+    check("negative CNAV yields no ratio rather than a negative one",
+          m2["price_to_cnav"], None)
+
+    # ---- the gauge now votes on five signals -----------------------------
+    cyc_cfg = th["market_cycle"]
+    up = pd.DataFrame({"Close": pd.Series(
+        [100.0 * (1.0008 ** i) for i in range(300)], index=idx)})
+    hot = cy.assess(up, {"pct_above_200dma": 0.80}, 13.0, cyc_cfg,
+                    hy_oas=271.0, cape=42.18)
+    check("tight credit and a rich CAPE both vote defensive",
+          hot["votes"]["defensive"], 5)
+    check("the evidence line names them", "high-yield 271bp" in hot["evidence"], True)
+    check("and names CAPE", "CAPE 42.2" in hot["evidence"], True)
+    check("gauge reads defensive", hot["mode"], "defensive")
+    # Wide spreads and a cheap market must pull the other way.
+    calm = cy.assess(up, {"pct_above_200dma": 0.30}, 35.0, cyc_cfg,
+                     hy_oas=900.0, cape=12.0)
+    check("stressed credit and a cheap CAPE vote opportunistic",
+          calm["votes"]["opportunistic"] >= 4, True)
+    # Absent inputs must simply not vote.
+    none_ = cy.assess(up, {"pct_above_200dma": 0.50}, 20.0, cyc_cfg)
+    check("missing credit and CAPE cast no vote at all",
+          sum(none_["votes"].values()), 3)
+    check("backwards compatible: 3-signal call still works", none_["mode"], "core")
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -1209,6 +1310,7 @@ if __name__ == "__main__":
     test_marks_from_source()
     test_soros_and_rogers_from_source()
     test_buffett_additions_and_graham()
+    test_commodities_cnav_and_gauge()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

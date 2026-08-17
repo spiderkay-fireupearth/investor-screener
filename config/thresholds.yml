@@ -330,6 +330,13 @@ market_cycle:
   breadth_cold: 0.35
   vix_calm: 15
   vix_stressed: 28
+  # Added so the gauge votes on the two markers Marks talks about most and
+  # which the first version ignored: what credit charges for risk, and what
+  # equities cost against their own history.
+  hy_oas_calm: 350          # bp — below this, credit is not pricing default
+  hy_oas_stressed: 700
+  cape_rich: 30
+  cape_cheap: 16
 
 # ---------------------------------------------------------------------------
 greenblatt:
@@ -514,7 +521,7 @@ rogers:
 # so nobody later mistakes it for something the upload supports.
 graham:
   label: Classic value, balance-sheet arithmetic
-  min_tests_passed: 4      # of 7
+  min_tests_passed: 5      # of 9
   tests:
     # [FROM THE BOOK] "Stock Price < 2/3 x (Current Assets - Total Liabilities)
     # / no. of shares". Our ncav_to_market_cap is the same statement inverted:
@@ -562,6 +569,24 @@ graham:
       metric: payout_ratio
       threshold: 0.0
       operator: gt
+    # [FROM THE BOOK] The guide's own CNAV method: cash and property at full
+    # value, equipment, receivables, investments, inventories and income-
+    # generating intangibles at half, goodwill at zero, less total liabilities.
+    # It states NO discount threshold anywhere — its own case studies bought at
+    # discounts of 19%, 25%, 44% and 46%, so 20% is the mild end of its own
+    # revealed practice rather than a stated rule.
+    conservative_asset_discount:
+      metric: cnav_discount
+      threshold: 0.20
+      operator: gte
+    # [FROM THE BOOK] "A 3-point system based on Dr Joseph Piotroski's F-score
+    # to find fundamentally strong low price-to-book stocks." Profitable,
+    # positive operating cash flow, low debt. The guide gives no cutoff for any
+    # component; requiring all three is the strictest reading of three points.
+    pof_score:
+      metric: pof_score
+      threshold: 3
+      operator: gte
 
 # ---------------------------------------------------------------------------
 technical:
