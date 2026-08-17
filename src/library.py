@@ -89,7 +89,11 @@ def _write_index(reports: List[Dict[str, Any]], dest: str):
             f'<td class="nm">{e(r.get("name"))}</td>'
             f'<td><span class="mk">{e(r.get("market_label") or r.get("market"))}</span></td>'
             f'<td><span class="call {CALL_CLASS.get(call, "")}">{e(call)}</span></td>'
-            f'<td class="num">{e(r.get("frameworks_passed", "—"))}/7</td>'
+            # The denominator comes from the report itself, never a literal.
+            # It was hard-coded to 7 and silently understated every report as
+            # frameworks were added — a wrong number that still looked right.
+            f'<td class="num">{e(r.get("frameworks_passed", "—"))}'
+            f'{("/" + str(r["frameworks_total"])) if r.get("frameworks_total") else ""}</td>'
             f'<td class="num">{e(r.get("price", "—"))}</td>'
             f'<td class="muted">{e(age)}</td></tr>')
     if not rows:

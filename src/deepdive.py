@@ -408,6 +408,10 @@ def analyse(ticker: str, cfg_dir: str = "config", out_dir: str = "out",
                          "HK": "HKEX", "TH": "SET", "ID": "IDX"}.get(market, market),
         "call": rx["call"], "score": round(rx["score"], 1),
         "frameworks_passed": sum(1 for v in fw.values() if v.get("passed")),
+        # Stored so the library index never has to assume how many frameworks
+        # existed when this report was written. Reports written before this
+        # field existed simply show the count with no denominator.
+        "frameworks_total": len(fw),
         "price": round(rec.price, 2) if rec.price else None,
         "currency": rec.currency,
         "generated_utc": payload["generated_utc"],
