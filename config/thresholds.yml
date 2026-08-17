@@ -326,25 +326,73 @@ greenblatt:
       direction: desc
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Soros, rebuilt from "The Alchemy of Finance".
+#
+# The old version of this screen was a macro gate plus momentum. That is not
+# what the book describes, and the book says so directly:
+#
+#   "The conventional method is to predict the future course of earnings and
+#    then to estimate the price that investors may be willing to pay for those
+#    earnings. This method is inappropriate to the analysis of mortgage trusts
+#    because THE PRICE THAT INVESTORS ARE WILLING TO PAY FOR THE SHARES IS AN
+#    IMPORTANT FACTOR IN DETERMINING THE FUTURE COURSE OF EARNINGS."
+#
+# His unit of analysis is a company where the share price is an *input* to the
+# fundamentals. So these tests do two things: confirm the loop is real and
+# early, and reject the two configurations he identifies as terminal —
+# stage DE (price rising through an earnings setback) and the conglomerate
+# fingerprint (per-share earnings bought with overvalued paper).
+#
+# He gives exactly one piece of arithmetic (acquirer at 2x the target's
+# multiple, doubling size, +50% EPS) and one worked example ($10 book, 12% ROE,
+# shares sold at $20 -> book $13.33, EPS $1.20 to $1.60). Both are
+# illustrations, not thresholds. Every number below is my calibration.
 soros:
   label: Reflexivity and regime
-  min_tests_passed: 3      # of 4
+  min_tests_passed: 5      # of 7
   tests:
-    trend_confirmation:
+    # AB: "the trend is strong enough to manifest itself in earnings per share"
+    trend_shows_in_earnings:
+      metric: eps_growth_1y
+      threshold: 0.0
+      operator: gt
+    # BC: "When the underlying trend is finally recognized, it is reinforced by
+    #      rising expectations." Recognition, measured against its OWN market.
+    recognised_by_the_market:
+      metric: rs_vs_market_index_6m
+      threshold: 0.0
+      operator: gt
+    # CD: "Doubts arise, but the trend survives... Such testing may be repeated
+    #      several times." A trend that has been tested and held.
+    tested_and_held:
+      metric: max_drawdown_1y
+      threshold: 0.08
+      operator: gte
+    trend_intact_after_the_test:
       metric: price_above_sma200
       threshold: 1
       operator: gte
-    relative_strength:
-      metric: rs_vs_market_index_6m     # vs its OWN market index, not the S&P
-      threshold: 0.0
-      operator: gt
-    fundamental_price_alignment:
-      metric: eps_trend_vs_price_trend  # +1 aligned, 0 neutral, -1 divergent
+    # DE/EF, rejected: "conviction develops and it is no longer shaken by a
+    # setback in the earning trend... Expectations become excessive, and fail
+    # to be sustained by reality." Price running far ahead of earnings.
+    expectations_not_yet_excessive:
+      metric: reflexive_divergence     # 12m price return minus 1y EPS growth
+      threshold: 0.40
+      operator: lte
+    # The conglomerate boom: "A few companies learned to produce earnings
+    # growth through acquisitions... they could offer their own highly priced
+    # stock in acquiring other companies." EPS outrunning revenue per share is
+    # that trick's signature.
+    growth_is_not_bought_with_paper:
+      metric: eps_over_revenue_per_share_gap
+      threshold: 0.25
+      operator: lte
+    # Act Two of the mortgage trusts: "With higher leverage, the rate of return
+    # on equity can be maintained despite a lower effective yield."
+    roe_not_propped_by_leverage:
+      metric: roe_held_up_by_leverage   # 1 = the Act Two signature is present
       threshold: 0
-      operator: gte
-    volatility_regime:
-      metric: atr_pct_percentile        # avoid blow-off tops
-      threshold: 0.90
       operator: lte
   # Macro gate: when risk conditions deteriorate, the whole Soros screen fails
   # regardless of single-name signals. This is the reflexivity brake.
@@ -352,6 +400,82 @@ soros:
     enabled: true
     hy_spread_max: 6.0                  # % — above this, credit stress
     yield_curve_min: -0.50              # 10y-2y; deeply inverted = late cycle
+
+# ---------------------------------------------------------------------------
+# Rogers, "Hot Commodities". Applies only to commodity-linked names.
+#
+# Read the caveat before the tests, because Rogers argues against this screen's
+# whole premise:
+#
+#   "The Yale study found that investing in commodities companies is not
+#    necessarily a substitute for commodities futures. The authors found that
+#    from 1962 to 2003, 'the cumulative performance of futures has been TRIPLE
+#    the cumulative performance of "matching" equities'."
+#   "The smart investor looking into a copper company FIRST has to examine the
+#    supply-demand dynamics of copper. Why not just stop after that analysis
+#    and buy or sell the copper itself?"
+#
+# So: he would tell you to buy the commodity, not the miner. This screen exists
+# because the app screens equities, and it is built to filter for the equities
+# least damaged by the five idiosyncratic risks he names — balance sheet,
+# dilution, management, jurisdiction, and the home stock market — since those
+# are the reasons he says the equity underperforms the commodity.
+#
+# What this screen CANNOT do, and no threshold below pretends otherwise: the
+# commodity-level supply and demand work. Inventories, days of consumption,
+# rig and mine counts, project pipelines, ore grades, reserve audits — none of
+# those are in any free feed this app uses. Rogers puts that analysis FIRST and
+# treats the equity screen as secondary. Here it is missing entirely, and that
+# is the single largest gap in this framework.
+rogers:
+  label: Commodity supply cycle
+  min_tests_passed: 5      # of 7
+  themes_only: true        # only names tagged with a commodity theme
+  tests:
+    # "Commodities cannot go to zero, while shares in Enron can (and did)."
+    # The whole reason he prefers the commodity is that the equity can be
+    # zeroed by its balance sheet, so that is the first thing to screen out.
+    cannot_be_zeroed:
+      metric: net_debt_to_ebitda
+      threshold: 2.50
+      operator: lte
+    # Producers fund losses by issuing stock, which is how a right call on the
+    # commodity still loses money in the equity.
+    not_diluting_holders:
+      metric: share_count_change_1y
+      threshold: 0.05
+      operator: lte
+    # The supply thesis: "Virtually no new mine shafts have been opened in 20
+    # years worldwide." At company level, capex below depreciation means the
+    # asset base is shrinking rather than adding supply.
+    not_adding_to_supply:
+      metric: capex_to_depreciation
+      threshold: 1.50
+      operator: lte
+    # Asset backing, since the commodity in the ground is the floor the equity
+    # does not otherwise have.
+    asset_backed:
+      metric: price_to_tangible_book
+      threshold: 3.00
+      operator: lte
+    # "the status and psychology of the pertinent stock market" — one of his
+    # five named equity risks. Measured against the name's OWN market index.
+    home_market_not_fighting_it:
+      metric: rs_vs_market_index_12m
+      threshold: 0.0
+      operator: gte
+    # He is scathing about producers that cannot convert a price rise into
+    # cash: "Oil skyrocketed in the 1970s, but some oil stocks did not do that
+    # well."
+    converts_price_into_cash:
+      metric: fcf_yield
+      threshold: 0.0
+      operator: gte
+    # Bought before the market has fully repriced it, not after.
+    not_already_repriced:
+      metric: ev_ebit_vs_market
+      threshold: 1.00
+      operator: lte
 
 # ---------------------------------------------------------------------------
 technical:

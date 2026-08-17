@@ -514,7 +514,7 @@ def test_end_to_end_with_config():
     check("every framework evaluated",
           sorted(res["GOOD"]["frameworks"].keys()),
           ["buffett", "greenblatt", "klarman", "lynch", "marks", "munger",
-           "schloss", "soros", "templeton"])
+           "rogers", "schloss", "soros", "templeton"])
 
     # Size/liquidity gate must suppress a name entirely.
     mets["GOOD"]["market_cap_usd"] = 1_000_000.0
@@ -941,6 +941,139 @@ def test_marks_from_source():
           mtn["N10"]["market_median_ev_ebit"], 10.0)
 
 
+
+def test_soros_and_rogers_from_source():
+    """Soros rebuilt from Alchemy, Rogers added from Hot Commodities."""
+    th = yaml.safe_load(open("config/thresholds.yml"))
+
+    # ---- Soros: the reflexive fingerprints ------------------------------
+    sor = th["soros"]
+    check("Soros now has 7 tests", len(sor["tests"]), 7)
+    check("Soros bar is 5 of 7", sor["min_tests_passed"], 5)
+    check("macro gate survives the rebuild", sor["macro_gate"]["enabled"], True)
+
+    # The conglomerate: EPS bought with paper. Share count UP, EPS up fast,
+    # revenue per share flat. Soros: "they could offer their own highly priced
+    # stock in acquiring other companies."
+    congl = []
+    for i in range(4):
+        fy = 2025 - i
+        sh = 100.0 * (1.25 ** i)          # count SHRINKS going back = issuing
+        congl.append(mkyear(fy, revenue=1000.0 * (1.25 ** (3 - i)),
+                            net_income=100.0 * (1.30 ** (3 - i)),
+                            eps_diluted=(100.0 * (1.30 ** (3 - i))) / (100.0 * (1.25 ** (3 - i))),
+                            shares_diluted=100.0 * (1.25 ** (3 - i)),
+                            total_assets=2000.0, total_equity=1000.0))
+    rec = CompanyRecord(ticker="CONGL", market="US", years=congl)
+    rec.price, rec.market_cap = 50.0, 5000.0
+    rec.technicals = {"return_12m": 0.60}
+    m = mx.compute_metrics(rec)
+    check("share count growth is measured over 1 year",
+          m["share_count_change_1y"] > 0.20, True)
+    check("EPS growth and revenue-per-share growth are separated",
+          m["revenue_per_share_growth_1y"] is not None, True)
+    # EPS grows 30%/yr on a 25%/yr share count: revenue per share is flat, so
+    # the gap is the accretion. This is the fingerprint.
+    check("EPS outruns revenue per share",
+          m["eps_over_revenue_per_share_gap"] > 0.0, True)
+    check("a 60% price move against 4% EPS growth is a wide divergence",
+          round(m["reflexive_divergence"], 2) > 0.5, True)
+    check("and it fails 'expectations not yet excessive'",
+          sc.evaluate_test("x", sor["tests"]["expectations_not_yet_excessive"],
+                           m)["result"], False)
+
+    # Act Two: ROE held flat by rising leverage while the margin falls.
+    act2 = [mkyear(2025, revenue=1000.0, net_income=100.0,
+                   total_assets=3000.0, total_equity=500.0,
+                   eps_diluted=1.0, shares_diluted=100.0),
+            mkyear(2024), mkyear(2023),
+            mkyear(2022, revenue=600.0, net_income=100.0,
+                   total_assets=1500.0, total_equity=500.0,
+                   eps_diluted=1.0, shares_diluted=100.0)]
+    r2 = CompanyRecord(ticker="ACT2", market="US", years=act2)
+    r2.price, r2.market_cap = 10.0, 1000.0
+    m2 = mx.compute_metrics(r2)
+    # margin 10% vs 16.7%, leverage 6.0 vs 3.0, ROE 20% vs 20%.
+    check("leverage doubled over 3 years", round(m2["leverage_change_3y"], 2), 1.0)
+    check("the Act Two signature is detected", m2["roe_held_up_by_leverage"], 1)
+    check("and it fails 'ROE not propped by leverage'",
+          sc.evaluate_test("x", sor["tests"]["roe_not_propped_by_leverage"],
+                           m2)["result"], False)
+
+    # A clean organic grower must NOT trip either fingerprint.
+    org = [mkyear(2025 - i, revenue=1000.0 * (1.1 ** (3 - i)),
+                  net_income=100.0 * (1.1 ** (3 - i)),
+                  eps_diluted=1.0 * (1.1 ** (3 - i)),
+                  shares_diluted=100.0, total_assets=2000.0,
+                  total_equity=1000.0) for i in range(4)]
+    r3 = CompanyRecord(ticker="ORG", market="US", years=org)
+    r3.price, r3.market_cap = 20.0, 2000.0
+    r3.technicals = {"return_12m": 0.12}
+    m3 = mx.compute_metrics(r3)
+    check("an organic grower issues no stock", m3["share_count_change_1y"], 0.0)
+    check("its EPS and revenue per share move together",
+          round(m3["eps_over_revenue_per_share_gap"], 6), 0.0)
+    check("no Act Two signature", m3["roe_held_up_by_leverage"], 0)
+    check("and its divergence is modest",
+          round(m3["reflexive_divergence"], 3), round(0.12 - 0.1, 3))
+
+    # Stage CD: a trend must have been TESTED. An untested melt-up fails.
+    smooth = pd.Series([100.0 * (1.002 ** i) for i in range(260)],
+                       index=pd.bdate_range("2025-01-01", periods=260))
+    t = ta.compute(pd.DataFrame({"Close": smooth, "High": smooth, "Low": smooth,
+                                 "Volume": [1e6] * 260}, index=smooth.index))
+    check("a never-corrected melt-up has ~zero 1y drawdown",
+          t["max_drawdown_1y"] < 0.01, True)
+    check("and fails 'tested and held'",
+          sc.evaluate_test("x", sor["tests"]["tested_and_held"],
+                           {"max_drawdown_1y": t["max_drawdown_1y"]})["result"],
+          False)
+
+    # ---- Rogers ----------------------------------------------------------
+    rog = th["rogers"]
+    check("Rogers has 7 tests", len(rog["tests"]), 7)
+    check("Rogers is gated to commodity themes", rog["themes_only"], True)
+    check("Rogers is registered in the renderer",
+          "rogers" in [k for k, _ in rn.FRAMEWORKS], True)
+    check("renderer now shows 10 frameworks", len(rn.FRAMEWORKS), 10)
+
+    # Capex against depreciation is the company-level supply gauge.
+    miner = [mkyear(2025, revenue=1000.0, net_income=120.0, capex=60.0,
+                    depreciation_amortization=100.0, cfo=200.0,
+                    eps_diluted=1.2, shares_diluted=100.0,
+                    total_assets=2000.0, total_equity=1200.0,
+                    total_debt=200.0, cash_and_equivalents=150.0,
+                    goodwill=0.0, intangibles=0.0,
+                    operating_income=160.0)] + [mkyear(2024 - i) for i in range(3)]
+    rm = CompanyRecord(ticker="MINE", market="US", years=miner)
+    rm.price, rm.market_cap = 12.0, 1200.0
+    m4 = mx.compute_metrics(rm)
+    check("capex/depreciation below 1 means a shrinking asset base",
+          round(m4["capex_to_depreciation"], 2), 0.6)
+    check("which passes 'not adding to supply'",
+          sc.evaluate_test("x", rog["tests"]["not_adding_to_supply"],
+                           m4)["result"], True)
+
+    # A name with no commodity theme must be NOT-APPLICABLE, not failed —
+    # Rogers analyses the commodity first, and there is no commodity here.
+    plain = CompanyRecord(ticker="BANK", market="US", themes=[], years=org)
+    plain.price, plain.market_cap = 20.0, 2000.0
+    out = sc.screen_universe([plain], {"BANK": m3}, th, {}, cycle=None)
+    rres = out["results"]["BANK"]["frameworks"]["rogers"]
+    check("a non-commodity name is ineligible for Rogers, not failed",
+          bool(rres.get("ineligible_reason")), True)
+    check("and the reason names the commodity gap",
+          "supply cycle" in rres["ineligible_reason"], True)
+
+    themed = CompanyRecord(ticker="COPR", market="US", themes=["Copper"],
+                           years=miner)
+    themed.price, themed.market_cap = 12.0, 1200.0
+    out2 = sc.screen_universe([themed], {"COPR": m4}, th, {}, cycle=None)
+    check("a themed name IS evaluated by Rogers",
+          bool(out2["results"]["COPR"]["frameworks"]["rogers"]
+               .get("ineligible_reason")), False)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -955,6 +1088,7 @@ if __name__ == "__main__":
     test_macro_carry()
     test_debt_cycle()
     test_marks_from_source()
+    test_soros_and_rogers_from_source()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

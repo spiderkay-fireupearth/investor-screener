@@ -199,7 +199,17 @@ def compute(df: pd.DataFrame,
     win = close.iloc[-1260:] if len(close) > 1260 else close
     if len(win) >= 250:
         dd = win / win.cummax() - 1.0
-        out["max_drawdown_5y"] = float(-dd.min())      # reported positive
+        out["max_drawdown_5y"] = float(-dd.min())
+
+    # Soros stage CD — "Doubts arise, but the trend survives... the trend
+    # waivers but reasserts itself. Such testing may be repeated several
+    # times." A trend that has been tested and held is a different object from
+    # one that has never been tested, and the one-year drawdown is how you
+    # tell them apart.
+    out["max_drawdown_1y"] = None
+    w1 = close.iloc[-252:]
+    if len(w1) >= 200:
+        out["max_drawdown_1y"] = float(-(w1 / w1.cummax() - 1.0).min())      # reported positive
 
     # "If we avoid the losers, the winners will take care of themselves."
     # Downside capture: how much of the index's bad days this name takes.

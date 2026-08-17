@@ -287,6 +287,89 @@ def compute_metrics(rec: CompanyRecord,
     else:
         m["inventory_growth_less_revenue_growth"] = None
 
+    # ------------------------------------------------------------------------
+    # Soros, "The Alchemy of Finance" — the mechanics of a reflexive loop.
+    #
+    # His unit of analysis is a company whose SHARE PRICE is an input to its
+    # own fundamentals, not merely a reflection of them. The channel is equity
+    # issuance: "The true attraction of mortgage trusts lies in their ability
+    # to generate capital gains for their shareholders by selling additional
+    # shares at a premium over book value... The higher the premium, the easier
+    # it is for the trust to fulfil this expectation."
+    #
+    # So the diagnostic is not momentum. It is: is this company *converting its
+    # own multiple into reported earnings*? These metrics measure that.
+    # ------------------------------------------------------------------------
+    if len(ys) >= 2:
+        m["eps_growth_1y"] = _cagr(ys[0].eps_diluted, ys[1].eps_diluted, 1)
+        # Revenue per share strips out the effect of issuing paper. If EPS is
+        # growing much faster than revenue per share, the growth is arriving
+        # through the share count and the accounting, not through the business.
+        rps0 = _safe_div(ys[0].revenue, ys[0].shares_diluted)
+        rps1 = _safe_div(ys[1].revenue, ys[1].shares_diluted)
+        m["revenue_per_share_growth_1y"] = _cagr(rps0, rps1, 1)
+        m["share_count_change_1y"] = _safe_div(
+            (ys[0].shares_diluted - ys[1].shares_diluted)
+            if (_n(ys[0].shares_diluted) and _n(ys[1].shares_diluted))
+            else None, ys[1].shares_diluted)
+        # The conglomerate fingerprint, in one number. Soros: "Investors had
+        # come to value growth in per-share earnings and failed to discriminate
+        # about the way the earnings growth was accomplished."
+        m["eps_over_revenue_per_share_gap"] = (
+            m["eps_growth_1y"] - m["revenue_per_share_growth_1y"]
+            if (_n(m.get("eps_growth_1y"))
+                and _n(m.get("revenue_per_share_growth_1y"))) else None)
+    else:
+        for k in ("eps_growth_1y", "revenue_per_share_growth_1y",
+                  "share_count_change_1y", "eps_over_revenue_per_share_gap"):
+            m[k] = None
+
+    # Act Two of the mortgage-trust scenario: "With higher leverage, the rate
+    # of return on equity can be maintained despite a lower effective yield."
+    # A flat ROE held up by rising leverage and a falling margin is the exact
+    # configuration he describes — and it is invisible in the ROE alone.
+    m["leverage_change_3y"] = None
+    m["roe_held_up_by_leverage"] = None
+    if len(ys) >= 4:
+        lev0 = _safe_div(ys[0].total_assets, ys[0].total_equity)
+        lev3 = _safe_div(ys[3].total_assets, ys[3].total_equity)
+        mar0 = _safe_div(ys[0].net_income, ys[0].revenue)
+        mar3 = _safe_div(ys[3].net_income, ys[3].revenue)
+        roe0 = _safe_div(ys[0].net_income, ys[0].total_equity)
+        roe3 = _safe_div(ys[3].net_income, ys[3].total_equity)
+        if all(_n(x) for x in (lev0, lev3, mar0, mar3, roe0, roe3)) and lev3:
+            m["leverage_change_3y"] = lev0 / lev3 - 1.0
+            # 1 = the Act Two signature is present. Reported as a flag rather
+            # than a score so the reason survives into the UI.
+            m["roe_held_up_by_leverage"] = int(
+                roe0 >= roe3 * 0.95 and lev0 > lev3 * 1.10 and mar0 < mar3)
+
+    # Stage DE, the diagnostic one: "conviction develops and it is no longer
+    # shaken by a setback in the earning trend... Expectations become
+    # excessive, and fail to be sustained by reality." Measured as the gap
+    # between what the price did and what the earnings did over the same year.
+    _r12 = rec.technicals.get("return_12m")
+    m["reflexive_divergence"] = (
+        _r12 - m["eps_growth_1y"]
+        if (_n(_r12) and _n(m.get("eps_growth_1y"))) else None)
+
+    # ------------------------------------------------------------------------
+    # Rogers, "Hot Commodities" — the supply side, at company level.
+    #
+    # His thesis is under-investment: "Virtually no new mine shafts have been
+    # opened in 20 years worldwide"; "There were 4,530 rigs in the U.S. at the
+    # end of 1981... In 2004... the total was 1,201." Capex against depreciation
+    # is the company-level version of that: below 1.0 and the asset base is
+    # shrinking, which is bullish for the commodity and eventually for whoever
+    # still owns production.
+    # ------------------------------------------------------------------------
+    if ys:
+        m["capex_to_depreciation"] = _safe_div(
+            ys[0].capex, ys[0].depreciation_amortization)
+        m["capex_to_revenue"] = _safe_div(ys[0].capex, ys[0].revenue)
+    else:
+        m["capex_to_depreciation"] = m["capex_to_revenue"] = None
+
     # ------------------------------------------- Soros: reflexivity divergence
     # Compare the direction of earnings against the direction of price. When
     # price is running well ahead of (or well behind) fundamentals, that gap is

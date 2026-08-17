@@ -354,12 +354,12 @@ def screen_universe(records: List[Any],
     add_relative_value(records, metrics_by_ticker)
 
     framework_names = ["buffett", "munger", "schloss", "klarman", "lynch",
-                       "templeton", "marks", "soros"]
+                       "templeton", "marks", "soros", "rogers"]
     # Frameworks that read a company's accounts. A fund has none of the inputs,
     # so these are marked not-applicable rather than failed — failing an ETF on
     # "missing ROE" is noise dressed as a finding.
     COMPANY_FRAMEWORKS = {"buffett", "munger", "schloss", "klarman", "lynch",
-                          "templeton", "marks"}
+                          "templeton", "marks", "rogers"}
     results: Dict[str, Any] = {}
 
     for rec in records:
@@ -382,6 +382,16 @@ def screen_universe(records: List[Any],
                 continue
             r = run_framework(name, cfg, m, unknown_mode,
                               cycle_shift=(cycle or {}).get("threshold_shift", 0))
+            # Rogers analysed the COMMODITY first and the company second:
+            # "The smart investor looking into a copper company first has to
+            # examine the supply-demand dynamics of copper." A name with no
+            # commodity exposure has no such underlying to analyse, so the
+            # framework is not-applicable rather than failed.
+            if cfg.get("themes_only") and not (getattr(rec, "themes", None) or []):
+                r["passed"] = False
+                r["ineligible_reason"] = (
+                    "no commodity theme — this framework is about a commodity's "
+                    "supply cycle, and there is no underlying to analyse")
             if is_fund and name in COMPANY_FRAMEWORKS:
                 r["passed"] = False
                 r["ineligible_reason"] = ("fund, not an operating company — "
