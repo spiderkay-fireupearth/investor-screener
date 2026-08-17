@@ -79,6 +79,19 @@ jobs:
           path: data
           key: screener-store-${{ github.run_id }}-${{ github.run_attempt }}
 
+      # A Pages deploy replaces the ENTIRE site with this artifact. If out/
+      # has no index.html the screener disappears and the site root 404s, so
+      # refuse to deploy rather than publish a broken site.
+      - name: Guard the site root
+        run: |
+          if [ ! -f out/index.html ]; then
+            echo "::error::out/index.html is missing. Deploying this would"
+            echo "::error::replace the screener with a deep-dive-only site."
+            echo "::error::Run Refresh US or Refresh Asia first to rebuild it."
+            exit 1
+          fi
+          echo "Site root present: $(wc -c < out/index.html) bytes"
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: out
