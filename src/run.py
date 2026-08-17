@@ -472,7 +472,18 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     # CAPE are computed below for the debt cycle anyway, so feeding them in
     # costs nothing and removes the two biggest blind spots in the first
     # version — what credit charges for risk, and what equities cost.
-    _hy = macro.get("hy_spread")
+    # The key in universe.yml is `hy_credit_spread`. An earlier version of this
+    # line asked for `hy_spread`, got None, and the credit signal silently
+    # stopped voting — the gauge ran on four signals while reporting five, and
+    # the only visible symptom was a missing phrase in one banner. Accept both
+    # spellings and say so loudly if neither is present.
+    _hy = macro.get("hy_credit_spread")
+    if _hy is None:
+        _hy = macro.get("hy_spread")
+    if _hy is None:
+        log.warning("Credit spread absent from the macro snapshot (looked for "
+                    "hy_credit_spread and hy_spread) — the cycle gauge will "
+                    "run WITHOUT its credit vote")
     _hy_bp = _hy * 100.0 if isinstance(_hy, (int, float)) else None
     _cape_pre = dbt.universe_cape(
         records, metrics_by_ticker,

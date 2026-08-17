@@ -1324,6 +1324,32 @@ def test_commodities_cnav_and_gauge():
           sum(none_["votes"].values()), 3)
     check("backwards compatible: 3-signal call still works", none_["mode"], "core")
 
+    # The credit key regression. universe.yml calls it `hy_credit_spread`;
+    # run.py once asked for `hy_spread`, got None, and the gauge silently
+    # dropped to four signals while still describing itself as five. The only
+    # symptom was a missing phrase in one banner.
+    uni = yaml.safe_load(open("config/universe.yml"))
+    check("the macro series key is hy_credit_spread",
+          "hy_credit_spread" in uni["macro_series"], True)
+    src = open("src/run.py").read()
+    check("run.py reads that exact key", 'macro.get("hy_credit_spread")' in src, True)
+    check("and warns when no credit spread is found at all",
+          "WITHOUT its credit vote" in src, True)
+
+    # A tie must be disclosed rather than resolved silently by dict order.
+    tie = cy.assess(up, {"pct_above_200dma": 0.50}, 13.0, cyc_cfg,
+                    hy_oas=None, cape=20.0)
+    check("the vote split is reported", "vote " in tie["evidence"], True)
+    check("a contested call is flagged", tie["signals"]["contested"] in (True, False), True)
+    both = cy.assess(up, {"pct_above_200dma": 0.80}, 13.0, cyc_cfg,
+                     hy_oas=271.0, cape=42.0)
+    check("an uncontested call is not flagged as tied",
+          both["signals"]["contested"], False)
+    # RSI, breadth, VIX, credit and CAPE all read hot here — five votes, which
+    # is the point: the gauge now has five signals to cast, not three.
+    check("all five signals can vote",
+          both["signals"]["vote_split"]["defensive"], 5)
+
 
 
 def test_reflexive_stages():

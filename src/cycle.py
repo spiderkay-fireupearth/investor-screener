@@ -112,6 +112,12 @@ def assess(index_df: Optional[pd.DataFrame],
                 "signals": sig, "votes": votes}
 
     mode = max(votes, key=lambda k: votes[k])
+    # A 2-2 split resolved by dict order is still a call, and presenting it
+    # with the same confidence as 4-1 is misleading. Say when it was close.
+    top = votes[mode]
+    tied = [k for k, v in votes.items() if v == top and k != mode]
+    sig["vote_split"] = dict(votes)
+    sig["contested"] = bool(tied)
     parts = []
     if _n(rsi):
         parts.append(f"index RSI {rsi:.0f}")
@@ -123,6 +129,8 @@ def assess(index_df: Optional[pd.DataFrame],
         parts.append(f"high-yield {hy_oas:.0f}bp")
     if _n(cape):
         parts.append(f"CAPE {cape:.1f}")
+    parts.append(f"vote {votes[DEFENSIVE]}-{votes[CORE]}-{votes[OPPORTUNISTIC]}"
+                 + (" (tied — treat the posture as contested)" if tied else ""))
 
     narrative = {
         DEFENSIVE: ("Raise the bar. Prices embed optimism, so the same evidence "
