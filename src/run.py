@@ -38,6 +38,7 @@ from . import library as lib
 from . import cycle as cyc
 from . import debtcycle as dbt
 from . import commodities as cmd
+from . import reflexivity as rfx
 
 log = logging.getLogger("screener")
 
@@ -531,6 +532,15 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     # always shows all five markets, each as fresh as its own last run.
     merged = store.latest_results()
     merged.update(screened["results"])
+
+    # Where each name sits on Soros's path. Done after the merge so the other
+    # region's stored rows are labelled too, and the census covers the whole
+    # published table rather than just this run's half of it.
+    census = rfx.annotate(merged, metrics_by_ticker)
+    screened["reflexive_census"] = census
+    if census:
+        log.info("Reflexive stages: %s",
+                 ", ".join(f"{k}={v}" for k, v in sorted(census.items())))
 
     os.makedirs(out_dir, exist_ok=True)
     # Which names already have a deep dive, so their rows can link to it.

@@ -21,6 +21,8 @@ from typing import Dict, List, Optional, Any, Tuple
 
 import numpy as np
 
+from . import reflexivity as rfx
+
 log = logging.getLogger(__name__)
 
 UNKNOWN = None
@@ -387,6 +389,18 @@ def screen_universe(records: List[Any],
             # examine the supply-demand dynamics of copper." A name with no
             # commodity exposure has no such underlying to analyse, so the
             # framework is not-applicable rather than failed.
+            # Soros's subject is a company whose share price feeds its own
+            # fundamentals. A name that neither issues, retires nor acquires
+            # has no such channel, and the book says the framework does not
+            # apply there — so it is not-applicable, not a failure.
+            if name == "soros":
+                _ch = rfx.channel_open(m)
+                if _ch.get("open") is False:
+                    r["passed"] = False
+                    r["ineligible_reason"] = (
+                        "near-equilibrium — " + "; ".join(_ch["reasons"])
+                        + ". Reflexivity describes prices that CHANGE "
+                          "fundamentals, not prices that merely reflect them")
             if cfg.get("themes_only") and not (getattr(rec, "themes", None) or []):
                 r["passed"] = False
                 r["ineligible_reason"] = (

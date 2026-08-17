@@ -123,6 +123,12 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "summary": f"{tech.get('n_passed', 0)}/{tech.get('n_total', 0)} tests",
                 "tests": _test_rows(tech),
             },
+            "rfx": (r.get("reflexive") or {}).get("stage"),
+            "rfx_label": (r.get("reflexive") or {}).get("label"),
+            "rfx_note": ((r.get("reflexive") or {}).get("warning")
+                         or (r.get("reflexive") or {}).get("note") or ""),
+            "rfx_late": bool((r.get("reflexive") or {}).get("late")),
+            "rfx_evidence": "; ".join((r.get("reflexive") or {}).get("evidence") or []),
             "surfaced": bool(r.get("surfaced")),
             "has_report": ticker in report_tickers,
             "themes": r.get("themes") or [],
@@ -175,6 +181,10 @@ h1{font-size:23px;margin:0 0 4px;letter-spacing:-.02em}
 .gate.cyc-core{background:var(--panel);border-color:var(--line)}
 .gate.cyc-opportunistic{background:rgba(63,191,127,.10);border-color:rgba(63,191,127,.35)}
 .muted-ink{color:var(--tx3)}
+.rfx{font-size:9.5px;font-weight:700;margin-left:5px;padding:1px 5px;border-radius:4px;
+background:var(--panel2);color:var(--tx3);border:1px solid var(--line);cursor:help;
+letter-spacing:.04em}
+.rfx.late{background:rgba(226,88,94,.16);color:var(--bad);border-color:rgba(226,88,94,.45)}
 .dalio{background:var(--panel);border:1px solid var(--line);border-radius:10px;
 margin:14px 0;padding:0;overflow:hidden}
 .dalio summary{list-style:none;cursor:pointer;padding:12px 15px;display:flex;
@@ -318,6 +328,7 @@ __GATE__
   __THEMEROW__
   <span class="sep"></span>
   <button class="chip" id="techOnly">Technical pass</button>
+  <button class="chip" id="rfxOnly" title="Soros stage DE or EF — price rising through an earnings setback, or expectations run far ahead of reality">Reflexive risk</button>
   <button class="chip on" id="surfOnly">Surfaced only</button>
   <span class="sep"></span>
   <span class="searchwrap">
@@ -353,6 +364,7 @@ const FWS = __FWS__;
 const WF_URL = __WFURL__;
 const ISSUE_URL = __ISSUEURL__;
 let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="", fTheme="ALL";
+let fRfx=false;   // Soros stage DE/EF only
 
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 
@@ -366,6 +378,7 @@ function visible(){
       const q=fQ.trim().toLowerCase();
       return r.ticker.toLowerCase().includes(q) || r.name.toLowerCase().includes(q);
     }
+    if(fRfx && !r.rfx_late) return false;
     if(fSurf && !r.surfaced) return false;
     if(fMkt!=="ALL" && r.market!==fMkt) return false;
     if(fTheme!=="ALL" && !(r.themes||[]).includes(fTheme)) return false;
@@ -494,7 +507,12 @@ function render(){
   }
   rows.forEach((r,i)=>{
     const tr=document.createElement('tr'); tr.className='row';
-    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}</td><td class="nm" title="${esc(r.name)}">${esc(r.name)}</td>
+    // Soros's stage, inline. A late-stage name is worth seeing whichever
+    // framework surfaced it, so this sits on the ticker rather than inside
+    // one framework's column.
+    const rx = r.rfx && r.rfx!=='EQ'
+      ? `<span class="rfx${r.rfx_late?' late':''}" title="${esc(r.rfx_label||'')} — ${esc(r.rfx_note||'')}${r.rfx_evidence?' ['+esc(r.rfx_evidence)+']':''}">${esc(r.rfx)}</span>` : '';
+    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${rx}</td><td class="nm" title="${esc(r.name)}">${esc(r.name)}</td>
       <td><span class="mk">${esc(r.market_label)}</span></td>
       <td class="num">${esc(r.price)}</td><td class="num">${esc(r.mcap_usd)}</td>`;
     for(const [key] of FWS){
@@ -522,6 +540,8 @@ document.querySelectorAll('[data-fw]').forEach(b=>b.onclick=()=>{
   render();});
 document.getElementById('techOnly').onclick=function(){
   fTech=!fTech; this.classList.toggle('on',fTech); render();};
+document.getElementById('rfxOnly').onclick=function(){
+  fRfx=!fRfx; this.classList.toggle('on',fRfx); render();};
 document.getElementById('surfOnly').onclick=function(){
   fSurf=!fSurf; this.classList.toggle('on',fSurf); render();};
 document.getElementById('q').oninput=e=>{fQ=e.target.value; render();};

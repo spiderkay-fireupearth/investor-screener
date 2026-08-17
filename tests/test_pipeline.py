@@ -1294,6 +1294,102 @@ def test_commodities_cnav_and_gauge():
     check("backwards compatible: 3-signal call still works", none_["mode"], "core")
 
 
+
+def test_reflexive_stages():
+    """Soros's nine stages as a per-name label, not a pass/fail."""
+    from src import reflexivity as rfx
+
+    def m(**kw):
+        base = dict(share_count_change_1y=0.06, goodwill_to_assets=0.20,
+                    price_above_sma200=1, max_drawdown_1y=0.09,
+                    pct_below_52w_high=0.03)
+        base.update(kw)
+        return base
+
+    cases = [
+        ("AB", m(eps_growth_1y=0.18, return_12m=0.01, reflexive_divergence=-0.17,
+                 pct_below_52w_high=0.12, max_drawdown_1y=0.11)),
+        ("BC", m(eps_growth_1y=0.15, return_12m=0.25, reflexive_divergence=0.10,
+                 max_drawdown_1y=0.05)),
+        ("CD", m(eps_growth_1y=0.15, return_12m=0.25, reflexive_divergence=0.10,
+                 max_drawdown_1y=0.18)),
+        ("DE", m(eps_growth_1y=-0.08, return_12m=0.45, reflexive_divergence=0.53)),
+        ("FG", m(eps_growth_1y=0.12, return_12m=-0.22, reflexive_divergence=-0.34,
+                 price_above_sma200=0, pct_below_52w_high=0.35)),
+        ("GH", m(eps_growth_1y=-0.25, return_12m=-0.40, reflexive_divergence=-0.15,
+                 price_above_sma200=0, pct_below_52w_high=0.55)),
+    ]
+    for want, met in cases:
+        check(f"stage {want} classified", rfx.stage(met)["stage"], want)
+
+    # The separation that matters most: DE and HI are numerically identical on
+    # earnings and price direction, and they are OPPOSITE trades. Only the
+    # position in the range tells them apart. Getting this backwards means the
+    # app tells you to sell the bottom.
+    near_high = m(eps_growth_1y=-0.08, return_12m=0.30, reflexive_divergence=0.38,
+                  pct_below_52w_high=0.02)
+    far_off = m(eps_growth_1y=-0.08, return_12m=0.30, reflexive_divergence=0.38,
+                pct_below_52w_high=0.45)
+    check("earnings down + price up NEAR the high is DE",
+          rfx.stage(near_high)["stage"], "DE")
+    check("the same numbers FAR off the high are HI",
+          rfx.stage(far_off)["stage"], "HI")
+    check("DE is flagged late", rfx.stage(near_high)["late"], True)
+    check("HI is not flagged late", rfx.stage(far_off).get("late"), False)
+
+    # The framework must switch OFF where there is no price->fundamentals path.
+    no_ch = m(eps_growth_1y=-0.08, return_12m=0.45, reflexive_divergence=0.53,
+              share_count_change_1y=0.001, goodwill_to_assets=0.01)
+    st = rfx.stage(no_ch)
+    check("no issuance and no goodwill reads near-equilibrium", st["stage"], "EQ")
+    check("and the channel is reported closed", st["channel"]["open"], False)
+    check("a company transacting in its own equity has an open channel",
+          rfx.channel_open({"share_count_change_1y": 0.06,
+                            "goodwill_to_assets": 0.02})["open"], True)
+    check("so does a serial acquirer",
+          rfx.channel_open({"share_count_change_1y": 0.0,
+                            "goodwill_to_assets": 0.25})["open"], True)
+    check("unknown inputs give an unknown channel, not a closed one",
+          rfx.channel_open({})["open"], None)
+    check("missing price or earnings refuses to label a stage",
+          rfx.stage({"share_count_change_1y": 0.06})["stage"], None)
+
+    # Evidence must travel with the label.
+    check("evidence names the numbers behind the call",
+          any("EPS growth" in e for e in rfx.stage(near_high)["evidence"]), True)
+    check("DE carries an explicit warning",
+          "earnings setback" in rfx.stage(near_high)["warning"], True)
+
+    # And the pipeline must mark a near-equilibrium name INELIGIBLE for Soros
+    # rather than failing it — the book says the framework does not apply.
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    rec = CompanyRecord(ticker="EQ1", market="US",
+                        years=[mkyear(2025 - i, net_income=100.0, revenue=1000.0,
+                                      eps_diluted=1.0, shares_diluted=100.0,
+                                      total_equity=800.0, total_assets=1000.0,
+                                      goodwill=5.0) for i in range(5)])
+    rec.price, rec.market_cap = 20.0, 2000.0
+    mm = mx.compute_metrics(rec)
+    out = sc.screen_universe([rec], {"EQ1": mm}, th, {}, cycle=None)
+    sor = out["results"]["EQ1"]["frameworks"]["soros"]
+    check("near-equilibrium name is ineligible for Soros, not failed",
+          "near-equilibrium" in (sor.get("ineligible_reason") or ""), True)
+
+    # The census counts every labelled row.
+    res = {"A": {"metrics": near_high}, "B": {"metrics": far_off},
+           "C": {"metrics": no_ch}}
+    cen = rfx.annotate(res, {})
+    check("census counts each stage", cen, {"DE": 1, "HI": 1, "EQ": 1})
+    check("the label is attached to the row", res["A"]["reflexive"]["stage"], "DE")
+
+    # Renderer: the badge and the filter must both exist.
+    t = rn.TEMPLATE
+    check("stage badge is rendered on the ticker", 'class="rfx' in t, True)
+    check("late stages get their own style", ".rfx.late" in t, True)
+    check("a Reflexive risk filter chip exists", "Reflexive risk" in t, True)
+    check("and the filter is wired to the late flag", "fRfx && !r.rfx_late" in t, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -1311,6 +1407,7 @@ if __name__ == "__main__":
     test_soros_and_rogers_from_source()
     test_buffett_additions_and_graham()
     test_commodities_cnav_and_gauge()
+    test_reflexive_stages()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")
