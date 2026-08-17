@@ -1,0 +1,349 @@
+# Pass/fail thresholds for each investment framework.
+# Every value here is tunable without touching code.
+#
+# `min_tests_passed` controls strictness: set it equal to the number of tests
+# for a pure AND screen, or lower it to allow near-misses through.
+# Tests that cannot be evaluated (missing data) are recorded as "unknown"
+# and, per `unknown_counts_as`, either fail the test or are excluded from the
+# denominator. Default is strict: unknown = fail, because a value screen that
+# silently passes names with missing balance sheets is worse than useless.
+
+global:
+  unknown_counts_as: fail          # fail | skip
+  # Fundamentals depth differs by SOURCE, not by company: EDGAR gives 10+ years
+  # for US filers, Yahoo about 4 for the Asian markets. Tests needing a deeper
+  # window than a company's feed provides are marked unevaluable and drop out of
+  # the denominator, and the pass bar scales down with them. Without this,
+  # Buffett and Lynch are arithmetically impossible for every Asian name.
+  min_history_years: 4
+  # Floors set low so they still bite if the universe is broadened to mid
+  # and small caps later. On the current large-cap universe every name
+  # clears these by orders of magnitude, so today they are inert.
+  min_market_cap_usd: 100000000    # 100m USD
+  min_median_daily_turnover_usd: 250000
+  # Financials and REITs distort EV/EBIT, ROIC and net-working-capital maths.
+  # These sectors are excluded from Greenblatt and Klarman but kept elsewhere.
+  capital_intensive_excluded_sectors:
+    - Financial Services
+    - Financials
+    - Real Estate
+    - Utilities
+
+# ---------------------------------------------------------------------------
+buffett:
+  label: Quality compounders
+  min_tests_passed: 5      # of 6
+  tests:
+    roe_consistency:
+      metric: roe
+      threshold: 0.15
+      lookback_years: 10
+      min_years_above: 8
+    gross_margin_floor:
+      metric: gross_margin_ttm
+      threshold: 0.30
+      operator: gte
+    gross_margin_stability:
+      metric: gross_margin_cv     # coefficient of variation over 10y
+      threshold: 0.15
+      operator: lte
+    leverage:
+      metric: debt_to_equity
+      threshold: 0.5
+      operator: lte
+    fcf_consistency:
+      metric: free_cash_flow
+      threshold: 0
+      lookback_years: 10
+      min_years_above: 8
+    share_count_discipline:
+      metric: share_count_change_5y
+      threshold: 0.0              # count today <= count 5y ago
+      operator: lte
+      min_history_years: 6        # needs a year -5 to compare against
+
+# ---------------------------------------------------------------------------
+munger:
+  label: Quality at a fair price
+  min_tests_passed: 5      # of 6
+  tests:
+    roic_level:
+      metric: roic_5y_avg
+      threshold: 0.12
+      operator: gte
+    roic_persistence:
+      metric: roic_cv_5y
+      threshold: 0.30
+      operator: lte
+    operating_margin_trend:
+      metric: operating_margin_slope_5y   # normalised slope, must not decline
+      threshold: -0.01
+      operator: gte
+    valuation_sanity:
+      metric: pe_ttm
+      threshold: 25
+      operator: lte
+    # Inversion: what would make this a bad business? Any red flag fails.
+    accrual_quality:
+      metric: accruals_ratio       # (NI - CFO) / total assets
+      threshold: 0.10
+      operator: lte
+    balance_sheet_integrity:
+      metric: goodwill_to_assets
+      threshold: 0.35
+      operator: lte
+
+# ---------------------------------------------------------------------------
+schloss:
+  label: Deep value, balance-sheet first
+  min_tests_passed: 4      # of 5
+  tests:
+    price_to_tangible_book:
+      metric: price_to_tangible_book
+      threshold: 1.0
+      operator: lt
+    minimal_leverage:
+      metric: debt_to_equity
+      threshold: 0.30
+      operator: lte
+    near_multiyear_low:
+      metric: pct_above_5y_low
+      threshold: 0.35             # within 35% of its 5-year low
+      operator: lte
+    long_history:
+      metric: years_of_data
+      threshold: 10
+      operator: gte
+      min_history_years: 10       # can't tell a young company from a short feed
+    earnings_durability:
+      metric: loss_years_in_10
+      threshold: 2
+      operator: lte
+
+# ---------------------------------------------------------------------------
+klarman:
+  label: Margin of safety, downside first
+  min_tests_passed: 3      # of 4
+  # Passes via EITHER the net-net route OR the cheap-and-cash-rich route.
+  tests:
+    absolute_cheapness:
+      metric: ev_to_ebit
+      threshold: 8.0
+      operator: lte
+      alt_metric: ncav_to_market_cap    # net-net route: satisfies on its own
+      alt_threshold: 0.66
+      alt_operator: gte
+    balance_sheet_cushion:
+      metric: net_cash_to_market_cap
+      threshold: 0.0              # net cash positive, or at worst neutral
+      operator: gte
+    solvency:
+      metric: net_debt_to_ebitda
+      threshold: 2.5
+      operator: lte
+    cash_generation:
+      metric: free_cash_flow_ttm
+      threshold: 0
+      operator: gt
+
+# ---------------------------------------------------------------------------
+lynch:
+  label: Growth at a reasonable price
+  min_tests_passed: 4      # of 5
+  tests:
+    peg:
+      metric: peg_ratio
+      threshold: 1.0
+      operator: lte
+      min_history_years: 6        # PEG needs a 5-year EPS CAGR
+    growth_band_lower:
+      metric: eps_cagr_5y
+      threshold: 0.10
+      operator: gte
+      min_history_years: 6
+    growth_band_upper:
+      metric: eps_cagr_5y
+      threshold: 0.40             # >40% is rarely sustainable — Lynch's own caution
+      operator: lte
+      min_history_years: 6
+    leverage:
+      metric: debt_to_equity
+      threshold: 0.50
+      operator: lte
+    inventory_discipline:
+      metric: inventory_growth_less_revenue_growth
+      threshold: 0.0              # inventory must not outgrow sales
+      operator: lte
+
+# ---------------------------------------------------------------------------
+# Sir John Templeton — bargain hunting at the point of maximum pessimism.
+# His 16 rules are mostly behavioural; these five are the ones a screen can
+# actually test. Rules about temperament, prayer, humility and diversification
+# govern how you USE this list, not which names reach it.
+templeton:
+  label: Bargain at maximum pessimism
+  min_tests_passed: 4      # of 6
+  tests:
+    # Rule 4 & 5: buy low, among quality
+    cheap_earnings:
+      metric: pe_ttm
+      threshold: 15.0
+      operator: lte
+    cheap_book:
+      metric: price_to_book
+      threshold: 1.5
+      operator: lte
+    cheap_cash_flow:
+      metric: price_to_cash_flow
+      threshold: 10.0
+      operator: lte
+    # Rule 4 & 10: the point of maximum pessimism is a price fact, not a mood
+    maximum_pessimism:
+      metric: pct_below_52w_high
+      threshold: 0.25             # at least 25% off its 52-week high
+      operator: gte
+    # Rule 5: bargains among QUALITY — a cheap bad business is not a Templeton buy
+    quality_filter:
+      metric: loss_years_in_10
+      threshold: 2
+      operator: lte
+    survivability:
+      metric: debt_to_equity
+      threshold: 0.60
+      operator: lte
+
+# ---------------------------------------------------------------------------
+# Howard Marks — where are we in the cycle, and what does that imply.
+# The tests below are the per-name half. The market-cycle half is computed
+# once per run and shown as a gauge; in Defensive mode `min_tests_passed`
+# rises by one and in Opportunistic mode it falls by one, because the same
+# evidence should demand more of you when everyone is greedy.
+marks:
+  label: Risk-adjusted, cycle-aware
+  min_tests_passed: 4      # of 6, before the cycle adjustment
+  cycle_adjust: true
+  tests:
+    # "Being too far ahead of your time is indistinguishable from being wrong"
+    valuation_discipline:
+      metric: ev_to_ebit
+      threshold: 15.0
+      operator: lte
+    # Marks on risk: the danger is in the balance sheet, not the income statement
+    leverage_safety:
+      metric: net_debt_to_ebitda
+      threshold: 3.0
+      operator: lte
+    # Earnings that turn into cash
+    earnings_quality:
+      metric: accruals_ratio
+      threshold: 0.10
+      operator: lte
+    downside_protection:
+      metric: fcf_yield
+      threshold: 0.02
+      operator: gte
+    # "Rule number one: most things will prove to be cyclical"
+    not_at_the_top:
+      metric: pct_below_52w_high
+      threshold: 0.05             # not making new highs on the day you buy
+      operator: gte
+    resilience:
+      metric: roic_5y_avg
+      threshold: 0.08
+      operator: gte
+
+# ---------------------------------------------------------------------------
+# Market-cycle gauge (Marks). Computed once per run from the primary index and
+# the universe's own internals — no vendor sentiment feed needed.
+market_cycle:
+  enabled: true
+  overbought_rsi: 70
+  oversold_rsi: 30
+  breadth_hot: 0.75            # >75% of names above their 200-day
+  breadth_cold: 0.35
+  vix_calm: 15
+  vix_stressed: 28
+
+# ---------------------------------------------------------------------------
+greenblatt:
+  label: Magic Formula
+  # Rank-based, not threshold-based. Pass = combined rank inside top N of the
+  # eligible universe. Ranked within market by default so a single cheap market
+  # doesn't crowd out the rest; set rank_scope: global to rank across all five.
+  rank_scope: market          # market | global
+  top_n: 30
+  exclude_sectors_from_global: true
+  tests:
+    earnings_yield:
+      metric: ebit_to_ev
+      direction: desc
+    return_on_capital:
+      metric: ebit_to_invested_capital   # EBIT / (net working capital + net fixed assets)
+      direction: desc
+
+# ---------------------------------------------------------------------------
+soros:
+  label: Reflexivity and regime
+  min_tests_passed: 3      # of 4
+  tests:
+    trend_confirmation:
+      metric: price_above_sma200
+      threshold: 1
+      operator: gte
+    relative_strength:
+      metric: rs_vs_market_index_6m     # vs its OWN market index, not the S&P
+      threshold: 0.0
+      operator: gt
+    fundamental_price_alignment:
+      metric: eps_trend_vs_price_trend  # +1 aligned, 0 neutral, -1 divergent
+      threshold: 0
+      operator: gte
+    volatility_regime:
+      metric: atr_pct_percentile        # avoid blow-off tops
+      threshold: 0.90
+      operator: lte
+  # Macro gate: when risk conditions deteriorate, the whole Soros screen fails
+  # regardless of single-name signals. This is the reflexivity brake.
+  macro_gate:
+    enabled: true
+    hy_spread_max: 6.0                  # % — above this, credit stress
+    yield_curve_min: -0.50              # 10y-2y; deeply inverted = late cycle
+
+# ---------------------------------------------------------------------------
+technical:
+  label: Technical timing overlay
+  min_tests_passed: 4      # of 6
+  tests:
+    above_long_ma:
+      metric: price_above_sma200
+      threshold: 1
+      operator: gte
+    golden_cross_regime:
+      metric: sma50_above_sma200
+      threshold: 1
+      operator: gte
+    rsi_band_lower:
+      metric: rsi_14
+      threshold: 40
+      operator: gte
+    rsi_band_upper:
+      metric: rsi_14
+      threshold: 70               # not overbought — this is a value app
+      operator: lte
+    macd_momentum:
+      metric: macd_histogram
+      threshold: 0
+      operator: gt
+    volume_participation:
+      metric: vol20_over_vol50
+      threshold: 0.80
+      operator: gte
+
+# ---------------------------------------------------------------------------
+# Composite: how many frameworks must a name clear to appear in the screener.
+composite:
+  min_frameworks_passed: 2
+  # Always surface names that clear these regardless of the count above.
+  always_surface_if_passed:
+    - greenblatt
+    - klarman
