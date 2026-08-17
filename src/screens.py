@@ -133,7 +133,8 @@ def evaluate_test(name: str, spec: Dict[str, Any],
 
 def run_framework(fw_name: str, cfg: Dict[str, Any],
                   metrics: Dict[str, Any],
-                  unknown_counts_as: str = "fail") -> Dict[str, Any]:
+                  unknown_counts_as: str = "fail",
+                  cycle_shift: int = 0) -> Dict[str, Any]:
     tests_cfg = cfg.get("tests", {})
     results = [evaluate_test(n, s, metrics) for n, s in tests_cfg.items()]
 
@@ -145,6 +146,10 @@ def run_framework(fw_name: str, cfg: Dict[str, Any],
 
     n_total = len(tests_cfg)
     base_required = cfg.get("min_tests_passed", n_total)
+    # Marks: the same evidence should demand more of you when the crowd is
+    # greedy and less when it is fearful. Only frameworks opting in are moved.
+    if cfg.get("cycle_adjust") and cycle_shift:
+        base_required = max(1, min(n_total, base_required + cycle_shift))
 
     # Tests we couldn't evaluate for lack of history leave the denominator, and
     # the bar drops proportionally. Missing DATA still counts against the
@@ -289,7 +294,8 @@ def macro_gate_open(macro: Dict[str, Any], cfg: Dict[str, Any]) -> Tuple[bool, s
 def screen_universe(records: List[Any],
                     metrics_by_ticker: Dict[str, Dict[str, Any]],
                     thresholds: Dict[str, Any],
-                    macro: Dict[str, Any]) -> Dict[str, Any]:
+                    macro: Dict[str, Any],
+                    cycle: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     g = thresholds.get("global", {})
     unknown_mode = g.get("unknown_counts_as", "fail")
     excluded = g.get("capital_intensive_excluded_sectors", [])
@@ -302,11 +308,13 @@ def screen_universe(records: List[Any],
     greenblatt = run_greenblatt(records, metrics_by_ticker,
                                 thresholds.get("greenblatt", {}), excluded)
 
-    framework_names = ["buffett", "munger", "schloss", "klarman", "lynch", "soros"]
+    framework_names = ["buffett", "munger", "schloss", "klarman", "lynch",
+                       "templeton", "marks", "soros"]
     # Frameworks that read a company's accounts. A fund has none of the inputs,
     # so these are marked not-applicable rather than failed — failing an ETF on
     # "missing ROE" is noise dressed as a finding.
-    COMPANY_FRAMEWORKS = {"buffett", "munger", "schloss", "klarman", "lynch"}
+    COMPANY_FRAMEWORKS = {"buffett", "munger", "schloss", "klarman", "lynch",
+                          "templeton", "marks"}
     results: Dict[str, Any] = {}
 
     for rec in records:
@@ -327,7 +335,8 @@ def screen_universe(records: List[Any],
             cfg = thresholds.get(name, {})
             if not cfg:
                 continue
-            r = run_framework(name, cfg, m, unknown_mode)
+            r = run_framework(name, cfg, m, unknown_mode,
+                              cycle_shift=(cycle or {}).get("threshold_shift", 0))
             if is_fund and name in COMPANY_FRAMEWORKS:
                 r["passed"] = False
                 r["ineligible_reason"] = ("fund, not an operating company — "
@@ -400,6 +409,7 @@ def screen_universe(records: List[Any],
 
     return {
         "results": results,
+        "cycle": cycle or {},
         "macro_gate_open": gate_open,
         "macro_gate_reason": gate_reason,
         "macro": macro,
