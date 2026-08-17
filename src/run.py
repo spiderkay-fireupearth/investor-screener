@@ -35,6 +35,7 @@ from . import metrics as mx
 from . import screens as sc
 from . import render as rn
 from . import library as lib
+from . import cycle as cyc
 
 log = logging.getLogger("screener")
 
@@ -450,7 +451,27 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         m["fx_to_usd"] = fx
         metrics_by_ticker[rec.ticker] = m
 
-    screened = sc.screen_universe(records, metrics_by_ticker, thresholds, macro)
+    # Where are we in the cycle? Computed from the primary index, our own
+    # breadth, and the VIX — then it modulates the Marks bar.
+    primary_idx = store.load_prices(universe_cfg["markets"]["US"]["index_ticker"])
+    breadth = None
+    try:
+        from . import analytics as an
+        frames = {r.ticker: store.load_prices(r.ticker) for r in records[:400]}
+        frames = {k: v for k, v in frames.items() if v is not None and len(v) >= 200}
+        if frames:
+            breadth = an.breadth_from_universe(frames)
+    except Exception as e:                        # noqa: BLE001
+        log.warning("breadth for cycle gauge failed: %s", e)
+    vix_df = store.load_prices("^VIX")
+    vix = float(vix_df["Close"].iloc[-1]) if vix_df is not None and len(vix_df) else None
+    cycle_state = cyc.assess(primary_idx, breadth, vix,
+                             thresholds.get("market_cycle", {}))
+    log.info("Market cycle: %s (%s)", cycle_state.get("mode"),
+             cycle_state.get("evidence"))
+
+    screened = sc.screen_universe(records, metrics_by_ticker, thresholds, macro,
+                                  cycle=cycle_state)
     store.save_screen_results(run_id, screened["results"])
 
     # Merge in the other region's most recent results so the published page
