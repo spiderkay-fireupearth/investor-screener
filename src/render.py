@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional
 
 FRAMEWORKS = [
     ("buffett", "Buffett"), ("munger", "Munger"), ("schloss", "Schloss"),
-    ("klarman", "Klarman"), ("lynch", "Lynch"), ("greenblatt", "Greenblatt"),
-    ("soros", "Soros"),
+    ("klarman", "Klarman"), ("lynch", "Lynch"), ("templeton", "Templeton"),
+    ("marks", "Marks"), ("greenblatt", "Greenblatt"), ("soros", "Soros"),
 ]
 
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
@@ -170,6 +170,10 @@ h1{font-size:23px;margin:0 0 4px;letter-spacing:-.02em}
 .gate{border-radius:10px;padding:11px 15px;margin:14px 0;font-size:13.5px;border:1px solid var(--line)}
 .gate.open{background:rgba(63,191,127,.10);border-color:rgba(63,191,127,.35)}
 .gate.closed{background:rgba(226,88,94,.10);border-color:rgba(226,88,94,.4)}
+.gate.cyc-defensive{background:rgba(201,162,39,.12);border-color:rgba(201,162,39,.4)}
+.gate.cyc-core{background:var(--panel);border-color:var(--line)}
+.gate.cyc-opportunistic{background:rgba(63,191,127,.10);border-color:rgba(63,191,127,.35)}
+.muted-ink{color:var(--tx3)}
 .filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:16px 0 10px;
 padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
 .fl{font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;margin-right:2px}
@@ -514,6 +518,20 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
 
     open_ = screened.get("macro_gate_open", True)
     reason = screened.get("macro_gate_reason", "")
+    cyc = screened.get("cycle") or {}
+    cycle_html = ""
+    if cyc.get("mode"):
+        mode = cyc["mode"]
+        shift = cyc.get("threshold_shift", 0)
+        shift_txt = ("Marks needs one MORE passing test in this posture."
+                     if shift > 0 else
+                     "Marks accepts one FEWER passing test in this posture."
+                     if shift < 0 else "Marks runs at its normal bar.")
+        cycle_html = (
+            f'<div class="gate cyc-{mode}"><b>Market cycle: {mode.upper()}</b> — '
+            f'{cyc.get("evidence", "")}.<br>{cyc.get("reason", "")} '
+            f'<span class="muted-ink">{shift_txt}</span></div>')
+
     gate = (f'<div class="gate {"open" if open_ else "closed"}">'
             f'<b>Soros macro gate: {"OPEN" if open_ else "CLOSED"}</b> — {reason}.'
             + ("" if open_ else " Every Soros signal is suppressed while credit "
@@ -530,7 +548,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
-            .replace("__GATE__", gate)
+            .replace("__GATE__", cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
             .replace("__TS__", datetime.now(timezone.utc)
