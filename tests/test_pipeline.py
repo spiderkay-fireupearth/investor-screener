@@ -742,27 +742,48 @@ def test_debt_cycle():
           a["favours"], "real assets")
 
     # --- index CAPE is an aggregate, not a mean of ratios ------------------
-    class R:
-        def __init__(s_, t, cap, earn):
-            s_.ticker, s_.market = t, "US"
-            s_.fundamentals = [FundamentalYear(
-                ticker=t, fiscal_year=2016 + i, period_end=f"{2016 + i}-12-31",
-                standard="us-gaap", currency="USD", source="edgar",
-                net_income=earn) for i in range(10)]
-            s_.cap = cap
-    recs = [R(f"T{i}", 1000.0, 50.0) for i in range(40)]
+    # These MUST be real CompanyRecord objects. An earlier version of this test
+    # used a hand-rolled stand-in class that stored its statements on a made-up
+    # `.fundamentals` attribute; the real dataclass calls it `.years`. The test
+    # passed, and the shipped code found zero years on every name and reported
+    # "no earnings history" — a wrong answer delivered confidently. A fixture
+    # that invents the interface cannot catch an interface mismatch.
+    def mkrec(t, cap, earn, market="US", n_years=10):
+        return CompanyRecord(
+            ticker=t, market=market, currency="USD",
+            market_cap=cap,
+            years=[mkyear(2025 - i, net_income=earn) for i in range(n_years)])
+
+    recs = [mkrec(f"T{i}", 1000.0, 50.0) for i in range(40)]
     # One name whose earnings are a rounding error: a mean-of-ratios would let
-    # its 1000x multiple swamp 40 healthy names. An aggregate must not care.
-    recs.append(R("TINY", 1000.0, 0.001))
-    mt = {r.ticker: {"market_cap_usd": r.cap, "fx_to_usd": 1.0} for r in recs}
+    # its 1,000,000x multiple swamp 40 healthy names. An aggregate must not care.
+    recs.append(mkrec("TINY", 1000.0, 0.001))
+    mt = {r.ticker: {"market_cap_usd": r.market_cap, "fx_to_usd": 1.0}
+          for r in recs}
     res = dc.universe_cape(recs, mt)
+    check("aggregate CAPE reads CompanyRecord.years", "error" in res, False)
     check("aggregate CAPE ignores a near-zero-earnings outlier",
           round(res["cape"]), 20)
     check("aggregate CAPE counts every usable name", res["names_used"], 41)
-    thin_recs = recs[:5]
-    check("too few names refuses to print a number",
-          "error" in dc.universe_cape(
-              thin_recs, {r.ticker: mt[r.ticker] for r in thin_recs}), True)
+
+    # --- and it must say WHY it gave up, not just that it did -------------
+    thin = recs[:5]
+    e1 = dc.universe_cape(thin, {r.ticker: mt[r.ticker] for r in thin})
+    check("too few names refuses to print a number", "error" in e1, True)
+    check("failure counts names in the market", e1["breakdown"]["in_market"], 5)
+
+    short = [mkrec(f"S{i}", 1000.0, 50.0, n_years=4) for i in range(40)]
+    e2 = dc.universe_cape(
+        short, {r.ticker: {"market_cap_usd": 1000.0, "fx_to_usd": 1.0}
+                for r in short})
+    check("short history is reported as short history, not as no names",
+          e2["breakdown"]["too_few_years"], 40)
+    e3 = dc.universe_cape(recs, {})       # no metrics at all
+    check("missing market caps are named as the cause",
+          e3["breakdown"]["no_market_cap"], 41)
+    check("Asian names are excluded, not counted as failures",
+          dc.universe_cape([mkrec("9988.HK", 1000.0, 50.0, market="HK")],
+                           mt)["breakdown"]["in_market"], 0)
 
     # --- the renderer must survive every one of these shapes --------------
     panel = rn._dalio_panel({"enabled": True, "stage": 2,

@@ -696,22 +696,31 @@ def universe_cape(records, metrics_by_ticker: Dict[str, dict],
     tot_cap = 0.0
     tot_earn = 0.0
     used = 0
-    skipped = 0
+    # Count *why* names drop out. A single "skipped" tally cannot distinguish
+    # "the market genuinely lacks history" from "the code is reading the wrong
+    # attribute", and those need completely different fixes.
+    why = {"in_market": 0, "no_market_cap": 0, "too_few_years": 0,
+           "decade_loss_maker": 0}
     for rec in records or []:
         if getattr(rec, "market", None) != market:
             continue
+        why["in_market"] += 1
         m = metrics_by_ticker.get(getattr(rec, "ticker", None)) or {}
         cap = m.get("market_cap_usd")
         fx = m.get("fx_to_usd")
         if not _n(cap) or not _n(fx):
-            skipped += 1
+            why["no_market_cap"] += 1
             continue
+        # CompanyRecord stores its normalised statements in `.years`. Reading
+        # any other attribute name yields an empty list on every single record
+        # and produces a confident "no history available" that is really a
+        # typo — so this must stay pinned to the dataclass field.
         years = {f.fiscal_year: f.net_income
-                 for f in (getattr(rec, "fundamentals", None) or [])
+                 for f in (getattr(rec, "years", None) or [])
                  if _n(getattr(f, "net_income", None))}
         recent = sorted(years, reverse=True)[:10]
         if len(recent) < min_years:
-            skipped += 1
+            why["too_few_years"] += 1
             continue
         vals = []
         for y in recent:
@@ -721,18 +730,30 @@ def universe_cape(records, metrics_by_ticker: Dict[str, dict],
             vals.append(e * fx)                   # into USD
         avg = sum(vals) / len(vals)
         if avg <= 0:                              # a decade-average loss maker
-            skipped += 1
+            why["decade_loss_maker"] += 1
             continue
         tot_cap += cap
         tot_earn += avg
         used += 1
 
+    # The Asia refresh carries no US constituents at all. That is not a data
+    # failure and must not read like one on the page, or every evening run
+    # would look broken.
+    if why["in_market"] == 0:
+        return {"error": f"no {market} names in this run — CAPE is computed on "
+                         f"the US refresh only",
+                "names_used": 0, "breakdown": why, "not_this_region": True}
+
     if used < 30 or tot_earn <= 0:
-        return {"error": f"only {used} names had {min_years}+ years of "
-                         f"earnings — too thin to call an index CAPE",
-                "names_used": used, "names_skipped": skipped}
+        return {"error": f"only {used} of {why['in_market']} {market} names "
+                         f"were usable — {why['no_market_cap']} had no USD "
+                         f"market cap, {why['too_few_years']} had fewer than "
+                         f"{min_years} years of earnings, "
+                         f"{why['decade_loss_maker']} lost money on a "
+                         f"ten-year average",
+                "names_used": used, "breakdown": why}
     return {"cape": tot_cap / tot_earn, "names_used": used,
-            "names_skipped": skipped,
+            "breakdown": why,
             "inflation_adjusted": bool(latest_cpi),
             "note": "aggregate CAPE of our own US constituents, not the "
                     "official Shiller series"}
