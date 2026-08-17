@@ -577,9 +577,21 @@ def _commodity_panel(cb: Dict[str, Any]) -> str:
                     else f'<td class="r {"up" if gap > -0.02 else "dn"}" '
                          f'title="{e_attr(str(r.get("tracking_reading", "")))}">'
                          f'{gap * 100:+.1f}%</td>')
-        body += (f'<tr><td class="nm">{e_attr(r["name"])}'
-                 + (f'<br><span class="muted-ink" style="font-size:11px">'
-                    f'{e_attr(r["note"])}</span>' if r.get("note") else "")
+        a = r.get("assessment") or {}
+        call = a.get("commodity_call", "")
+        grade = a.get("instrument_grade", "")
+        gcls = {"clean": "cool", "mild drag": "", "heavy drag": "warm",
+                "poor": "hot", "not the commodity": "hot"}.get(grade, "")
+        ccls = ("up" if str(call).startswith("uptrend")
+                else "dn" if call == "downtrend" else "")
+        verdict = (f'<div style="margin-top:3px"><span class="{ccls}">'
+                   f'{e_attr(call)}</span> &middot; '
+                   f'<span class="pill {gcls}">{e_attr(grade)}</span></div>'
+                   + (f'<div class="muted-ink" style="font-size:11px">'
+                      f'{e_attr(a["flag"])}</div>' if a.get("flag") else ""))
+        body += (f'<tr><td class="nm">{e_attr(r["name"])}{verdict}'
+                 + (f'<div class="muted-ink" style="font-size:11px">'
+                    f'{e_attr(r["note"])}</div>' if r.get("note") else "")
                  + f'</td><td>{fut}</td>'
                  + _pct_cell(r.get("future_12m"))
                  + f'<td>{etf} <span class="kind {e_attr(r["kind"])}">'
@@ -604,6 +616,13 @@ def _commodity_panel(cb: Dict[str, Any]) -> str:
         '<th class="r">Fund &minus; commodity</th></tr></thead>'
         f'<tbody>{body}</tbody></table>'
         f'<div class="dnote">{e_attr(cb.get("caveat", ""))}</div>'
+        '<div class="dnote"><b>The trend reading is not a supply call.</b> '
+        'Rogers analyses the commodity first &mdash; inventories, days of '
+        'consumption, rig and mine counts, project pipelines &mdash; and none '
+        'of that is in a free feed. His sell rule fires on <i>rising '
+        'stockpiles</i>, and this app cannot see stockpiles. So the left-hand '
+        'verdict is price trend only, and a commodity can be in a clean '
+        'uptrend while its warehouses are filling.</div>'
         '<div class="dnote"><b>Reading the last column.</b> It is the ETF\'s '
         'twelve-month return minus the commodity\'s. It already contains roll '
         'cost, fees, tracking error and storage, so it is what you got versus '

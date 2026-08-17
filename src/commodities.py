@@ -128,6 +128,97 @@ def _frame(store, yahoo, symbol: str, period: str = "2y"):
     return store.load_prices(symbol) if store is not None else None
 
 
+def assess(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Two separate verdicts, deliberately never merged into one.
+
+    Rogers's whole method is a two-stage process — analyse the COMMODITY, then
+    the instrument — and the app can only do half of it. So this returns half
+    an answer twice rather than one whole-looking answer:
+
+      * `commodity_call` is a TREND reading off price alone. It is not a
+        supply-and-demand call and must never be read as one. Rogers's actual
+        buy and sell rules run on inventories, rig and mine counts, project
+        pipelines and days of consumption, none of which is in a free feed.
+        His sell rule — "when you discover that stockpiles of all kinds of
+        commodities are rising... the bull market will be over" — cannot fire
+        here, and a trend that looks strong on price can be a commodity whose
+        warehouses are filling.
+
+      * `instrument_grade` is a judgment about the VEHICLE, and this one the
+        app can make properly, because the tracking gap is measured rather
+        than modelled.
+
+    A strong commodity held through a poor instrument is a losing trade, and
+    that combination is the one worth surfacing.
+    """
+    out: Dict[str, Any] = {"not_a_supply_call": True}
+
+    # --- the commodity, on price only ------------------------------------
+    price_role = "future" if row.get("future_12m") is not None else "etf"
+    r12 = row.get(f"{price_role}_12m")
+    vs200 = row.get(f"{price_role}_vs_200dma")
+    off_hi = row.get(f"{price_role}_off_52w_high")
+    if r12 is None and vs200 is None:
+        out["commodity_call"] = "no price history"
+    else:
+        up = (vs200 is not None and vs200 > 0)
+        strong = (r12 is not None and r12 > 0.10)
+        weak = (r12 is not None and r12 < -0.10)
+        if up and strong:
+            out["commodity_call"] = ("uptrend, near the highs"
+                                     if (off_hi is not None and off_hi < 0.10)
+                                     else "uptrend")
+        elif not up and weak:
+            out["commodity_call"] = "downtrend"
+        else:
+            out["commodity_call"] = "no clear trend"
+    out["measured_on"] = ("the futures price" if price_role == "future"
+                          else "the fund price — no futures line for this one")
+
+    # --- the vehicle ------------------------------------------------------
+    gap, kind = row.get("tracking_gap_12m"), row.get("kind")
+    if kind == "equity":
+        out["instrument_grade"] = "not the commodity"
+        out["instrument_note"] = ("this fund holds producers. Rogers's central "
+                                  "claim is that producers underperformed the "
+                                  "commodity threefold over 41 years, so this "
+                                  "is an equity position, not a commodity one")
+    elif gap is None:
+        out["instrument_grade"] = "unmeasured"
+        out["instrument_note"] = ("no futures line to compare against, so the "
+                                  "drag on this vehicle is not measurable here")
+    elif gap > -0.02:
+        out["instrument_grade"] = "clean"
+        out["instrument_note"] = "kept up with the commodity over the year"
+    elif gap > -0.06:
+        out["instrument_grade"] = "mild drag"
+        out["instrument_note"] = "fees and roll cost a little"
+    elif gap > -0.15:
+        out["instrument_grade"] = "heavy drag"
+        out["instrument_note"] = ("a material part of the move was given back "
+                                  "to the roll")
+    else:
+        out["instrument_grade"] = "poor"
+        out["instrument_note"] = ("on this evidence the fund is not a way to "
+                                  "own this commodity for any length of time")
+    if kind == "etn":
+        out["instrument_note"] = ((out.get("instrument_note") or "")
+                                  + "; and it is an ETN, so you also hold the "
+                                    "issuer's credit")
+
+    # --- the combination worth seeing ------------------------------------
+    if (out["commodity_call"].startswith("uptrend")
+            and out["instrument_grade"] in ("heavy drag", "poor")):
+        out["flag"] = ("the commodity is rising and this vehicle is not "
+                       "capturing it — the right call expressed the wrong way")
+    elif (out["commodity_call"].startswith("uptrend")
+            and out["instrument_grade"] == "not the commodity"):
+        out["flag"] = ("the commodity is rising, but you would be buying "
+                       "producers, whose result depends on things the "
+                       "commodity price does not control")
+    return out
+
+
 def build(yahoo, store) -> Dict[str, Any]:
     """Assemble the board. Missing symbols are reported, never interpolated."""
     rows: List[Dict[str, Any]] = []
@@ -172,6 +263,7 @@ def build(yahoo, store) -> Dict[str, Any]:
                 "which is what contango does to a rolling fund" if g > -0.15 else
                 "severe drag — on this evidence the fund is not a way to own "
                 "this commodity")
+        row["assessment"] = assess(row)
         rows.append(row)
 
     if missing:
