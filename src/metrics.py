@@ -237,6 +237,16 @@ def compute_metrics(rec: CompanyRecord,
     m["net_cash_to_market_cap"] = _safe_div(net_cash, mcap)
     m["ncav_to_market_cap"] = _safe_div(latest.ncav, mcap)
     m["fcf_yield"] = _safe_div(latest.free_cash_flow, mcap)
+    # Templeton screens on price-to-cash-flow as well as P/E and P/B — cash
+    # flow is harder to dress up than earnings, which is the point.
+    m["price_to_cash_flow"] = _safe_div(mcap, latest.cfo) if (
+        _n(latest.cfo) and latest.cfo > 0) else None
+    m["earnings_yield"] = _safe_div(eps, price) if (
+        _n(eps) and _n(price) and price > 0) else None
+    # "Maximum pessimism" needs both distance-from-high and nearness-to-low.
+    pbh = rec.technicals.get("pct_below_52w_high")
+    m["pct_below_52w_high"] = pbh
+    m["drawdown_score"] = pbh if _n(pbh) else None
 
     # ------------------------------------------------------------------ growth
     if len(ys) > 5 and _n(ys[0].eps_diluted) and _n(ys[5].eps_diluted):
