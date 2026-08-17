@@ -354,6 +354,84 @@ def compute_metrics(rec: CompanyRecord,
         if (_n(_r12) and _n(m.get("eps_growth_1y"))) else None)
 
     # ------------------------------------------------------------------------
+    # Buffett, from the 2010-2021 letters, and the classic Graham ratios the
+    # value guide names. Read the attribution carefully — it is not uniform:
+    #
+    #   * RONTA is Buffett's own frame. On See's: "annually earning about
+    #     $4 million pre-tax while utilizing only $8 million of net tangible
+    #     assets", and the 2017 acquisition criteria ask for "good returns on
+    #     the net tangible assets required to operate the business". He gives
+    #     NO threshold. The 50% See's figure is a fact about one company.
+    #   * The current, quick and payout ratios are named and defined in the
+    #     value guide with NO thresholds attached — it says only "the lower the
+    #     PE, the better" and "you should not be happy to see D/A and D/E
+    #     rising". Any cutoff is mine.
+    #   * The Graham number and the P/E x P/B rule are NOT in either document.
+    #     They are Graham's, from The Intelligent Investor, and are computed
+    #     here because they are the standard value yardsticks — but nothing in
+    #     the uploaded books supports them.
+    # ------------------------------------------------------------------------
+    if ys:
+        y0 = ys[0]
+        m["current_ratio"] = _safe_div(y0.current_assets, y0.current_liabilities)
+        m["quick_ratio"] = _safe_div(
+            (y0.current_assets - y0.inventory)
+            if (_n(y0.current_assets) and _n(y0.inventory)) else None,
+            y0.current_liabilities)
+        # Dividends are stored as paid (negative in most feeds); take the
+        # magnitude so the payout ratio is positive whichever sign arrives.
+        m["payout_ratio"] = _safe_div(
+            abs(y0.dividends_paid) if _n(y0.dividends_paid) else None,
+            y0.net_income if (_n(y0.net_income) and y0.net_income > 0) else None)
+        # Return on NET TANGIBLE assets. The point of excluding goodwill is
+        # that a serial acquirer's ROE flatters it: the capital really employed
+        # includes what it paid over book, and RONTA puts that back.
+        tbv = y0.tangible_book_value
+        m["return_on_net_tangible_assets"] = _safe_div(
+            y0.pretax_income if _n(y0.pretax_income) else y0.net_income,
+            tbv if (_n(tbv) and tbv > 0) else None)
+    else:
+        for k in ("current_ratio", "quick_ratio", "payout_ratio",
+                  "return_on_net_tangible_assets"):
+            m[k] = None
+
+    # "We first have to decide whether we can sensibly estimate an earnings
+    # range for five years out... If, however, we lack the ability to estimate
+    # future earnings — which is usually the case — we simply move on."
+    # Past earnings variability is the only observable proxy for that.
+    eps_hist = [y.eps_diluted for y in ys[:5] if _n(y.eps_diluted)]
+    if len(eps_hist) >= 4 and all(e > 0 for e in eps_hist):
+        mu = float(np.mean(eps_hist))
+        m["eps_cv_5y"] = float(np.std(eps_hist, ddof=1) / mu) if mu else None
+    else:
+        # A loss year makes a coefficient of variation meaningless rather than
+        # merely large, so it is refused instead of reported.
+        m["eps_cv_5y"] = None
+
+    # "To date, See's has earned $1.9 billion pre-tax, with its growth having
+    # required added investment of only $40 million." Incremental return on
+    # capital separates a 15% ROE bought with heavy reinvestment from one that
+    # needed almost none — nothing else in the Buffett screen sees that.
+    m["incremental_roic_5y"] = None
+    if len(ys) >= 6:
+        e0, e5 = ys[0].ebit, ys[5].ebit
+        ic0, ic5 = ys[0].invested_capital, ys[5].invested_capital
+        if all(_n(x) for x in (e0, e5, ic0, ic5)) and (ic0 - ic5) > 0:
+            m["incremental_roic_5y"] = (e0 - e5) / (ic0 - ic5)
+
+    # Graham's own yardsticks. NOT from the uploaded books — see the note above.
+    bvps = _safe_div(y0.total_equity, y0.shares_diluted) if ys else None
+    eps0 = ys[0].eps_diluted if ys else None
+    if _n(bvps) and _n(eps0) and bvps > 0 and eps0 > 0:
+        m["graham_number"] = float(np.sqrt(22.5 * eps0 * bvps))
+        m["price_to_graham_number"] = _safe_div(rec.price, m["graham_number"])
+    else:
+        m["graham_number"] = m["price_to_graham_number"] = None
+    m["pe_times_pb"] = (m["pe_ttm"] * m["price_to_book"]
+                        if (_n(m.get("pe_ttm")) and _n(m.get("price_to_book"))
+                            and m["pe_ttm"] > 0) else None)
+
+    # ------------------------------------------------------------------------
     # Rogers, "Hot Commodities" — the supply side, at company level.
     #
     # His thesis is under-investment: "Virtually no new mine shafts have been
@@ -369,6 +447,21 @@ def compute_metrics(rec: CompanyRecord,
         m["capex_to_revenue"] = _safe_div(ys[0].capex, ys[0].revenue)
     else:
         m["capex_to_depreciation"] = m["capex_to_revenue"] = None
+
+    # "Ideally, these assets should have the ability in inflationary times to
+    # deliver output that will retain its purchasing-power value while
+    # requiring a minimum of new capital investment." Three observables:
+    # pricing power holding the margin, revenue per share growing, and capital
+    # intensity staying low. Computed HERE rather than with the other Buffett
+    # metrics because it depends on capex/revenue, which is set just above.
+    _om_slope = m.get("operating_margin_slope_5y")
+    _rps = m.get("revenue_per_share_growth_1y")
+    _cxr = m.get("capex_to_revenue")
+    if all(_n(x) for x in (_om_slope, _rps, _cxr)):
+        m["inflation_resilient"] = int(
+            _om_slope >= -0.005 and _rps >= 0.02 and _cxr <= 0.08)
+    else:
+        m["inflation_resilient"] = None
 
     # ------------------------------------------- Soros: reflexivity divergence
     # Compare the direction of earnings against the direction of price. When

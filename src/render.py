@@ -17,7 +17,7 @@ FRAMEWORKS = [
     ("buffett", "Buffett"), ("munger", "Munger"), ("schloss", "Schloss"),
     ("klarman", "Klarman"), ("lynch", "Lynch"), ("templeton", "Templeton"),
     ("marks", "Marks"), ("greenblatt", "Greenblatt"), ("soros", "Soros"),
-    ("rogers", "Rogers"),
+    ("rogers", "Rogers"), ("graham", "Graham"),
 ]
 
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",

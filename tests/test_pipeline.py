@@ -513,8 +513,8 @@ def test_end_to_end_with_config():
     check("GOOD is surfaced", res["GOOD"]["surfaced"], True)
     check("every framework evaluated",
           sorted(res["GOOD"]["frameworks"].keys()),
-          ["buffett", "greenblatt", "klarman", "lynch", "marks", "munger",
-           "rogers", "schloss", "soros", "templeton"])
+          ["buffett", "graham", "greenblatt", "klarman", "lynch", "marks",
+           "munger", "rogers", "schloss", "soros", "templeton"])
 
     # Size/liquidity gate must suppress a name entirely.
     mets["GOOD"]["market_cap_usd"] = 1_000_000.0
@@ -1035,7 +1035,7 @@ def test_soros_and_rogers_from_source():
     check("Rogers is gated to commodity themes", rog["themes_only"], True)
     check("Rogers is registered in the renderer",
           "rogers" in [k for k, _ in rn.FRAMEWORKS], True)
-    check("renderer now shows 10 frameworks", len(rn.FRAMEWORKS), 10)
+    check("renderer now shows 11 frameworks", len(rn.FRAMEWORKS), 11)
 
     # Capex against depreciation is the company-level supply gauge.
     miner = [mkyear(2025, revenue=1000.0, net_income=120.0, capex=60.0,
@@ -1074,6 +1074,125 @@ def test_soros_and_rogers_from_source():
                .get("ineligible_reason")), False)
 
 
+
+def test_buffett_additions_and_graham():
+    """New value metrics, the two Buffett additions, and the Graham screen."""
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    check("Buffett now has 8 tests", len(th["buffett"]["tests"]), 8)
+    check("Buffett bar is 6 of 8", th["buffett"]["min_tests_passed"], 6)
+    check("Graham has 7 tests", len(th["graham"]["tests"]), 7)
+    check("renderer shows 11 frameworks", len(rn.FRAMEWORKS), 11)
+
+    def mk(**over):
+        base = dict(revenue=1000.0, gross_profit=400.0, operating_income=200.0,
+                    pretax_income=190.0, net_income=140.0, eps_diluted=1.40,
+                    current_assets=600.0, current_liabilities=250.0,
+                    inventory=120.0, dividends_paid=-40.0, total_assets=2000.0,
+                    total_equity=700.0, total_debt=200.0, goodwill=100.0,
+                    intangibles=60.0, cash_and_equivalents=150.0, net_ppe=900.0,
+                    cfo=250.0, capex=50.0, depreciation_amortization=70.0,
+                    shares_diluted=100.0)
+        base.update(over)
+        return base
+
+    ys = [mkyear(2025 - i, **mk(revenue=1000.0 * (1.06 ** (6 - i)),
+                                gross_profit=400.0 * (1.06 ** (6 - i)),
+                                operating_income=200.0 * (1.06 ** (6 - i)),
+                                pretax_income=190.0 * (1.06 ** (6 - i)),
+                                net_income=140.0 * (1.06 ** (6 - i)),
+                                eps_diluted=1.40 * (1.06 ** (6 - i))))
+          for i in range(7)]
+    rec = CompanyRecord(ticker="Q", market="US", years=ys)
+    rec.price, rec.market_cap = 28.0, 2800.0
+    rec.technicals = {"return_12m": 0.10}
+    m = mx.compute_metrics(rec)
+
+    check("current ratio = 600/250", m["current_ratio"], 2.4)
+    check("quick ratio strips inventory", m["quick_ratio"], (600.0 - 120.0) / 250.0)
+    check("payout ratio uses the magnitude of dividends paid",
+          round(m["payout_ratio"], 4), round(40.0 / ys[0].net_income, 4))
+    # Tangible book = 700 - 100 - 60 = 540; pretax at 2025 = 190*1.06^6.
+    check("RONTA is pre-tax over TANGIBLE book, not equity",
+          round(m["return_on_net_tangible_assets"], 5),
+          round(ys[0].pretax_income / 540.0, 5))
+    check("and it is higher than ROE would be, because goodwill is excluded",
+          m["return_on_net_tangible_assets"] > (ys[0].net_income / 700.0), True)
+
+    # The point of RONTA: a serial acquirer with heavy goodwill.
+    acq = [mkyear(2025 - i, **mk(goodwill=900.0, intangibles=100.0,
+                                 total_equity=1400.0)) for i in range(7)]
+    ra = CompanyRecord(ticker="ACQ", market="US", years=acq)
+    ra.price, ra.market_cap = 28.0, 2800.0
+    ma = mx.compute_metrics(ra)
+    check("a goodwill-heavy acquirer still shows a respectable ROE",
+          round(140.0 / 1400.0, 3), 0.1)
+    check("but RONTA on 400 of tangible book is a different number",
+          round(ma["return_on_net_tangible_assets"], 4), round(190.0 / 400.0, 4))
+
+    # Graham number and the P/E x P/B rule.
+    check("Graham number = sqrt(22.5 x EPS x BVPS)",
+          round(m["graham_number"], 4),
+          round((22.5 * ys[0].eps_diluted * (700.0 / 100.0)) ** 0.5, 4))
+    check("P/E x P/B is a product, not a ratio",
+          round(m["pe_times_pb"], 4),
+          round(m["pe_ttm"] * m["price_to_book"], 4))
+
+    # Earnings predictability refuses to score a loss-maker rather than
+    # returning a large number — a CV across a sign change is meaningless.
+    check("EPS CV is computed for a steady grower", m["eps_cv_5y"] > 0, True)
+    lossy = [mkyear(2025, **mk(eps_diluted=1.0)), mkyear(2024, **mk(eps_diluted=-0.5)),
+             mkyear(2023, **mk(eps_diluted=0.8)), mkyear(2022, **mk(eps_diluted=0.9))]
+    rl = CompanyRecord(ticker="L", market="US", years=lossy)
+    rl.price, rl.market_cap = 10.0, 1000.0
+    check("a loss year makes EPS CV unevaluable, not merely large",
+          mx.compute_metrics(rl)["eps_cv_5y"], None)
+
+    # Inflation resilience needs all three legs; break one and it goes to 0.
+    check("steady margin + growing revenue/share + light capex = resilient",
+          m["inflation_resilient"], 1)
+    heavy = [mkyear(2025 - i, **mk(capex=300.0,
+                                   revenue=1000.0 * (1.06 ** (6 - i)),
+                                   operating_income=200.0 * (1.06 ** (6 - i)),
+                                   eps_diluted=1.40 * (1.06 ** (6 - i)),
+                                   net_income=140.0 * (1.06 ** (6 - i))))
+             for i in range(7)]
+    rh = CompanyRecord(ticker="H", market="US", years=heavy)
+    rh.price, rh.market_cap = 28.0, 2800.0
+    mh = mx.compute_metrics(rh)
+    check("heavy capital intensity breaks the resilience flag",
+          mh["inflation_resilient"], 0)
+    check("and that fails the Buffett inflation test",
+          sc.evaluate_test("x", th["buffett"]["tests"]["inflation_resilience"],
+                           mh)["result"], False)
+
+    # Graham: the two-thirds net-net rule is our NCAV/mcap >= 1.5.
+    g = th["graham"]["tests"]
+    check("net-net at 2/3 NCAV means NCAV/mcap >= 1.5",
+          g["net_net_two_thirds"]["threshold"], 1.5)
+    check("a stock at exactly 2/3 of NCAV passes",
+          sc.evaluate_test("x", g["net_net_two_thirds"],
+                           {"ncav_to_market_cap": 1.5})["result"], True)
+    check("one at 90% of NCAV does not",
+          sc.evaluate_test("x", g["net_net_two_thirds"],
+                           {"ncav_to_market_cap": 1.11})["result"], False)
+    check("current ratio 2.4 clears Graham's liquidity bar",
+          sc.evaluate_test("x", g["liquidity"], m)["result"], True)
+    check("PEG limit is the one the guide states", g["peg_fair_or_better"]["threshold"], 1.0)
+    check("P/E x P/B limit is 22.5", g["pe_times_pb_limit"]["threshold"], 22.5)
+
+    # Graham runs on every company, and is registered end to end.
+    out = sc.screen_universe([rec], {"Q": m}, th, {}, cycle=None)
+    fw = out["results"]["Q"]["frameworks"]
+    check("Graham is evaluated in the pipeline", "graham" in fw, True)
+    check("Buffett reports 8 tests in the pipeline", fw["buffett"]["n_total"], 8)
+    check("a fund is ineligible for Graham, not failed",
+          bool(sc.screen_universe(
+              [CompanyRecord(ticker="ETF", market="US", quote_type="ETF",
+                             years=ys)], {"ETF": m}, th, {}, cycle=None
+          )["results"]["ETF"]["frameworks"]["graham"].get("ineligible_reason")),
+          True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -1089,6 +1208,7 @@ if __name__ == "__main__":
     test_debt_cycle()
     test_marks_from_source()
     test_soros_and_rogers_from_source()
+    test_buffett_additions_and_graham()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

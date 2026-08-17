@@ -518,6 +518,11 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
                           universe_cfg, out_dir=out_dir, region=region, run_id=run_id,
                           report_tickers=have_reports)
 
+    # Keep a copy of the published page in the data store, so a deep-dive
+    # deploy can restore it instead of wiping the site root.
+    if lib.snapshot_site(out_dir, data_dir):
+        log.info("Snapshotted the screener page into the data store")
+
     # Republish stored deep dives. Without this a nightly refresh publishes an
     # out/ with no deepdive/ folder and silently deletes every report.
     n_reports = lib.publish(data_dir, out_dir)

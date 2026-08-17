@@ -32,7 +32,7 @@ global:
 # ---------------------------------------------------------------------------
 buffett:
   label: Quality compounders
-  min_tests_passed: 5      # of 6
+  min_tests_passed: 6      # of 8
   tests:
     roe_consistency:
       metric: roe
@@ -61,6 +61,29 @@ buffett:
       threshold: 0.0              # count today <= count 5y ago
       operator: lte
       min_history_years: 6        # needs a year -5 to compare against
+    # Added from the 2010-2021 letters. "the key qualities we seek are...
+    # good returns on the net tangible assets required to operate the
+    # business". Return on NET TANGIBLE assets, not on equity: goodwill is
+    # excluded, so a serial acquirer whose ROE is flattered by what it paid
+    # over book gets caught here and nowhere else in this screen.
+    # He gives NO threshold. The See's figure he quotes — "$4 million pre-tax
+    # while utilizing only $8 million of net tangible assets", i.e. 50% — is a
+    # fact about one company, not a rule. 20% is mine.
+    returns_on_tangible_capital:
+      metric: return_on_net_tangible_assets
+      threshold: 0.20
+      operator: gte
+    # "Ideally, these assets should have the ability in inflationary times to
+    # deliver output that will retain its purchasing-power value while
+    # requiring a minimum of new capital investment." A composite flag: margin
+    # holding, revenue per share growing, capital intensity low. The existing
+    # gross-margin tests check the LEVEL and the STABILITY of margin but not
+    # whether the company can raise prices, and nothing else here looks at how
+    # much capital the growth consumed.
+    inflation_resilience:
+      metric: inflation_resilient       # 1 = all three conditions hold
+      threshold: 1
+      operator: gte
 
 # ---------------------------------------------------------------------------
 munger:
@@ -476,6 +499,69 @@ rogers:
       metric: ev_ebit_vs_market
       threshold: 1.00
       operator: lte
+
+# ---------------------------------------------------------------------------
+# Graham / classic value. Attribution here is deliberately uneven and labelled
+# per test, because the uploaded value guide is much thinner than its title
+# suggests: it defines eight ratios and five valuation methods, and attaches a
+# NUMBER to only three of them.
+#
+# Absent from that guide entirely, despite being standard Graham: the Graham
+# number, the seven defensive-investor criteria, P/E <= 15, P/E x P/B <= 22.5,
+# current ratio >= 2, the 20-year dividend record, Piotroski's real 9-point
+# F-score, Altman Z, Beneish M, the magic formula, owner earnings and EPV.
+# Where a test below uses one of those, it is marked [GRAHAM, NOT IN THE BOOK]
+# so nobody later mistakes it for something the upload supports.
+graham:
+  label: Classic value, balance-sheet arithmetic
+  min_tests_passed: 4      # of 7
+  tests:
+    # [FROM THE BOOK] "Stock Price < 2/3 x (Current Assets - Total Liabilities)
+    # / no. of shares". Our ncav_to_market_cap is the same statement inverted:
+    # >= 1.5 means the price is at or below two-thirds of net current asset
+    # value. Note the definition uses TOTAL liabilities, not current — which is
+    # what this app already computes.
+    net_net_two_thirds:
+      metric: ncav_to_market_cap
+      threshold: 1.5
+      operator: gte
+    # [FROM THE BOOK] "In general, PEG ratio less than 1 is deem as
+    # undervalued." One of only three numbers the guide states.
+    peg_fair_or_better:
+      metric: peg_ratio
+      threshold: 1.0
+      operator: lte
+      min_history_years: 6
+    # [GRAHAM, NOT IN THE BOOK] sqrt(22.5 x EPS x book value per share).
+    graham_number_discount:
+      metric: price_to_graham_number
+      threshold: 1.0
+      operator: lte
+    # [GRAHAM, NOT IN THE BOOK] the 15 x 1.5 rule, stated as a product.
+    pe_times_pb_limit:
+      metric: pe_times_pb
+      threshold: 22.5
+      operator: lte
+    # [PARTLY FROM THE BOOK] The guide defines the current ratio — "simply
+    # Current Assets / Current Liabilities" — but states no threshold. 2.0 is
+    # Graham's, from The Intelligent Investor.
+    liquidity:
+      metric: current_ratio
+      threshold: 2.0
+      operator: gte
+    # [GRAHAM, NOT IN THE BOOK] Earnings stability over the decade.
+    no_loss_years:
+      metric: loss_years_in_10
+      threshold: 0
+      operator: lte
+    # [PARTLY FROM THE BOOK] The guide defines the payout ratio but sets no
+    # level. Requiring merely that one exists is the weakest honest form of
+    # Graham's dividend-record criterion, which needs 20 years of history this
+    # app does not have.
+    pays_a_dividend:
+      metric: payout_ratio
+      threshold: 0.0
+      operator: gt
 
 # ---------------------------------------------------------------------------
 technical:

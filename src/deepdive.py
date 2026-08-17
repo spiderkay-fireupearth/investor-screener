@@ -415,6 +415,16 @@ def analyse(ticker: str, cfg_dir: str = "config", out_dir: str = "out",
     n = lib.publish(data_dir, out_dir)
     log.info("Published %d report(s) to the deep-dive library", n)
 
+    # A deep-dive deploy uploads the whole out/ directory as the Pages site.
+    # Without the screener page in it, the site root 404s the moment this
+    # workflow finishes.
+    if lib.restore_site(data_dir, out_dir):
+        log.info("Restored the screener page into out/ for publishing")
+    else:
+        log.error("NO SCREENER PAGE SNAPSHOT FOUND. Publishing this out/ "
+                  "would leave the site root at 404. Run a full refresh "
+                  "(Refresh US or Refresh Asia) to rebuild and re-snapshot it.")
+
     store.close()
     return {"ticker": ticker, "html": html_path,
             "call": rx["call"], "score": rx["score"]}

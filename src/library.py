@@ -141,3 +141,46 @@ replaces its report. Not investment advice.</div>
 </div></body></html>"""
     with open(os.path.join(dest, "index.html"), "w", encoding="utf-8") as f:
         f.write(doc)
+
+
+# ---------------------------------------------------------------------------
+# Keeping the screener page alive across deep-dive publishes.
+#
+# GitHub Pages replaces the ENTIRE site with whatever artifact is uploaded.
+# The deep-dive workflow builds an out/ containing only the report and its
+# index, so deploying it wipes the screener's index.html and the site root
+# starts returning 404 — the deep dive succeeds and the site disappears.
+#
+# The screener page is therefore snapshotted into the (cached) data store on
+# every refresh, and restored into out/ before any deep-dive deploy. Cheap,
+# and it does not require re-running an 11-minute pipeline to republish a page
+# that has not changed.
+# ---------------------------------------------------------------------------
+
+def snapshot_site(out_dir: str = "out", data_dir: str = "data") -> bool:
+    """Copy the rendered screener page into the data store."""
+    src = os.path.join(out_dir, "index.html")
+    if not os.path.exists(src):
+        return False
+    dest_dir = os.path.join(data_dir, "site")
+    os.makedirs(dest_dir, exist_ok=True)
+    shutil.copy2(src, os.path.join(dest_dir, "index.html"))
+    return True
+
+
+def restore_site(data_dir: str = "data", out_dir: str = "out") -> bool:
+    """Put the last screener page back into out/ if it isn't already there.
+
+    Returns False when there is no snapshot — which is the important case to
+    report loudly, because deploying without one means the site root goes to
+    404 and the only symptom is a page that used to work.
+    """
+    dest = os.path.join(out_dir, "index.html")
+    if os.path.exists(dest):
+        return True
+    src = os.path.join(data_dir, "site", "index.html")
+    if not os.path.exists(src):
+        return False
+    os.makedirs(out_dir, exist_ok=True)
+    shutil.copy2(src, dest)
+    return True
