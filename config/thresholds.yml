@@ -218,38 +218,82 @@ templeton:
 # once per run and shown as a gauge; in Defensive mode `min_tests_passed`
 # rises by one and in Opportunistic mode it falls by one, because the same
 # evidence should demand more of you when everyone is greedy.
+# ---------------------------------------------------------------------------
+# Marks. Rebuilt against his own words in "The Truth about Investing"
+# (Oaktree). Read this first, because it changes how the numbers below should
+# be treated:
+#
+#   "Risk has to be dealt with, but not through quantification... Because that
+#    likelihood can't be quantified, risk is best handled by experienced
+#    experts applying subjective, qualitative judgment."
+#   "Investing can't be reduced to an algorithm or a mechanical process."
+#
+# He gives NO numeric thresholds anywhere in the source material — not one
+# percentage, ratio or valuation level. So every number in this block is my
+# calibration, not his. What IS his is the *choice of test*: each one below is
+# tied to a specific statement, quoted at the test.
+#
+# Two of his principles are deliberately NOT modelled, because faking them
+# would be worse than admitting the gap:
+#   - "second-level thinking" / thinking differently from the consensus. A
+#     screen is by construction first-level. No test here approximates it.
+#   - his margin of safety as a discount to *fair value*. We have no fair-value
+#     estimate; `cheaper_than_its_market` is a relative-value stand-in and is
+#     named as one.
 marks:
   label: Risk-adjusted, cycle-aware
-  min_tests_passed: 4      # of 6, before the cycle adjustment
+  min_tests_passed: 5      # of 8, before the cycle adjustment
   cycle_adjust: true
   tests:
-    # "Being too far ahead of your time is indistinguishable from being wrong"
-    valuation_discipline:
+    # "Superior results don't come from buying high quality assets, but from
+    #  buying assets — regardless of quality — for less than they're worth."
+    buying_things_well:
       metric: ev_to_ebit
       threshold: 15.0
       operator: lte
-    # Marks on risk: the danger is in the balance sheet, not the income statement
-    leverage_safety:
+    # "Sometimes there are plentiful opportunities for unusual return with
+    #  less-than-commensurate risk, and sometimes opportunities are few and
+    #  risky." Cheapness measured against the current opportunity set, not
+    #  against an absolute standard that ignores what else is on offer.
+    cheaper_than_its_market:
+      metric: ev_ebit_vs_market
+      threshold: 0.85            # 15% below its own market's median name
+      operator: lte
+    # "It's not enough to survive 'on average'; you have to survive on the
+    #  worst days." Peak-to-trough, which is what an owner actually sat through.
+    survives_the_worst_day:
+      metric: max_drawdown_5y
+      threshold: 0.60
+      operator: lte
+    # "If we avoid the losers, the winners will take care of themselves."
+    #  Below 1.0 = falls less than its own index when the index falls.
+    avoids_the_losers:
+      metric: downside_capture
+      threshold: 1.00
+      operator: lte
+    # "As risk increases... the worst outcome worsens and ultimately becomes
+    #  negative." A decade of accounts is the record of whether it did.
+    no_history_of_losses:
+      metric: loss_years_in_10
+      threshold: 2
+      operator: lte
+    # Balance-sheet safety. Marks says nothing about leverage anywhere in the
+    # source material — this test is entirely mine, kept because insolvency is
+    # the mechanism by which "the worst outcome becomes negative".
+    balance_sheet_safety:
       metric: net_debt_to_ebitda
       threshold: 3.0
       operator: lte
-    # Earnings that turn into cash
+    # Earnings that turn into cash. Also mine, not his.
     earnings_quality:
       metric: accruals_ratio
       threshold: 0.10
       operator: lte
-    downside_protection:
-      metric: fcf_yield
-      threshold: 0.02
-      operator: gte
-    # "Rule number one: most things will prove to be cyclical"
+    # "Most investors behave pro-cyclically, to their own detriment... It's
+    #  essential to act counter-cyclically." Don't buy on the day it makes a high.
     not_at_the_top:
       metric: pct_below_52w_high
-      threshold: 0.05             # not making new highs on the day you buy
-      operator: gte
-    resilience:
-      metric: roic_5y_avg
-      threshold: 0.08
+      threshold: 0.05
       operator: gte
 
 # ---------------------------------------------------------------------------

@@ -579,18 +579,25 @@ def test_cycle_and_new_frameworks():
 
     # The cycle shift must actually move the requirement.
     marks_cfg = thresholds["marks"]
-    m_ok = {k: 99 for k in ("ev_to_ebit",)}
-    metrics_pass4 = {"ev_to_ebit": 10.0, "net_debt_to_ebitda": 1.0,
-                     "accruals_ratio": 0.01, "fcf_yield": 0.05,
-                     "pct_below_52w_high": 0.02, "roic_5y_avg": 0.04,
+    # Exactly 5 of the 8 pass: clears the core bar, fails the defensive one.
+    # This is the borderline name whose verdict flips with the gauge, which is
+    # the entire point of cycle_adjust.
+    metrics_pass5 = {"ev_to_ebit": 10.0,            # pass
+                     "ev_ebit_vs_market": 0.70,     # pass
+                     "max_drawdown_5y": 0.30,       # pass
+                     "downside_capture": 0.85,      # pass
+                     "loss_years_in_10": 0,         # pass
+                     "net_debt_to_ebitda": 9.0,     # fail
+                     "accruals_ratio": 0.40,        # fail
+                     "pct_below_52w_high": 0.00,    # fail
                      "history_years": 10}
-    base = sc.run_framework("marks", marks_cfg, metrics_pass4, "fail", 0)
-    defn = sc.run_framework("marks", marks_cfg, metrics_pass4, "fail", +1)
-    oppo = sc.run_framework("marks", marks_cfg, metrics_pass4, "fail", -1)
-    check("4 tests pass on this fixture", base["n_passed"], 4)
-    check("neutral bar is 4", base["required"], 4)
-    check("defensive bar rises to 5", defn["required"], 5)
-    check("opportunistic bar falls to 3", oppo["required"], 3)
+    base = sc.run_framework("marks", marks_cfg, metrics_pass5, "fail", 0)
+    defn = sc.run_framework("marks", marks_cfg, metrics_pass5, "fail", +1)
+    oppo = sc.run_framework("marks", marks_cfg, metrics_pass5, "fail", -1)
+    check("5 tests pass on this fixture", base["n_passed"], 5)
+    check("neutral bar is 5 of 8", base["required"], 5)
+    check("defensive bar rises to 6", defn["required"], 6)
+    check("opportunistic bar falls to 4", oppo["required"], 4)
     check("same evidence passes in core", base["passed"], True)
     check("same evidence FAILS when defensive", defn["passed"], False)
     check("and passes when opportunistic", oppo["passed"], True)
@@ -808,6 +815,132 @@ def test_debt_cycle():
     check("absent debt cycle renders nothing", rn._dalio_panel({}), "")
 
 
+
+def test_marks_from_source():
+    """Marks rebuilt from 'The Truth about Investing'. Tests the new metrics
+    and the cycle-adjusted bar, which is what the page actually reports."""
+    import yaml as _y
+    th = _y.safe_load(open("config/thresholds.yml"))
+    cfg = th["marks"]
+    n = len(cfg["tests"])
+    check("Marks now has 8 tests", n, 8)
+    check("base bar is 5 of 8", cfg["min_tests_passed"], 5)
+    check("Marks stays cycle-adjusted", cfg["cycle_adjust"], True)
+    for t in ("cheaper_than_its_market", "survives_the_worst_day",
+              "avoids_the_losers", "no_history_of_losses"):
+        check(f"new test present: {t}", t in cfg["tests"], True)
+
+    # The bar the page reports, at each posture.
+    m_pass = {"ev_to_ebit": 10.0, "ev_ebit_vs_market": 0.70,
+              "max_drawdown_5y": 0.35, "downside_capture": 0.80,
+              "loss_years_in_10": 0, "net_debt_to_ebitda": 1.0,
+              "accruals_ratio": 0.02, "pct_below_52w_high": 0.20}
+    for shift, needed, posture in ((0, 5, "core"), (1, 6, "defensive"),
+                                   (-1, 4, "opportunistic")):
+        r = sc.run_framework("marks", cfg, m_pass, "fail", cycle_shift=shift)
+        check(f"{posture} bar is {needed} of 8", r["required"], needed)
+        check(f"all-pass name passes in {posture}", r["passed"], True)
+
+    # Exactly 5 passing: clears core, fails defensive. This is the case the
+    # user actually sees change when the gauge flips.
+    m5 = dict(m_pass, net_debt_to_ebitda=9.0, accruals_ratio=0.40,
+              pct_below_52w_high=0.00)
+    check("5-of-8 name passes in core",
+          sc.run_framework("marks", cfg, m5, "fail", cycle_shift=0)["passed"],
+          True)
+    check("same name fails once the gauge turns defensive",
+          sc.run_framework("marks", cfg, m5, "fail", cycle_shift=1)["passed"],
+          False)
+
+    # --- downside capture and drawdown, from prices ------------------------
+    idx = pd.Series([100, 90, 99, 89, 98, 88] * 45,
+                    index=pd.bdate_range("2023-01-02", periods=270))
+    # Defensive name: halves every index move, so capture is 0.5 both ways.
+    defensive = pd.Series(
+        [100.0], index=[pd.Timestamp("2023-01-02")])
+    vals = [100.0]
+    ir = idx.pct_change().fillna(0.0)
+    for x in ir.iloc[1:]:
+        vals.append(vals[-1] * (1 + 0.5 * x))
+    defensive = pd.Series(vals, index=idx.index)
+    t = ta.compute(pd.DataFrame({"Close": defensive, "High": defensive,
+                                 "Low": defensive, "Volume": [1e6] * len(idx)},
+                                index=idx.index),
+                   index_df=pd.DataFrame({"Close": idx}, index=idx.index))
+    check("downside capture of a half-beta name is ~0.5",
+          round(t["downside_capture"], 2), 0.5)
+    check("upside capture is measured separately",
+          round(t["upside_capture"], 2), 0.5)
+    check("capture ratio is upside over downside",
+          round(t["capture_ratio"], 2), 1.0)
+
+    # A name that falls harder than the index must FAIL avoids_the_losers.
+    vals = [100.0]
+    for x in ir.iloc[1:]:
+        vals.append(vals[-1] * (1 + (1.8 if x < 0 else 0.9) * x))
+    frag = pd.Series(vals, index=idx.index)
+    t2 = ta.compute(pd.DataFrame({"Close": frag, "High": frag, "Low": frag,
+                                  "Volume": [1e6] * len(idx)}, index=idx.index),
+                    index_df=pd.DataFrame({"Close": idx}, index=idx.index))
+    check("a name that falls harder captures more downside",
+          t2["downside_capture"] > 1.5, True)
+    check("and it fails the avoids_the_losers test",
+          sc.evaluate_test("avoids_the_losers",
+                           cfg["tests"]["avoids_the_losers"],
+                           {"downside_capture": t2["downside_capture"]}
+                           )["result"], False)
+
+    # Max drawdown is peak-to-trough, not standard deviation.
+    crash = pd.Series(list(range(100, 200)) + list(range(200, 100, -1))
+                      + list(range(100, 160)),
+                      index=pd.bdate_range("2023-01-02", periods=260),
+                      dtype=float)
+    t3 = ta.compute(pd.DataFrame({"Close": crash, "High": crash, "Low": crash,
+                                  "Volume": [1e6] * 260}, index=crash.index))
+    check("max drawdown is peak-to-trough and reported positive",
+          round(t3["max_drawdown_5y"], 3), 0.5)
+
+    # Too few down days must yield None, not a two-observation ratio.
+    up = pd.Series([100.0 * (1.001 ** i) for i in range(270)], index=idx.index)
+    t4 = ta.compute(pd.DataFrame({"Close": up, "High": up, "Low": up,
+                                  "Volume": [1e6] * 270}, index=idx.index),
+                    index_df=pd.DataFrame({"Close": up}, index=idx.index))
+    check("no down sample -> capture is None, not a made-up number",
+          t4["downside_capture"], None)
+
+    # --- relative value is scoped per market ------------------------------
+    recs, mt = [], {}
+    for i in range(25):
+        recs.append(CompanyRecord(ticker=f"U{i}", market="US"))
+        mt[f"U{i}"] = {"ev_to_ebit": 20.0 + i}          # median 32
+    for i in range(25):
+        recs.append(CompanyRecord(ticker=f"T{i}", market="TH"))
+        mt[f"T{i}"] = {"ev_to_ebit": 5.0 + i}           # median 17
+    sc.add_relative_value(recs, mt)
+    check("US median is its own, not the world's",
+          mt["U0"]["market_median_ev_ebit"], 32.0)
+    check("Thai median is separate", mt["T0"]["market_median_ev_ebit"], 17.0)
+    # The whole point: a US name at 20 is cheap for the US even though a Thai
+    # name at 20 is expensive for Thailand. A global median would invert this.
+    check("cheapest US name reads cheap for the US",
+          round(mt["U0"]["ev_ebit_vs_market"], 3), round(20.0 / 32.0, 3))
+    check("a Thai name at the same multiple reads expensive for Thailand",
+          mt["T15"]["ev_ebit_vs_market"] > 1.0, True)
+
+    # A thin market must get no ratio rather than a median off three names.
+    thin = [CompanyRecord(ticker="X1", market="XX")]
+    mtx = {"X1": {"ev_to_ebit": 9.0}}
+    sc.add_relative_value(thin, mtx)
+    check("a market too thin to have a median gets no ratio",
+          mtx["X1"]["ev_ebit_vs_market"], None)
+    # Negative EV/EBIT means negative EBIT — must not enter the median.
+    neg = [CompanyRecord(ticker=f"N{i}", market="US") for i in range(25)]
+    mtn = {f"N{i}": {"ev_to_ebit": (-50.0 if i < 5 else 10.0)} for i in range(25)}
+    sc.add_relative_value(neg, mtn)
+    check("loss makers are excluded from the median",
+          mtn["N10"]["market_median_ev_ebit"], 10.0)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -821,6 +954,7 @@ if __name__ == "__main__":
     test_cycle_and_new_frameworks()
     test_macro_carry()
     test_debt_cycle()
+    test_marks_from_source()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

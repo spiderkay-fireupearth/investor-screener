@@ -291,6 +291,49 @@ def macro_gate_open(macro: Dict[str, Any], cfg: Dict[str, Any]) -> Tuple[bool, s
 
 
 # ---------------------------------------------------------------------------
+def add_relative_value(records, metrics_by_ticker: Dict[str, Dict[str, Any]],
+                       min_names: int = 20) -> None:
+    """Price each name against its own market's median, in place.
+
+    Marks: *"Superior results don't come from buying high quality assets, but
+    from buying assets — regardless of quality — for less than they're worth."*
+    A fixed EV/EBIT cutoff answers "is this cheap in the abstract". It does not
+    answer "is this cheap given what is on offer right now", which is the
+    question that actually moves with the cycle — his "sometimes there are
+    plentiful opportunities... and sometimes opportunities are few".
+
+    Scoped per market, because a Thai median and a Nasdaq median are not the
+    same yardstick, and a global median would simply rank every US name as
+    expensive and every Indonesian name as cheap. A market with fewer than
+    `min_names` priced constituents gets no ratio at all rather than a median
+    computed off a handful of names.
+    """
+    by_market: Dict[str, List[float]] = {}
+    for rec in records or []:
+        m = metrics_by_ticker.get(rec.ticker) or {}
+        v = m.get("ev_to_ebit")
+        # Negative EV/EBIT means negative EBIT — undefined as "cheap", and
+        # including it would drag the median toward meaninglessness.
+        if _is_num(v) and v > 0:
+            by_market.setdefault(rec.market, []).append(float(v))
+
+    medians: Dict[str, float] = {}
+    for mkt, vals in by_market.items():
+        if len(vals) >= min_names:
+            medians[mkt] = float(sorted(vals)[len(vals) // 2])
+
+    for rec in records or []:
+        m = metrics_by_ticker.get(rec.ticker)
+        if m is None:
+            continue
+        med = medians.get(rec.market)
+        v = m.get("ev_to_ebit")
+        m["market_median_ev_ebit"] = med
+        # Below 1.0 = cheaper than the median name in its own market.
+        m["ev_ebit_vs_market"] = (
+            float(v) / med if (_is_num(v) and v > 0 and med) else None)
+
+
 def screen_universe(records: List[Any],
                     metrics_by_ticker: Dict[str, Dict[str, Any]],
                     thresholds: Dict[str, Any],
@@ -307,6 +350,8 @@ def screen_universe(records: List[Any],
 
     greenblatt = run_greenblatt(records, metrics_by_ticker,
                                 thresholds.get("greenblatt", {}), excluded)
+
+    add_relative_value(records, metrics_by_ticker)
 
     framework_names = ["buffett", "munger", "schloss", "klarman", "lynch",
                        "templeton", "marks", "soros"]

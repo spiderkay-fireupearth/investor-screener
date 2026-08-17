@@ -190,6 +190,44 @@ def compute(df: pd.DataFrame,
                 i_ret = joined["index"].iloc[-1] / joined["index"].iloc[-1 - days] - 1
                 out[f"rs_vs_market_index_{label}"] = float(s_ret - i_ret)
 
+    # ---- Marks: survival, and asymmetry ----------------------------------
+    # "It's not enough to survive 'on average'; you have to survive on the
+    # worst days." Peak-to-trough decline over five years is the closest
+    # observable to that — it is what an owner actually had to sit through,
+    # not a standard deviation.
+    out["max_drawdown_5y"] = None
+    win = close.iloc[-1260:] if len(close) > 1260 else close
+    if len(win) >= 250:
+        dd = win / win.cummax() - 1.0
+        out["max_drawdown_5y"] = float(-dd.min())      # reported positive
+
+    # "If we avoid the losers, the winners will take care of themselves."
+    # Downside capture: how much of the index's bad days this name takes.
+    # Below 1.0 means it falls less than the market when the market falls.
+    # Deliberately measured on DOWN periods only — an all-days beta blends
+    # the upside in and hides exactly the asymmetry Marks cares about.
+    out["downside_capture"] = None
+    out["upside_capture"] = None
+    out["capture_ratio"] = None
+    if index_df is not None and not index_df.empty:
+        j = pd.concat([close.rename("s"), index_df["Close"].astype(float)
+                       .rename("i")], axis=1, join="inner").dropna()
+        if len(j) >= 260:
+            r = j.pct_change().dropna().iloc[-756:]
+            down, up = r[r["i"] < 0], r[r["i"] > 0]
+            # Need a real sample of down periods; a handful of days would make
+            # the ratio an artefact of two or three sessions.
+            if len(down) >= 40 and down["i"].mean() != 0:
+                out["downside_capture"] = float(
+                    down["s"].mean() / down["i"].mean())
+            if len(up) >= 40 and up["i"].mean() != 0:
+                out["upside_capture"] = float(up["s"].mean() / up["i"].mean())
+        if out["downside_capture"] and out["upside_capture"]:
+            # The number Marks's risk/return diagram is really about: are you
+            # being paid more upside than the downside you accept?
+            out["capture_ratio"] = (out["upside_capture"]
+                                    / out["downside_capture"])
+
     out["last_bar_date"] = df.index[-1].date().isoformat()
     out["insufficient_history"] = False
     return out
