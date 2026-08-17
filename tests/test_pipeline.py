@@ -1227,6 +1227,36 @@ def test_commodities_cnav_and_gauge():
     check("ETF 12m return computed", round(row["etf_12m"], 2), 0.05)
     check("tracking gap is ETF minus commodity", round(row["tracking_gap_12m"], 2), -0.25)
     check("severe drag is called severe", "severe" in row["tracking_reading"], True)
+
+    # Backwardation: the case the module originally could not express. A
+    # rolling fund in a backwardated market BEATS the front-month price change
+    # because every roll buys a cheaper deferred contract. The first version
+    # graded that as "kept up with the commodity", which understated the most
+    # informative reading the column has.
+    back = {"kind": "futures", "future_12m": 0.289, "future_vs_200dma": 0.07,
+            "future_off_52w_high": 0.05, "tracking_gap_12m": 0.432}
+    a = cm.assess(back)
+    check("a large positive gap is graded, not lumped in with 'clean'",
+          a["instrument_grade"], "roll paying")
+    check("and it is explained as backwardation",
+          "backwardated" in a["instrument_note"], True)
+    mild = dict(back, tracking_gap_12m=0.05)
+    check("a small positive gap reads roll positive",
+          cm.assess(mild)["instrument_grade"], "roll positive")
+    flat = dict(back, tracking_gap_12m=0.00)
+    check("a flat gap is clean", cm.assess(flat)["instrument_grade"], "clean")
+
+    # A commodity up on the year but under its 200-day must say so, or a
+    # +33.8% row labelled "no clear trend" reads as a bug.
+    gold = {"kind": "physical", "future_12m": 0.338, "future_vs_200dma": -0.02,
+            "future_off_52w_high": 0.20, "tracking_gap_12m": -0.022}
+    check("a strong year below the 200-day is explained, not just 'no trend'",
+          "below its 200-day" in cm.assess(gold)["commodity_call"], True)
+    check("the panel explains both directions of the gap",
+          "backwardated" in rn._commodity_panel(
+              {"rows": [dict(gold, name="Gold", etf="GLD",
+                             assessment=cm.assess(gold))],
+               "missing": [], "caveat": "x"}), True)
     check("absent symbols are named, not blanked silently",
           len(board["missing"]) > 0, True)
     gold = next(r for r in board["rows"] if r["etf"] == "GLD")

@@ -646,9 +646,13 @@ def _commodity_panel(cb: Dict[str, Any]) -> str:
         '<div class="dnote"><b>Reading the last column.</b> It is the ETF\'s '
         'twelve-month return minus the commodity\'s. It already contains roll '
         'cost, fees, tracking error and storage, so it is what you got versus '
-        'what the headline price did. A large negative number on a '
-        '<b>futures</b> fund is contango, and it is the single best argument '
-        'against holding one for the long term.</div>'
+        'what the headline price did. A <b>negative</b> number on a futures '
+        'fund is contango &mdash; the roll sells cheap and buys dear &mdash; '
+        'and it is the best argument against holding one for the long term. A '
+        '<b>positive</b> number is the mirror case: the curve is backwardated, '
+        'each roll buys a cheaper deferred contract, and the fund legitimately '
+        'beats the front-month price change. Neither state is permanent; the '
+        'curve flips, and the fund\'s result flips with it.</div>'
         + foot + '</div></details>')
 
 

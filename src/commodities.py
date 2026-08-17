@@ -56,11 +56,12 @@ log = logging.getLogger(__name__)
 BOARD: List[Dict[str, str]] = [
     # --- energy
     {"name": "WTI crude",   "future": "CL=F", "etf": "USO",  "kind": "futures",
-     "note": "front-month WTI, rolled monthly — the classic contango casualty"},
+     "note": "front-month WTI, rolled monthly — whether that costs or pays depends entirely on the curve, so read the last column "
+             "rather than assuming"},
     {"name": "Brent crude",  "future": "BZ=F", "etf": "BNO",  "kind": "futures"},
     {"name": "Natural gas",  "future": "NG=F", "etf": "UNG",  "kind": "futures",
-     "note": "steepest contango of anything on this board; historically the "
-             "worst tracking of any commodity fund"},
+     "note": "historically the worst-tracking commodity fund on this board, "
+             "but check the measured gap before assuming it still is"},
     # --- industrial metals
     {"name": "Copper",       "future": "HG=F", "etf": "CPER", "kind": "futures"},
     # --- precious metals
@@ -170,6 +171,10 @@ def assess(row: Dict[str, Any]) -> Dict[str, Any]:
                                      else "uptrend")
         elif not up and weak:
             out["commodity_call"] = "downtrend"
+        elif up and not strong:
+            out["commodity_call"] = "above its 200-day, but going nowhere"
+        elif strong and not up:
+            out["commodity_call"] = "up on the year but below its 200-day"
         else:
             out["commodity_call"] = "no clear trend"
     out["measured_on"] = ("the futures price" if price_role == "future"
@@ -187,9 +192,18 @@ def assess(row: Dict[str, Any]) -> Dict[str, Any]:
         out["instrument_grade"] = "unmeasured"
         out["instrument_note"] = ("no futures line to compare against, so the "
                                   "drag on this vehicle is not measurable here")
+    elif gap > 0.10:
+        out["instrument_grade"] = "roll paying"
+        out["instrument_note"] = ("the curve is backwardated and the fund is "
+                                  "earning on every roll — this is contango in "
+                                  "reverse, and it will stop the moment the "
+                                  "curve flattens")
+    elif gap > 0.02:
+        out["instrument_grade"] = "roll positive"
+        out["instrument_note"] = "mild backwardation working in your favour"
     elif gap > -0.02:
         out["instrument_grade"] = "clean"
-        out["instrument_note"] = "kept up with the commodity over the year"
+        out["instrument_note"] = "tracked the commodity closely over the year"
     elif gap > -0.06:
         out["instrument_grade"] = "mild drag"
         out["instrument_note"] = "fees and roll cost a little"
@@ -256,8 +270,20 @@ def build(yahoo, store) -> Dict[str, Any]:
         if f12 is not None and e12 is not None:
             row["tracking_gap_12m"] = e12 - f12
             g = row["tracking_gap_12m"]
+            # This module was written expecting contango and only graded
+            # NEGATIVE gaps, which was a one-sided mistake. A rolling fund in a
+            # BACKWARDATED market earns on every roll — it sells the expensive
+            # expiring contract and buys a cheaper deferred one — so it can
+            # legitimately beat the front-month price change by a wide margin.
+            # Reporting that as "kept up with the commodity" understated the
+            # most interesting thing the column can show.
             row["tracking_reading"] = (
-                "the fund kept up with the commodity" if g > -0.02 else
+                "the roll is PAYING: the curve is backwardated, so each roll "
+                "buys a cheaper deferred contract and the fund beats the "
+                "front-month price change" if g > 0.10 else
+                "the roll is mildly positive — backwardation, not drag"
+                if g > 0.02 else
+                "the fund tracked the commodity closely" if g > -0.02 else
                 "mild drag — fees and roll" if g > -0.06 else
                 "heavy drag: the fund gave back a material part of the move, "
                 "which is what contango does to a rolling fund" if g > -0.15 else
