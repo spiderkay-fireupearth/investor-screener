@@ -13,6 +13,7 @@ from __future__ import annotations
 import sys
 import os
 import math
+import re
 import numpy as np
 import pandas as pd
 
@@ -1390,6 +1391,87 @@ def test_reflexive_stages():
     check("and the filter is wired to the late flag", "fRfx && !r.rfx_late" in t, True)
 
 
+
+def test_ownership_and_government_theme():
+    """13F parsing, Form 4 transaction codes, and the hand-kept stake list."""
+    from src import ownership as ow
+
+    # ---- 13F INFOTABLE aggregation --------------------------------------
+    tsv = "\t".join(["ACCESSION_NUMBER", "CUSIP", "VALUE", "SSHPRNAMT"]) + "\n"
+    rows = [
+        ("0001-A", "037833100", "1000", "500"),   # Apple, manager A
+        ("0001-A", "037833100", "2000", "700"),   # same manager, 2nd account
+        ("0002-B", "037833100", "3000", "900"),   # manager B
+        ("0003-C", "594918104", "5000", "100"),   # Microsoft, manager C
+        ("0004-D", "BADCUSIP", "9999", "999"),    # malformed, must be dropped
+    ]
+    tsv += "\n".join("\t".join(r) for r in rows)
+    agg = ow.parse_infotable(tsv)
+    check("malformed CUSIPs are dropped", "BADCUSIP" in agg, False)
+    # THE regression that matters: a manager reporting one holding across two
+    # accounts is ONE holder, not two. Counting rows would inflate every
+    # widely-held name and make the change-on-quarter number meaningless.
+    check("holders counts distinct filers, not rows",
+          agg["037833100"]["holders"], 2)
+    check("values still sum across all rows", agg["037833100"]["value"], 6000.0)
+    check("shares sum across all rows", agg["037833100"]["shares"], 2100.0)
+    check("a single-filer name reads 1 holder", agg["594918104"]["holders"], 1)
+
+    # ---- Form 4: only an open-market purchase is a purchase ---------------
+    def f4(code, shares="1000", price="50"):
+        return (f"<transactionCode>{code}</transactionCode>"
+                f"<transactionShares><value>{shares}</value></transactionShares>"
+                f"<transactionPricePerShare><value>{price}</value>"
+                f"</transactionPricePerShare>")
+
+    check("code P is a purchase", ow.parse_form4(f4("P"))["buys"], 1)
+    check("and its dollar value is captured",
+          ow.parse_form4(f4("P"))["buy_value"], 50000.0)
+    check("code S is a sale", ow.parse_form4(f4("S"))["sells"], 1)
+    # The distinction the whole module rests on. A stock AWARD is not a
+    # director buying with their own money, and counting it as one would turn
+    # routine pay into a bullish signal.
+    check("a stock award is NOT a purchase", ow.parse_form4(f4("A"))["buys"], 0)
+    check("an option exercise is NOT a purchase", ow.parse_form4(f4("M"))["buys"], 0)
+    check("a gift is NOT a purchase", ow.parse_form4(f4("G"))["buys"], 0)
+    check("awards are counted separately as other",
+          ow.parse_form4(f4("A"))["other"], 1)
+    mixed = f4("P", "100", "10") + f4("A", "500", "10") + f4("S", "50", "20")
+    r = ow.parse_form4(mixed)
+    check("a mixed filing splits correctly",
+          (r["buys"], r["sells"], r["other"]), (1, 1, 1))
+    check("only the purchase leg is valued", r["buy_value"], 1000.0)
+    check("an empty document yields zeros, not an error",
+          ow.parse_form4("")["buys"], 0)
+
+    # ---- the quarter slugs must respect the 45-day filing lag ------------
+    slugs = ow._quarter_slugs(2)
+    check("two quarters requested, two returned", len(slugs), 2)
+    check("slugs are shaped like 2026q1", bool(re.match(r"^\d{4}q[1-4]$", slugs[0])), True)
+
+    # ---- graceful failure ------------------------------------------------
+    class Dead:
+        def get(self, *a, **k):
+            raise RuntimeError("no network")
+    out = ow.institutional(Dead(), ["AAPL"])
+    check("an unreachable SEC disables the feed rather than crashing",
+          out["enabled"], False)
+    check("and it says which quarters it tried", "tried" in out["reason"], True)
+    check("no CIK map disables insiders cleanly",
+          ow.insider_activity(Dead(), {})["enabled"], False)
+
+    # ---- the government-stake theme -------------------------------------
+    uni = yaml.safe_load(open("config/universe.yml"))
+    gov = uni["themes"]["US government stake"]
+    check("government stake theme exists", len(gov["tickers"]) >= 10, True)
+    check("Intel is in it", "INTC" in gov["tickers"], True)
+    check("MP Materials is in it", "MP" in gov["tickers"], True)
+    # A hand-kept list with no upstream feed MUST carry a date, or it goes
+    # stale silently and nothing anywhere will say so.
+    check("it is dated", bool(gov.get("as_of")), True)
+    check("and it names its source", "no official register" in gov["source"], True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -1408,6 +1490,7 @@ if __name__ == "__main__":
     test_buffett_additions_and_graham()
     test_commodities_cnav_and_gauge()
     test_reflexive_stages()
+    test_ownership_and_government_theme()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

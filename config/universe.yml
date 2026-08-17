@@ -546,6 +546,36 @@ macro_series:
 #
 # A ticker may appear in several themes; tags are a list, not a single value.
 themes:
+  # -------------------------------------------------------------------------
+  # US government equity stakes. HAND-MAINTAINED — there is no machine-readable
+  # source, because there is no consolidated federal register. The stakes sit
+  # across at least four agencies (Commerce, Defense, the Development Finance
+  # Corporation and Energy), and the two most careful public trackers disagree
+  # on both the count and the total: CFR says 37 deals worth $27.6bn, Fortune
+  # says $26.7bn with a different split by agency. That disagreement is itself
+  # the evidence that no register exists.
+  #
+  # Only LISTED companies can appear here. Several stakes are in private firms
+  # (xLight, Vulcan Elements, Westinghouse) which file nothing and cannot be
+  # screened at all.
+  #
+  # as_of: 2026-08-17 — RE-CHECK THIS LIST BEFORE RELYING ON IT. It will go
+  # stale silently, because nothing upstream will tell you when it does.
+  US government stake:
+    as_of: "2026-08-17"
+    source: "CFR deal tracker plus press reporting; no official register exists"
+    tickers:
+      - INTC       # Commerce, 9.9% plus warrants, Aug 2025
+      - MP         # Defense, 15%, Jul 2025
+      - USAR       # 8-16% including warrants, Jan 2026
+      - LAC        # Energy, 5% plus a 5% JV stake
+      - TMQ        # 10%
+      - LHX        # Pentagon, converts at a subsidiary IPO, Dec 2025
+      - IBM        # Commerce / CHIPS, May 2026
+      - GFS        # Commerce / CHIPS, May 2026
+      - QBTS       # Commerce / CHIPS, May 2026
+      - RGTI       # Commerce / CHIPS, May 2026
+      - CCJ        # participation interest, ~20% of distributions, Oct 2025
   "AI infrastructure":
     description: >
       The supply chain powering AI build-out — silicon, interconnect, servers,
