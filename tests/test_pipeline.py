@@ -359,8 +359,98 @@ def test_currency_reconciliation():
           len(mx.sanity_check({"pe_ttm": 18.0, "price_to_book": 2.1})), 0)
 
 
+def test_history_depth_parity():
+    print("\n[8] Data depth must not decide the verdict")
+    cfg_dir = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "config")
+    with open(os.path.join(cfg_dir, "thresholds.yml")) as f:
+        thresholds = yaml.safe_load(f)
+
+    def compounder(ticker, n_years, source):
+        """Identical business, differing only in how many years the feed returns."""
+        ys = []
+        for i in range(n_years):
+            s = 1.0 / (1.08 ** i)
+            ys.append(mkyear(
+                2025 - i, revenue=1000.0 * s, gross_profit=400.0 * s,
+                operating_income=200.0 * s, net_income=140.0 * s,
+                eps_diluted=1.40 * s, total_assets=2000.0 * s,
+                total_liabilities=800.0 * s, current_assets=600.0 * s,
+                current_liabilities=300.0 * s, cash_and_equivalents=150.0 * s,
+                short_term_investments=50.0 * s, total_debt=300.0 * s,
+                total_equity=700.0 * s, goodwill=100.0 * s, intangibles=60.0 * s,
+                inventory=120.0 * s, net_ppe=900.0 * s, cfo=250.0 * s,
+                capex=80.0 * s, depreciation_amortization=70.0 * s,
+                shares_diluted=100.0 * (1 + 0.01 * i)))
+            ys[-1].source = source
+        r = CompanyRecord(ticker=ticker, market="US" if source == "edgar" else "HK",
+                          sector="Technology", name=ticker, currency="USD", years=ys)
+        r.price, r.market_cap = 28.0, 2800.0
+        r.technicals = {"return_12m": 0.10, "price_above_sma200": 1,
+                        "sma50_above_sma200": 1, "rsi_14": 55.0,
+                        "macd_histogram": 0.5, "vol20_over_vol50": 1.1,
+                        "atr_pct_percentile": 0.5, "rs_vs_market_index_6m": 0.05,
+                        "pct_above_5y_low": 0.20, "median_turnover_usd": 5e7}
+        return r
+
+    deep = compounder("USDEEP", 11, "edgar")     # EDGAR: 10+ years
+    shallow = compounder("HKSHAL", 4, "yahoo")   # Yahoo: ~4 years
+    recs = [deep, shallow]
+    mets = {}
+    for r in recs:
+        m = mx.compute_metrics(r)
+        m["market_cap_usd"] = 2_000_000_000.0
+        mets[r.ticker] = m
+
+    check("deep feed reports 11 years", mets["USDEEP"]["history_years"], 11)
+    check("shallow feed reports 4 years", mets["HKSHAL"]["history_years"], 4)
+
+    out = sc.screen_universe(recs, mets, thresholds,
+                             {"_enabled": True, "hy_credit_spread": 3.0,
+                              "yield_curve_10y2y": 0.5})["results"]
+
+    d = out["USDEEP"]["frameworks"]
+    s = out["HKSHAL"]["frameworks"]
+
+    # The whole point: same business, same verdict, regardless of feed depth.
+    check("Buffett passes on the deep feed", d["buffett"]["passed"], True)
+    check("Buffett REACHABLE on the shallow feed", s["buffett"]["passed"], True)
+    check("Lynch reachable on the shallow feed",
+          s["lynch"]["passed"] is not None, True)
+
+    # The shallow name must be marked as history-limited, not silently equal.
+    check("shallow Buffett flagged limited_history",
+          s["buffett"]["limited_history"], True)
+    check("deep Buffett not flagged", d["buffett"].get("limited_history"), False)
+    check("shallow share_count test is insufficient, not failed",
+          next(t["insufficient"] for t in s["buffett"]["tests"]
+               if t["name"] == "share_count_discipline"), True)
+    check("insufficient tests leave the denominator",
+          s["buffett"]["effective_total"] < s["buffett"]["n_total"], True)
+    check("bar scales down with the denominator",
+          s["buffett"]["required"] <= d["buffett"]["required"], True)
+
+    # An 8-of-10 rule must become 4-of-4, not stay unreachable at 8.
+    roe = next(t for t in s["buffett"]["tests"] if t["name"] == "roe_consistency")
+    check("8-of-10 rescaled for a 4-year window", roe["threshold"], 3)
+    check("rescaled ROE test actually passes", roe["result"], True)
+
+    # Missing DATA must still count against a company — only missing YEARS is forgiven.
+    broken = compounder("BROKEN", 11, "edgar")
+    for y in broken.years:
+        y.total_debt = None
+        y.gross_profit = None
+    mb = mx.compute_metrics(broken)
+    mb["market_cap_usd"] = 2_000_000_000.0
+    ob = sc.screen_universe([broken], {"BROKEN": mb}, thresholds,
+                            {"_enabled": True, "hy_credit_spread": 3.0,
+                             "yield_curve_10y2y": 0.5})["results"]
+    check("missing data still fails, unlike missing years",
+          ob["BROKEN"]["frameworks"]["buffett"]["passed"], False)
+
+
 def test_end_to_end_with_config():
-    print("\n[8] End-to-end against the real config")
+    print("\n[9] End-to-end against the real config")
     cfg_dir = os.path.join(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))), "config")
     with open(os.path.join(cfg_dir, "thresholds.yml")) as f:
@@ -423,7 +513,8 @@ def test_end_to_end_with_config():
     check("GOOD is surfaced", res["GOOD"]["surfaced"], True)
     check("every framework evaluated",
           sorted(res["GOOD"]["frameworks"].keys()),
-          ["buffett", "greenblatt", "klarman", "lynch", "munger", "schloss", "soros"])
+          ["buffett", "greenblatt", "klarman", "lynch", "marks", "munger",
+           "schloss", "soros", "templeton"])
 
     # Size/liquidity gate must suppress a name entirely.
     mets["GOOD"]["market_cap_usd"] = 1_000_000.0
@@ -456,6 +547,246 @@ def test_end_to_end_with_config():
           os.path.exists(os.path.join(outdir, "results.json")), True)
 
 
+def test_cycle_and_new_frameworks():
+    print("\n[10] Market cycle gauge, Templeton and Marks")
+    from src import cycle as cy
+    cfg_dir = os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "config")
+    with open(os.path.join(cfg_dir, "thresholds.yml")) as f:
+        thresholds = yaml.safe_load(f)
+    cyc_cfg = thresholds["market_cycle"]
+
+    idx = pd.bdate_range("2023-01-02", periods=400)
+    up = pd.DataFrame({"Close": pd.Series(np.linspace(100, 200, 400), index=idx)})
+    down = pd.DataFrame({"Close": pd.Series(np.linspace(200, 100, 400), index=idx)})
+
+    # Euphoria: hot index, broad participation, cheap insurance.
+    hot = cy.assess(up, {"pct_above_200dma": 0.85}, 12.0, cyc_cfg)
+    check("euphoria -> defensive", hot["mode"], "defensive")
+    check("defensive raises the Marks bar", hot["threshold_shift"], 1)
+
+    # Panic: washed-out index, narrow participation, expensive insurance.
+    cold = cy.assess(down, {"pct_above_200dma": 0.20}, 38.0, cyc_cfg)
+    check("panic -> opportunistic", cold["mode"], "opportunistic")
+    check("opportunistic lowers the bar", cold["threshold_shift"], -1)
+
+    # Mixed signals must not produce a confident call in either direction.
+    mixed = cy.assess(up, {"pct_above_200dma": 0.50}, 20.0, cyc_cfg)
+    check("mixed evidence -> core", mixed["mode"], "core")
+    check("core leaves the bar alone", mixed["threshold_shift"], 0)
+    check("no signals at all -> core, not a guess",
+          cy.assess(None, None, None, cyc_cfg)["mode"], "core")
+
+    # The cycle shift must actually move the requirement.
+    marks_cfg = thresholds["marks"]
+    m_ok = {k: 99 for k in ("ev_to_ebit",)}
+    metrics_pass4 = {"ev_to_ebit": 10.0, "net_debt_to_ebitda": 1.0,
+                     "accruals_ratio": 0.01, "fcf_yield": 0.05,
+                     "pct_below_52w_high": 0.02, "roic_5y_avg": 0.04,
+                     "history_years": 10}
+    base = sc.run_framework("marks", marks_cfg, metrics_pass4, "fail", 0)
+    defn = sc.run_framework("marks", marks_cfg, metrics_pass4, "fail", +1)
+    oppo = sc.run_framework("marks", marks_cfg, metrics_pass4, "fail", -1)
+    check("4 tests pass on this fixture", base["n_passed"], 4)
+    check("neutral bar is 4", base["required"], 4)
+    check("defensive bar rises to 5", defn["required"], 5)
+    check("opportunistic bar falls to 3", oppo["required"], 3)
+    check("same evidence passes in core", base["passed"], True)
+    check("same evidence FAILS when defensive", defn["passed"], False)
+    check("and passes when opportunistic", oppo["passed"], True)
+
+    # Templeton: a cheap, beaten-down, solvent business should clear it.
+    bargain = {"pe_ttm": 9.0, "price_to_book": 0.9, "price_to_cash_flow": 6.0,
+               "pct_below_52w_high": 0.42, "loss_years_in_10": 1,
+               "debt_to_equity": 0.3, "history_years": 10}
+    t = sc.run_framework("templeton", thresholds["templeton"], bargain, "fail")
+    check("classic bargain clears Templeton", t["passed"], True)
+    # A quality name at a full price is a wish-list item, not a buy.
+    dear = {"pe_ttm": 34.0, "price_to_book": 12.0, "price_to_cash_flow": 28.0,
+            "pct_below_52w_high": 0.01, "loss_years_in_10": 0,
+            "debt_to_equity": 0.2, "history_years": 10}
+    t2 = sc.run_framework("templeton", thresholds["templeton"], dear, "fail")
+    check("quality at a full price fails Templeton", t2["passed"], False)
+    check("but it is a near miss, not a rejection", t2["n_passed"], 2)
+
+
+def test_macro_carry():
+    print("\n[11] Carry-trade analytics")
+    from src import macro as mc
+    idx = pd.bdate_range("2023-01-02", periods=600)
+    rng2 = np.random.default_rng(11)
+
+    # Calm yen: low vol, wide differential -> carry well paid.
+    calm = pd.DataFrame({"Close": pd.Series(
+        150 + np.cumsum(rng2.normal(0, 0.15, 600)), index=idx)})
+    r = mc.carry_analysis({"JPY": calm},
+                          {"us_policy": 4.5, "jp_policy": 0.5,
+                           "us_10y": 4.2, "jp_10y": 1.1})
+    check("policy differential", round(r["policy_differential"], 2), 4.0)
+    check("long differential", round(r["long_differential"], 2), 3.1)
+    check("carry/vol computed", r["carry_to_vol"] is not None, True)
+    check("well-paid carry reads as attractive",
+          "still attractive" in r["carry_reading"], True)
+
+    # Stressed yen: the shock must be RECENT for 30-day vol to exceed 90-day.
+    # A uniformly volatile tail lifts both windows equally and the ratio stays
+    # flat — which is exactly the distinction the indicator is built to make.
+    stress = list(150 + np.cumsum(rng2.normal(0, 0.10, 570)))
+    stress += list(stress[-1] + np.cumsum(rng2.normal(-0.55, 1.6, 30)))
+    stressed = pd.DataFrame({"Close": pd.Series(stress, index=idx)})
+    r2 = mc.carry_analysis({"JPY": stressed},
+                           {"us_policy": 3.0, "jp_policy": 1.5})
+    check("vol ratio rises under stress", r2["jpy_vol_ratio"] > 1.15, True)
+    check("yen strengthened over 3m", r2["usdjpy_3m"] < 0, True)
+    check("unwind pressure detected", r2["unwind_pressure"], True)
+    check("thin carry flagged", r2["carry_to_vol"] < r["carry_to_vol"], True)
+
+    # HKD peg: position within the band, not the raw level.
+    for spot, expect in ((7.849, "weak end"), (7.751, "strong end"), (7.80, "Mid-band")):
+        hk = pd.DataFrame({"Close": pd.Series([spot] * 30,
+                          index=pd.bdate_range("2026-01-01", periods=30))})
+        p = mc.peg_pressure({"HKD": hk})
+        check(f"HKD at {spot} -> {expect}", expect.lower() in p["reading"].lower(), True)
+    check("band position 0..1", round(mc.peg_pressure(
+        {"HKD": pd.DataFrame({"Close": pd.Series([7.80] * 30,
+         index=pd.bdate_range("2026-01-01", periods=30))})})["band_position"], 2), 0.5)
+
+
+def test_debt_cycle():
+    """Dalio staging: severity ordering, missing-data handling, the levers."""
+    from src import debtcycle as dc
+
+    def q(latest, step, n=20):
+        return [(f"2026-{max(1, (i % 4) * 3 + 1):02d}-01", latest - step * i)
+                for i in range(n)]
+
+    def dly(v, n=300):
+        return [(f"2026-08-{(i % 28) + 1:02d}", v) for i in range(n)]
+
+    # --- a late-bubble sovereign next to a healthy household sector --------
+    h = {
+        "fed_debt_gdp": q(122.6, 0.5, 20), "hh_debt_gdp": q(68.6, -0.4, 20),
+        "gdp": q(30000.0, 150.0, 20), "fed_interest": q(1247.0, 20.0, 20),
+        "fed_deficit": [(f"2026-{i + 1:02d}-01", -112000.0) for i in range(24)],
+        "curve_10y2y": dly(0.51), "curve_10y3m": dly(0.82), "policy": dly(3.62),
+        "cpi": [(f"2026-{i + 1:02d}-01", 330.0 - 0.96 * i) for i in range(24)],
+        "hy_oas": dly(271.0), "cc_delinq": q(2.92, -0.035, 12),
+        "fed_assets": [(f"w{i}", 6759955.0 - 200.0 * i) for i in range(60)],
+        "m2": [(f"2026-{i + 1:02d}-01", 22000.0 - 60.0 * i) for i in range(24)],
+        "top1_wealth": q(31.6, 0.06, 16),
+    }
+    c = dc.classify(h, cape=42.18, vix=14.6)
+    check("public sector reads as a bubble", c["public_stage"], 2)
+    check("private sector reads as calm", c["private_stage"] in (1, 7), True)
+    # The regression that matters: stage numbers are a sequence, not a
+    # severity scale, so max() on the number would headline the SAFE sector.
+    check("headline follows the riskier sector, not the higher number",
+          c["stage"], 2)
+    check("sector disagreement is reported", bool(c["sector_note"]), True)
+
+    # --- the sustainability test -----------------------------------------
+    s = dc.sustainability(h)
+    check("interest annualised read", round(s["interest_saar_bn"]), 1247)
+    check("deficit annualised from 12 monthly obs",
+          round(s["deficit_ttm_bn"]), 1344)
+    check("interest as share of deficit", round(s["interest_to_deficit"], 2), 0.93)
+
+    # --- velocity: rising, but nowhere near Dalio's +20pp -----------------
+    v = dc.debt_velocity(h)
+    check("federal debt/GDP 3y change computed", round(v["fed_3y_pp"], 1), 6.0)
+    check("velocity test not tripped at +6pp", v["fails_velocity_test"], False)
+
+    # --- checklist: red on valuation/sentiment/credit, cool on velocity ---
+    chk = dc.bubble_checklist(h, 42.18, 14.6)
+    check("bubble checklist is RED here", chk["level"], "RED")
+    by = {t["key"]: t["score"] for t in chk["tests"]}
+    check("CAPE 42 scores hot", by["valuation"], 2)
+    check("VIX 14.6 scores hot", by["sentiment"], 2)
+    check("271bp high-yield scores hot", by["leverage"], 2)
+    check("debt velocity scores cool", by["velocity"], 0)
+    check("interest at 93% of deficit scores hot", by["sustainability"], 2)
+
+    # --- missing data must shrink the denominator, never score as a pass --
+    thin = {k: v2 for k, v2 in h.items() if k not in ("hy_oas", "cpi", "policy")}
+    c2 = dc.bubble_checklist(thin, None, None)
+    check("unavailable tests are not scored", c2["evaluable"] < c2["of"], True)
+    check("max scales with evaluable tests", c2["max"], 2 * c2["evaluable"])
+    unscored = [t for t in c2["tests"] if t["score"] is None]
+    check("unscored tests say why", all(t["detail"] for t in unscored), True)
+
+    # --- the four levers --------------------------------------------------
+    t = dc.tug_of_war(h)
+    lev = {l["lever"]: l for l in t["levers"]}
+    check("defaults lever idle when spreads tight and delinquency falling",
+          lev["Defaults / restructuring"]["pull"], 0)
+    check("printing lever neutral on a flat balance sheet",
+          lev["Money printing"]["pull"], 0)
+    check("wealth gap widening reads inflationary",
+          lev["Wealth redistribution"]["pull"], 1)
+
+    # --- a genuine depression fixture must reach stage 4 -------------------
+    dep = dict(h)
+    dep["policy"] = dly(0.08)
+    dep["hy_oas"] = dly(950.0)
+    # q() walks BACKWARDS from the latest, so a positive step means older
+    # observations were lower — i.e. delinquency rising into the present.
+    dep["cc_delinq"] = q(6.5, 0.4, 12)
+    dep["fed_assets"] = [(f"w{i}", 9_000_000.0 - 40_000.0 * i) for i in range(60)]
+    c3 = dc.classify(dep, cape=12.0, vix=44.0)
+    check("zero rates + 950bp spreads + rising defaults reads as depression",
+          c3["public_stage"], 4)
+
+    # --- asset call flips with real rates and the printing lever ----------
+    a = dc.asset_implications(dep, 4, dc.tug_of_war(dep))
+    check("negative real rates plus printing favours real assets",
+          a["favours"], "real assets")
+
+    # --- index CAPE is an aggregate, not a mean of ratios ------------------
+    class R:
+        def __init__(s_, t, cap, earn):
+            s_.ticker, s_.market = t, "US"
+            s_.fundamentals = [FundamentalYear(
+                ticker=t, fiscal_year=2016 + i, period_end=f"{2016 + i}-12-31",
+                standard="us-gaap", currency="USD", source="edgar",
+                net_income=earn) for i in range(10)]
+            s_.cap = cap
+    recs = [R(f"T{i}", 1000.0, 50.0) for i in range(40)]
+    # One name whose earnings are a rounding error: a mean-of-ratios would let
+    # its 1000x multiple swamp 40 healthy names. An aggregate must not care.
+    recs.append(R("TINY", 1000.0, 0.001))
+    mt = {r.ticker: {"market_cap_usd": r.cap, "fx_to_usd": 1.0} for r in recs}
+    res = dc.universe_cape(recs, mt)
+    check("aggregate CAPE ignores a near-zero-earnings outlier",
+          round(res["cape"]), 20)
+    check("aggregate CAPE counts every usable name", res["names_used"], 41)
+    thin_recs = recs[:5]
+    check("too few names refuses to print a number",
+          "error" in dc.universe_cape(
+              thin_recs, {r.ticker: mt[r.ticker] for r in thin_recs}), True)
+
+    # --- the renderer must survive every one of these shapes --------------
+    panel = rn._dalio_panel({"enabled": True, "stage": 2,
+                             "stage_name": "The bubble", "classification": c,
+                             "checklist": chk, "velocity": v,
+                             "sustainability": s, "tipping_point":
+                             dc.tipping_point(h), "early_warnings":
+                             dc.early_warnings(h), "tug_of_war": t,
+                             "assets": dc.asset_implications(h, 2, t),
+                             "missing_series": ["demo (XYZ)"],
+                             "unavailable": dc.UNAVAILABLE,
+                             "cape_detail": res})
+    check("panel renders the stage", "stage 2 of 7" in panel, True)
+    check("panel shows the alert level", 'class="alert RED"' in panel, True)
+    check("panel names missing series rather than hiding them",
+          "demo (XYZ)" in panel, True)
+    check("panel labels CAPE as ours, not Shiller's",
+          "not the official Shiller series" in panel, True)
+    check("disabled state renders without throwing",
+          "unavailable" in rn._dalio_panel({"enabled": False,
+                                            "reason": "no key"}), True)
+    check("absent debt cycle renders nothing", rn._dalio_panel({}), "")
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -464,7 +795,11 @@ if __name__ == "__main__":
     test_macro_gate()
     test_technicals()
     test_currency_reconciliation()
+    test_history_depth_parity()
     test_end_to_end_with_config()
+    test_cycle_and_new_frameworks()
+    test_macro_carry()
+    test_debt_cycle()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

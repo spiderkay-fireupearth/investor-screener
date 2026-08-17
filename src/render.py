@@ -174,6 +174,46 @@ h1{font-size:23px;margin:0 0 4px;letter-spacing:-.02em}
 .gate.cyc-core{background:var(--panel);border-color:var(--line)}
 .gate.cyc-opportunistic{background:rgba(63,191,127,.10);border-color:rgba(63,191,127,.35)}
 .muted-ink{color:var(--tx3)}
+.dalio{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+margin:14px 0;padding:0;overflow:hidden}
+.dalio summary{list-style:none;cursor:pointer;padding:12px 15px;display:flex;
+gap:12px;align-items:center;flex-wrap:wrap;font-size:13.5px}
+.dalio summary::-webkit-details-marker{display:none}
+.dalio summary:hover{background:var(--panel2)}
+.dalio .body{padding:2px 15px 15px;border-top:1px solid var(--line)}
+.stg{font-weight:700;font-size:13px;padding:3px 10px;border-radius:20px;
+background:var(--panel2);border:1px solid var(--line);white-space:nowrap}
+.alert{font-size:11px;font-weight:700;letter-spacing:.08em;padding:3px 9px;
+border-radius:20px;text-transform:uppercase}
+.alert.RED{background:rgba(226,88,94,.16);color:var(--bad);
+border:1px solid rgba(226,88,94,.45)}
+.alert.YELLOW{background:rgba(201,162,39,.16);color:var(--warn);
+border:1px solid rgba(201,162,39,.45)}
+.alert.GREEN{background:rgba(63,191,127,.14);color:var(--ok);
+border:1px solid rgba(63,191,127,.4)}
+.alert.GREY{background:var(--panel2);color:var(--tx3);border:1px solid var(--line)}
+.dgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+gap:10px;margin-top:12px}
+.dcard{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+padding:10px 12px}
+.dcard h4{margin:0 0 7px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+color:var(--tx3);font-weight:600}
+.drow{display:flex;justify-content:space-between;gap:10px;padding:3px 0;
+font-size:12.5px;border-bottom:1px solid var(--line)}
+.drow:last-child{border-bottom:none}
+.drow .k{color:var(--tx2)}
+.drow .v{text-align:right;font-variant-numeric:tabular-nums}
+.pill{font-size:10.5px;padding:1px 7px;border-radius:20px;border:1px solid var(--line);
+color:var(--tx3);white-space:nowrap}
+.pill.hot{background:rgba(226,88,94,.14);color:var(--bad);border-color:rgba(226,88,94,.4)}
+.pill.warm{background:rgba(201,162,39,.14);color:var(--warn);border-color:rgba(201,162,39,.4)}
+.pill.cool{background:rgba(63,191,127,.12);color:var(--ok);border-color:rgba(63,191,127,.35)}
+.stages{display:flex;gap:3px;margin:10px 0 4px;flex-wrap:wrap}
+.stages i{flex:1;min-width:56px;font-style:normal;font-size:10px;text-align:center;
+padding:5px 3px;border-radius:5px;background:var(--panel2);color:var(--tx3);
+border:1px solid var(--line)}
+.stages i.on{background:var(--acc);color:#fff;border-color:var(--acc);font-weight:700}
+.dnote{font-size:12.5px;color:var(--tx2);margin-top:11px;line-height:1.6}
 .filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:16px 0 10px;
 padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
 .fl{font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:.06em;margin-right:2px}
@@ -487,6 +527,170 @@ def e_attr(s: str) -> str:
     return _h.escape(str(s), quote=True)
 
 
+DALIO_STAGES = ["Early", "Bubble", "Top", "Depression", "Beautiful\ndeleverage",
+                "Pushing on\na string", "Normalise"]
+
+
+def _dalio_panel(d: Dict[str, Any]) -> str:
+    """Ray Dalio's Big Debt Cycle stage, recomputed on every run.
+
+    Collapsed by default: the stage and the alert level are the two things
+    worth seeing at a glance, and the evidence is one click away for when the
+    reading is surprising enough to want checking.
+    """
+    if not d:
+        return ""
+    if not d.get("enabled"):
+        return ('<div class="dalio"><summary style="display:block">'
+                '<b>Debt cycle: unavailable</b> <span class="muted-ink">— '
+                f'{e_attr(str(d.get("reason", "not computed")))}</span>'
+                '</summary></div>')
+
+    stage = d.get("stage")
+    chk = d.get("checklist") or {}
+    lvl = chk.get("level", "GREY")
+    cls_ = d.get("classification") or {}
+
+    bar = "".join(
+        f'<i class="{"on" if (i + 1) == stage else ""}">{i + 1}. '
+        f'{DALIO_STAGES[i].replace(chr(10), " ")}</i>' for i in range(7))
+
+    def rows(pairs):
+        return "".join(
+            f'<div class="drow"><span class="k">{k}</span>'
+            f'<span class="v">{v}</span></div>' for k, v in pairs if v)
+
+    # --- bubble checklist -------------------------------------------------
+    words = {0: ("cool", "COOL"), 1: ("warm", "WARM"), 2: ("hot", "HOT")}
+    chk_rows = ""
+    for t in chk.get("tests", []):
+        s = t.get("score")
+        cl, wd = words.get(s, ("", "N/A"))
+        chk_rows += (f'<div class="drow"><span class="k">{e_attr(t["label"])}'
+                     f'<br><span class="muted-ink" style="font-size:11.5px">'
+                     f'{e_attr(str(t.get("detail", "")))}</span></span>'
+                     f'<span class="v"><span class="pill {cl}">{wd}</span></span>'
+                     f'</div>')
+
+    # --- tug of war -------------------------------------------------------
+    tug = d.get("tug_of_war") or {}
+    arrow = {1: "&#9650; inflationary", -1: "&#9660; deflationary",
+             0: "&#9679; neutral"}
+    tug_rows = ""
+    for l in tug.get("levers", []):
+        p = l.get("pull")
+        cl = "hot" if p == 1 else "cool" if p == -1 else ""
+        tug_rows += (f'<div class="drow"><span class="k"><b>'
+                     f'{e_attr(l["lever"])}</b><br>'
+                     f'<span class="muted-ink" style="font-size:11.5px">'
+                     f'{e_attr(str(l.get("detail", "")))} — '
+                     f'{e_attr(str(l.get("reading", "")))}</span></span>'
+                     f'<span class="v"><span class="pill {cl}">'
+                     f'{arrow.get(p, "n/a")}</span></span></div>')
+
+    # --- the numbered checks ---------------------------------------------
+    v = d.get("velocity") or {}
+    sus = d.get("sustainability") or {}
+    tp = d.get("tipping_point") or {}
+    ew = d.get("early_warnings") or {}
+
+    def pc(x, dp=1, sign=False):
+        if x is None or (isinstance(x, float) and x != x):
+            return None
+        return f"{x:+.{dp}f}" if sign else f"{x:.{dp}f}"
+
+    debt_rows = rows([
+        ("Federal debt / GDP", f'{pc(v.get("fed_level"))}%'
+         if v.get("fed_level") else None),
+        ("&nbsp;&nbsp;3-year change", f'{pc(v.get("fed_3y_pp"), 1, True)}pp'
+         if v.get("fed_3y_pp") is not None else None),
+        ("Household debt / GDP", f'{pc(v.get("hh_level"))}%'
+         if v.get("hh_level") else None),
+        ("&nbsp;&nbsp;3-year change", f'{pc(v.get("hh_3y_pp"), 1, True)}pp'
+         if v.get("hh_3y_pp") is not None else None),
+        ("Federal interest, annualised",
+         f'${sus["interest_saar_bn"] / 1000:.2f}tn'
+         if sus.get("interest_saar_bn") else None),
+        ("Interest as % of the deficit",
+         f'<b>{sus["interest_to_deficit"] * 100:.0f}%</b>'
+         if sus.get("interest_to_deficit") else None),
+    ])
+    mkt_rows = rows([
+        ("10y &minus; 2y", f'{pc(tp.get("curve_10y2y"), 2, True)}%'
+         if tp.get("curve_10y2y") is not None else None),
+        ("10y &minus; 3m", f'{pc(tp.get("curve_10y3m"), 2, True)}%'
+         if tp.get("curve_10y3m") is not None else None),
+        ("Curve shape", e_attr(str(tp.get("shape", "")))),
+        ("Real policy rate", f'{pc(tp.get("real_policy_rate"), 2, True)}%'
+         if tp.get("real_policy_rate") is not None else None),
+        ("High-yield OAS", f'{ew["hy_oas"]:.0f}bp'
+         if ew.get("hy_oas") else None),
+        ("&nbsp;&nbsp;3-month change", f'{ew["hy_3m_bp"]:+.0f}bp'
+         if ew.get("hy_3m_bp") is not None else None),
+        ("Card delinquency", f'{pc(ew.get("cc_delinq"), 2)}%'
+         if ew.get("cc_delinq") else None),
+        ("&nbsp;&nbsp;year-on-year", f'{pc(ew.get("cc_delinq_4q_pp"), 2, True)}pp'
+         if ew.get("cc_delinq_4q_pp") is not None else None),
+    ])
+
+    assets = d.get("assets") or {}
+    notes = []
+    if cls_.get("sector_note"):
+        notes.append(e_attr(cls_["sector_note"]))
+    if cls_.get("contested"):
+        notes.append(e_attr(cls_["contested"]))
+    if assets.get("reading"):
+        notes.append("<b>Real vs financial assets:</b> favours "
+                     f'<b>{e_attr(str(assets.get("favours", "—")))}</b> — '
+                     f'{e_attr(assets["reading"])}')
+    if tug.get("balance"):
+        notes.append(f'<b>Tug of war:</b> {e_attr(tug["balance"])}')
+    miss = d.get("missing_series") or []
+    if miss:
+        notes.append('<span class="muted-ink">Ran with '
+                     f'{len(miss)} series unavailable: '
+                     f'{e_attr(", ".join(miss))}. Their tests were dropped from '
+                     'the denominator rather than scored as passes.</span>')
+    if d.get("unavailable"):
+        notes.append('<span class="muted-ink">Not machine-readable for free, '
+                     'and therefore not in the score: '
+                     + e_attr("; ".join(d["unavailable"])) + '.</span>')
+    cd = d.get("cape_detail") or {}
+    if cd.get("cape"):
+        notes.append('<span class="muted-ink">CAPE '
+                     f'{cd["cape"]:.1f} is our own aggregate across '
+                     f'{cd.get("names_used", 0)} US constituents with 10 years '
+                     'of EDGAR earnings — not the official Shiller series.'
+                     '</span>')
+    elif cd.get("error"):
+        notes.append('<span class="muted-ink">CAPE not computed: '
+                     + e_attr(str(cd["error"])) + '.</span>')
+
+    pct = chk.get("pct")
+    score_txt = (f'{chk.get("score", 0)}/{chk.get("max", 0)}'
+                 + (f' ({pct * 100:.0f}%)' if pct is not None else ''))
+
+    return (
+        f'<details class="dalio"><summary>'
+        f'<span class="stg">Debt cycle &middot; stage {stage or "?"} of 7 &mdash; '
+        f'{e_attr(str(d.get("stage_name", "unknown")))}</span>'
+        f'<span class="alert {lvl}">{lvl}</span>'
+        f'<span class="muted-ink">Bubble checklist {score_txt} &mdash; '
+        f'{e_attr(str(chk.get("reason", "")))}</span>'
+        f'<span class="muted-ink" style="margin-left:auto">details &#9662;</span>'
+        f'</summary><div class="body">'
+        f'<div class="stages">{bar}</div>'
+        f'<div class="dgrid">'
+        f'<div class="dcard"><h4>Bubble checklist</h4>{chk_rows}</div>'
+        f'<div class="dcard"><h4>The tug of war</h4>{tug_rows}</div>'
+        f'<div class="dcard"><h4>Debt &amp; sustainability</h4>{debt_rows}</div>'
+        f'<div class="dcard"><h4>Tipping point &amp; early warnings</h4>'
+        f'{mkt_rows}</div>'
+        f'</div>'
+        + "".join(f'<div class="dnote">{n}</div>' for n in notes)
+        + '</div></details>')
+
+
 def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
            screened: Dict[str, Any], thresholds: Dict[str, Any],
            universe_cfg: Dict[str, Any], out_dir: str = "out",
@@ -532,6 +736,8 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             f'{cyc.get("evidence", "")}.<br>{cyc.get("reason", "")} '
             f'<span class="muted-ink">{shift_txt}</span></div>')
 
+    debt_html = _dalio_panel(screened.get("debt_cycle") or {})
+
     gate = (f'<div class="gate {"open" if open_ else "closed"}">'
             f'<b>Soros macro gate: {"OPEN" if open_ else "CLOSED"}</b> — {reason}.'
             + ("" if open_ else " Every Soros signal is suppressed while credit "
@@ -548,7 +754,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
-            .replace("__GATE__", cycle_html + gate)
+            .replace("__GATE__", debt_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
             .replace("__TS__", datetime.now(timezone.utc)

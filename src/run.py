@@ -36,6 +36,7 @@ from . import screens as sc
 from . import render as rn
 from . import library as lib
 from . import cycle as cyc
+from . import debtcycle as dbt
 
 log = logging.getLogger("screener")
 
@@ -470,8 +471,38 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     log.info("Market cycle: %s (%s)", cycle_state.get("mode"),
              cycle_state.get("evidence"))
 
+    # Where are we in the Big Debt Cycle? This is slow-moving — quarterly
+    # series dominate it — but it is recomputed every run so the page never
+    # shows a stage that predates a policy change.
+    debt_state: Dict[str, Any] = {"enabled": False, "reason": "not computed"}
+    try:
+        cpi_hist = fred.history("CPIAUCSL", limit=400) if fred.enabled else []
+        cape_res = dbt.universe_cape(records, metrics_by_ticker, cpi_hist)
+        cape_val = cape_res.get("cape")
+        if cape_val:
+            log.info("Universe CAPE (US, %d names): %.1f",
+                     cape_res.get("names_used", 0), cape_val)
+        else:
+            log.warning("Universe CAPE unavailable: %s", cape_res.get("error"))
+        debt_state = dbt.build(fred, cape=cape_val, vix=vix)
+        debt_state["cape_detail"] = cape_res
+        if debt_state.get("enabled"):
+            log.info("Debt cycle: stage %s — %s (alert %s)",
+                     debt_state.get("stage"), debt_state.get("stage_name"),
+                     debt_state.get("checklist", {}).get("level"))
+            if debt_state.get("missing_series"):
+                log.warning("Debt cycle ran with %d series missing: %s",
+                            len(debt_state["missing_series"]),
+                            ", ".join(debt_state["missing_series"]))
+        else:
+            log.warning("Debt cycle skipped: %s", debt_state.get("reason"))
+    except Exception as e:                        # noqa: BLE001
+        log.warning("debt-cycle stage failed: %s", e)
+        debt_state = {"enabled": False, "reason": f"failed: {e}"}
+
     screened = sc.screen_universe(records, metrics_by_ticker, thresholds, macro,
                                   cycle=cycle_state)
+    screened["debt_cycle"] = debt_state
     store.save_screen_results(run_id, screened["results"])
 
     # Merge in the other region's most recent results so the published page

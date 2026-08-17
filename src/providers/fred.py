@@ -45,6 +45,43 @@ class FredProvider:
             log.warning("FRED %s failed: %s", series_id, e)
         return None
 
+    def history(self, series_id: str, limit: int = 800):
+        """Newest-first list of (date, value), skipping FRED's '.' placeholders.
+
+        The debt-cycle stage is about *changes* — debt/GDP over three years,
+        spreads over three months, the balance sheet over a year — so a
+        latest-value-only feed cannot support it. Missing observations are
+        dropped rather than forward-filled: an interpolated value would make a
+        3-year change look real when part of it was invented.
+        """
+        if not self.enabled:
+            return []
+        try:
+            r = requests.get(FRED_URL, timeout=30, params={
+                "series_id": series_id,
+                "api_key": self.api_key,
+                "file_type": "json",
+                "sort_order": "desc",
+                "limit": limit,
+            })
+            if r.status_code != 200:
+                log.warning("FRED %s history -> HTTP %s", series_id,
+                            r.status_code)
+                return []
+            out = []
+            for obs in r.json().get("observations", []):
+                v = obs.get("value")
+                if v in (".", "", None):
+                    continue
+                try:
+                    out.append((obs["date"], float(v)))
+                except (TypeError, ValueError):
+                    continue
+            return out
+        except Exception as e:                       # noqa: BLE001
+            log.warning("FRED %s history failed: %s", series_id, e)
+        return []
+
     def snapshot(self, series_map: Dict[str, str]) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
         for name, sid in series_map.items():
