@@ -16,6 +16,7 @@ import numpy as np
 
 from . import buffett as _buffett
 from . import lynch as _lynch
+from . import rankings as _rank
 from .schema import CompanyRecord, FundamentalYear
 
 
@@ -874,6 +875,15 @@ def compute_metrics(rec: CompanyRecord,
     m["lynch_category_rationale"] = cat["rationale"]
     m["lynch_peak_earnings_warning"] = _lynch.peak_earnings_warning(
         m, cat["category"])
+
+    # Munger's inversion, scored. "All I want to know is where I'm going to
+    # die, so I'll never go there" — counted as the share of the obvious ways
+    # to lose money that are ABSENT, with the number actually evaluated
+    # reported beside it.
+    _inv = _rank.munger_inversion(m)
+    m["munger_inversion_detail"] = _inv
+    m["munger_inversion_score"] = _inv.get("score")
+    m["munger_inversion_reading"] = _inv.get("reading")
 
     # ------------------------------------------------------- sanity guardrail
     flags = sanity_check(m)

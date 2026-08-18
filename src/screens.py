@@ -23,6 +23,7 @@ import numpy as np
 
 from . import buffett as _bf
 from . import lynch as _lynch
+from . import rankings as _rank
 from . import reflexivity as rfx
 from . import style as _style
 from . import synopsis as syn
@@ -536,6 +537,62 @@ def add_buffett_valuation(records: List[Any],
             "names": len(records)}
 
 
+
+def build_rankings(records: List[Any],
+                   metrics_by_ticker: Dict[str, Dict[str, Any]],
+                   thresholds: Dict[str, Any]) -> Dict[str, Any]:
+    """Buffett's and Munger's top N per exchange.
+
+    Buffett's list is gated on the three business tenets, because a list
+    carrying his name that includes businesses outside the declared circle of
+    competence, without a moat, or mid-turnaround is not his list. The gate is
+    dropped per-market — and SAID to have been dropped — where an exchange has
+    too few names carrying the label to make thirty of anything.
+    """
+    excluded = thresholds.get("global", {}).get(
+        "capital_intensive_excluded_sectors", [])
+    out: Dict[str, Any] = {}
+
+    b_cfg = (thresholds.get("buffett", {}) or {}).get("ranking")
+    if b_cfg:
+        def tenet_gate(rec, m):
+            return None if m.get("buffett_b_label") else \
+                "does not clear the three business tenets"
+        gated = _rank.dual_rank(records, metrics_by_ticker, b_cfg,
+                                excluded_sectors=[], eligible_fn=tenet_gate)
+        floor = b_cfg.get("min_names_before_fallback", 8)
+        # The ungated ranking is ALWAYS computed, because a market can fail the
+        # gate in two different ways: too few names cleared it, or none did —
+        # and a market where none did never appears in the gated result at all.
+        # An earlier version only looked at markets that were present and thin,
+        # so an exchange with zero tenet-clearing names silently vanished from
+        # the page rather than falling back. Absent and thin are the same
+        # condition here and are handled as one.
+        ungated = _rank.dual_rank(records, metrics_by_ticker, b_cfg,
+                                  excluded_sectors=[])
+        for mk, blk in ungated["markets"].items():
+            have = gated["markets"].get(mk)
+            if have and have["eligible"] >= floor:
+                continue
+            blk = dict(blk)
+            blk["fallback"] = True
+            blk["gated_eligible"] = have["eligible"] if have else 0
+            gated["markets"][mk] = blk
+        gated["fallback_markets"] = sorted(
+            mk for mk, v in gated["markets"].items() if v.get("fallback"))
+        gated["total_eligible"] = sum(v["eligible"]
+                                      for v in gated["markets"].values())
+        gated["gate"] = "business tenets"
+        gated["fallback_floor"] = floor
+        out["buffett_ranking"] = gated
+
+    m_cfg = (thresholds.get("munger", {}) or {}).get("ranking")
+    if m_cfg:
+        out["munger_ranking"] = _rank.dual_rank(
+            records, metrics_by_ticker, m_cfg, excluded_sectors=excluded)
+    return out
+
+
 def screen_universe(records: List[Any],
                     metrics_by_ticker: Dict[str, Dict[str, Any]],
                     thresholds: Dict[str, Any],
@@ -697,6 +754,7 @@ def screen_universe(records: List[Any],
         "buffett_valuation": buffett_valuation,
         "magic_formula": magic_formula,
         "style_census": style_census,
+        **build_rankings(records, metrics_by_ticker, thresholds),
         "lynch_census": lynch_census(metrics_by_ticker),
         # Lynch's macro sanity check, computed on this screener's own US rows
         # so the gauge and the table are struck on the same numbers.

@@ -51,6 +51,7 @@ SYNOPSIS_FIELDS = (
     "margin_of_safety", "net_margin_ttm", "gross_margin_ttm",
     "one_dollar_premise",
     "style", "style_label", "style_why", "style_score",
+    "munger_inversion_score", "munger_inversion_reading",
 )
 
 MAX_DESCRIPTION_CHARS = 260
@@ -300,6 +301,10 @@ def _category(m: Dict[str, Any]) -> List[str]:
         out.append(line + ", and the growth and valuation tests above were "
                           "scored on that category's bar rather than one "
                           "universal one.")
+    inv = _g(m, "munger_inversion_reading")
+    if inv:
+        out.append("On Munger's inversion — the discipline of asking how this "
+                   "loses money rather than how it makes it — " + inv + ".")
     warn = _g(m, "lynch_peak_earnings_warning")
     if warn:
         out.append(warn)

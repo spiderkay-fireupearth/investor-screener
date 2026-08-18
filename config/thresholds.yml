@@ -134,6 +134,32 @@ buffett:
       min_listing_age_years: 10
       min_history_years: 5
       exclude_disruption_zones: true
+  # --- the ranked list, one per exchange -----------------------------------
+  # Buffett's screen is pass/fail, and a pass/fail screen gives you a set, not
+  # an order. To make a list, two axes in Greenblatt's own shape but on
+  # Buffett's own numbers: QUALITY is return on net tangible assets ("the key
+  # qualities we seek are... good returns on the net tangible assets required
+  # to operate the business"), PRICE is the owner-earnings yield from the 1986
+  # letter. Ranks are added, lowest total wins.
+  #
+  # Eligibility is the B label — the three business tenets. A list called
+  # "Buffett's top 30" that includes businesses outside the circle of
+  # competence, without a moat, or in the middle of a turnaround is not his
+  # list. Where an exchange has too few names carrying the label, the panel
+  # falls back to ranking everything eligible and says so on the page.
+  ranking:
+    top_n: 30
+    min_market_cap_usd: 100000000
+    require_business_tenets: true
+    min_names_before_fallback: 8
+    factor_a:
+      metric: return_on_net_tangible_assets
+      label: return on net tangible assets
+      format: pct
+    factor_b:
+      metric: owner_earnings_yield
+      label: owner-earnings yield
+      format: pct
   tests:
     roe_consistency:
       metric: roe
@@ -247,6 +273,24 @@ buffett:
 
 # ---------------------------------------------------------------------------
 munger:
+  # --- the ranked list, one per exchange -----------------------------------
+  # Munger's distinctive contribution is not a valuation method, it is
+  # inversion: "all I want to know is where I'm going to die, so I'll never go
+  # there." So the second axis counts red flags that are ABSENT rather than
+  # measuring cheapness — which is what makes this a different list from
+  # Buffett's rather than a reordering of it.
+  ranking:
+    top_n: 30
+    min_market_cap_usd: 100000000
+    factor_a:
+      metric: roic_5y_avg
+      label: five-year return on capital
+      format: pct
+    factor_b:
+      metric: munger_inversion_score
+      label: inversion score
+      format: pct
+
   label: Quality at a fair price
   min_tests_passed: 5      # of 6
   tests:

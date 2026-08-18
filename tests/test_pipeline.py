@@ -3781,6 +3781,155 @@ def test_lynch_never_asks_for_six_years():
           th["buffett"]["tests"]["one_dollar_premise"]["min_history_years"], 6)
 
 
+def test_buffett_and_munger_lists():
+    """Two ranked lists, one table per exchange, on each man's own numbers."""
+    from src import rankings as rk
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    bcfg, mcfg = th["buffett"]["ranking"], th["munger"]["ranking"]
+
+    check("Buffett ranks on returns on TANGIBLE capital, his own phrase",
+          bcfg["factor_a"]["metric"], "return_on_net_tangible_assets")
+    check("against owner earnings, his own cash measure",
+          bcfg["factor_b"]["metric"], "owner_earnings_yield")
+    check("Munger ranks on return on capital",
+          mcfg["factor_a"]["metric"], "roic_5y_avg")
+    check("against inversion, which is what makes his list different",
+          mcfg["factor_b"]["metric"], "munger_inversion_score")
+    check("both are top 30", (bcfg["top_n"], mcfg["top_n"]), (30, 30))
+
+    # --- inversion ----------------------------------------------------------
+    clean = {"accruals_ratio": 0.02, "goodwill_to_assets": 0.05,
+             "debt_to_equity": 0.2, "operating_margin_slope_5y": 0.01,
+             "eps_cv_5y": 0.1, "share_count_change_5y": -0.05,
+             "loss_years_in_10": 0}
+    inv = rk.munger_inversion(clean)
+    check("a clean business scores 1.0", inv["score"], 1.0)
+    check("on all seven checks", inv["evaluated"], 7)
+    check("and says so in words",
+          "7 of 7 ways to lose money are absent" in inv["reading"], True)
+
+    dirty = dict(clean, accruals_ratio=0.4, debt_to_equity=2.0,
+                 loss_years_in_10=3)
+    d = rk.munger_inversion(dirty)
+    check("red flags pull the score down", d["score"] < 0.6, True)
+    check("and are named rather than merely counted", len(d["failed"]), 3)
+    check("with the worst two quoted in the reading",
+          "the ones present are" in d["reading"], True)
+
+    # The score is a SHARE of what could be evaluated, so a four-year feed is
+    # judged on the same standard rather than marked down for its provider.
+    thin = {"accruals_ratio": 0.02, "debt_to_equity": 0.2}
+    t = rk.munger_inversion(thin)
+    check("a thin feed still scores", t["score"], 1.0)
+    check("but says how many checks it actually ran", t["evaluated"], 2)
+    check("out of how many exist", t["total_checks"], 7)
+    check("nothing evaluable means no score, not a zero",
+          rk.munger_inversion({})["available"], False)
+
+    # --- the ranking --------------------------------------------------------
+    def rec(t, mkt, a, b, tenets=True, sector="Industrials"):
+        r = CompanyRecord(ticker=t, market=mkt, currency="USD", sector=sector,
+                          industry="Machinery")
+        return r, {"return_on_net_tangible_assets": a,
+                   "owner_earnings_yield": b, "market_cap_usd": 5e9,
+                   "buffett_b_label": "B" if tenets else None,
+                   "roic_5y_avg": a, "munger_inversion_score": b}
+
+    recs, mets = [], {}
+    for i in range(6):
+        r, m = rec(f"US{i}", "US", 0.50 - i * 0.05, 0.10 - i * 0.01)
+        recs.append(r); mets[r.ticker] = m
+    for i in range(4):
+        r, m = rec(f"HK{i}", "HK", 0.20 + i * 0.05, 0.04 + i * 0.01)
+        recs.append(r); mets[r.ticker] = m
+
+    out = rk.dual_rank(recs, mets, {**bcfg, "top_n": 3})
+    check("each exchange gets its own list", sorted(out["markets"]), ["HK", "US"])
+    check("capped at the requested length", len(out["markets"]["US"]["rows"]), 3)
+    check("the best on both axes ranks first",
+          out["markets"]["US"]["rows"][0]["ticker"], "US0")
+    check("and within Hong Kong, Hong Kong's best does",
+          out["markets"]["HK"]["rows"][0]["ticker"], "HK3")
+    check("both component ranks are published",
+          all("a_rank" in r and "b_rank" in r
+              for r in out["markets"]["US"]["rows"]), True)
+    check("the score is their sum",
+          out["markets"]["US"]["rows"][0]["score"],
+          out["markets"]["US"]["rows"][0]["a_rank"]
+          + out["markets"]["US"]["rows"][0]["b_rank"])
+    check("the eligible count is reported beside the shown count",
+          out["markets"]["US"]["eligible"], 6)
+    # Ranks are WITHIN a market. A Hong Kong name ranked 1 is first in Hong
+    # Kong, not first in the world, and that is the point of the split.
+    check("a market's rank 1 is not a global claim",
+          out["markets"]["HK"]["rows"][0]["a"]
+          < out["markets"]["US"]["rows"][0]["a"], True)
+
+    # Exclusions are counted, never silently dropped.
+    r_bad, m_bad = rec("SMALL", "US", 0.4, 0.08)
+    m_bad["market_cap_usd"] = 1e6
+    r_neg, m_neg = rec("NEG", "US", -0.2, 0.08)
+    out2 = rk.dual_rank(recs + [r_bad, r_neg],
+                        {**mets, "SMALL": m_bad, "NEG": m_neg}, bcfg)
+    check("a micro-cap is excluded from the ranking", out2["excluded"] >= 2, True)
+    check("and the reasons are counted, not hidden",
+          any("market-cap floor" in k for k in out2["exclusion_reasons"]), True)
+    check("a negative quality figure is refused too",
+          any("not positive" in k for k in out2["exclusion_reasons"]), True)
+
+    # --- the tenet gate, and its honest fallback -----------------------------
+    mixed = []
+    mm = {}
+    for i in range(10):
+        r, m = rec(f"T{i}", "US", 0.4 - i * 0.02, 0.09 - i * 0.005,
+                   tenets=(i < 9))
+        mixed.append(r); mm[r.ticker] = m
+    for i in range(3):
+        r, m = rec(f"J{i}", "JP", 0.3, 0.06, tenets=False)
+        mixed.append(r); mm[r.ticker] = m
+    built = sc.build_rankings(mixed, mm, th)
+    br = built["buffett_ranking"]
+    check("the Buffett list is gated on the business tenets",
+          br["gate"], "business tenets")
+    check("the US list uses the gate", br["markets"]["US"].get("fallback"), None)
+    check("Japan has too few tenet-clearing names, so the gate is relaxed",
+          br["markets"]["JP"]["fallback"], True)
+    check("and the relaxation is named, not silent",
+          "JP" in br["fallback_markets"], True)
+    check("Munger's list needs no such gate",
+          "fallback_markets" in built["munger_ranking"], False)
+
+    # --- the panel -----------------------------------------------------------
+    html = rn._ranked_panel("Buffett list", "blurb", br)
+    check("the panel renders", "Buffett list" in html, True)
+    check("with one heading per exchange",
+          "US large cap" in html and "Nikkei 225" in html, True)
+    check("the relaxed gate is flagged on the exchange it applies to",
+          "gate relaxed" in html, True)
+    check("and explained underneath",
+          "not the tenet-gated list" in html, True)
+    check("both factor names head their columns",
+          "return on net tangible assets" in html, True)
+    check("the ranks are stated as within-exchange",
+          "third on that exchange, not third in the world" in html, True)
+    check("the B label rides on rows that carry it", 'class="blab"' in html, True)
+    check("an empty ranking renders nothing rather than an empty table",
+          rn._ranked_panel("x", "y", {}), "")
+
+    tmpl = rn.TEMPLATE
+    check("both panels are wired into the page",
+          "__GATE__" in tmpl, True)
+    src = open("src/render.py").read()
+    check("the Buffett panel is built in render()", '"Buffett list"' in src, True)
+    check("and the Munger panel too", '"Munger list"' in src, True)
+    check("Munger's panel explains inversion in his own words",
+          "never go there" in src, True)
+
+    # The inversion score must survive the round trip, or a merged row loses it.
+    check("the inversion score is in the display contract",
+          "munger_inversion_score" in rn.DISPLAY_METRICS, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -3817,6 +3966,7 @@ if __name__ == "__main__":
     test_value_growth_style()
     test_technical_charts()
     test_lynch_never_asks_for_six_years()
+    test_buffett_and_munger_lists()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

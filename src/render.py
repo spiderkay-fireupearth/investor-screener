@@ -82,6 +82,7 @@ DISPLAY_METRICS = (
     "ebit_to_ev_greenblatt", "ebit_to_invested_capital_greenblatt",
     "enterprise_value_greenblatt", "invested_capital_greenblatt",
     "excess_cash", "greenblatt_working_capital_floored",
+    "munger_inversion_score", "munger_inversion_reading",
     # The value/growth axis. `style_evidence` is a list rather than a scalar —
     # it is what stops the badge being an assertion.
     "style", "style_label", "style_score", "style_why", "style_evidence",
@@ -389,6 +390,8 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                     if m.get("ebit_to_invested_capital_greenblatt") is not None
                     else m.get("ebit_to_invested_capital"), 0, pct=True),
                 "Excess cash": _fmt_num(m.get("excess_cash"), money=True),
+                "Inversion score": _fmt_num(m.get("munger_inversion_score"),
+                                            0, pct=True),
                 "Years CFO positive (5y)": _fmt_num(m.get("cfo_positive_share_5y"),
                                                     0, pct=True),
                 "Loss years in 5": _fmt_num(m.get("loss_years_in_5"), 0),
@@ -1466,6 +1469,102 @@ def _reflexive_legend(census: Dict[str, int]) -> str:
             '</div></details>')
 
 
+def _b_badge(row: Dict[str, Any]) -> str:
+    """The B label as a chip, or nothing. Kept out of the f-string because an
+    f-string expression cannot contain a backslash, and escaping quotes inside
+    one is how that rule gets discovered the hard way."""
+    return '<span class="blab">B</span> ' if row.get("b_label") else ''
+
+
+def _ranked_panel(title: str, blurb: str, data: Dict[str, Any],
+                  extra_notes: Optional[List[str]] = None) -> str:
+    """A two-factor ranked list, one table per exchange.
+
+    Grouped by market rather than merged, because a Hong Kong list and a US
+    list are two different opportunity sets: merged, whichever market is
+    structurally cheaper this decade takes most of the slots and the other
+    exchanges effectively vanish.
+    """
+    markets = (data or {}).get("markets") or {}
+    if not markets:
+        return ""
+    fa, fb = data["factor_a"], data["factor_b"]
+
+    def fmt(v, spec):
+        if not isinstance(v, (int, float)):
+            return "—"
+        return f"{v * 100:.1f}%" if spec.get("format") == "pct" else f"{v:,.2f}"
+
+    blocks = ""
+    for mkt in sorted(markets, key=lambda k: MARKET_LABELS.get(k, k)):
+        blk = markets[mkt]
+        rows = blk.get("rows") or []
+        if not rows:
+            continue
+        body = "".join(
+            f'<tr><td class="r">{r["rank"]}</td>'
+            f'<td class="sym">{e_attr(r["ticker"])}</td>'
+            f'<td>{_b_badge(r)}{e_attr(r.get("category") or "")}</td>'
+            f'<td class="r">{fmt(r["a"], fa)}</td>'
+            f'<td class="r">{fmt(r["b"], fb)}</td>'
+            f'<td class="r">{r["a_rank"]}</td>'
+            f'<td class="r">{r["b_rank"]}</td>'
+            f'<td class="r">{r["score"]}</td></tr>'
+            for r in rows)
+        blocks += (
+            f'<h4 style="margin:16px 0 2px;font-size:12px;letter-spacing:.06em;'
+            f'text-transform:uppercase;color:var(--tx3)">'
+            f'{e_attr(MARKET_LABELS.get(mkt, mkt))} '
+            f'<span style="text-transform:none;letter-spacing:0;color:var(--tx2)">'
+            f'&mdash; top {len(rows)} of {blk["eligible"]} eligible'
+            + (' · <b>gate relaxed</b>' if blk.get("fallback") else '')
+            + '</span></h4>'
+            '<table><thead><tr><th class="r">#</th><th>Ticker</th><th>Kind</th>'
+            f'<th class="r">{e_attr(fa["label"])}</th>'
+            f'<th class="r">{e_attr(fb["label"])}</th>'
+            '<th class="r">rank A</th><th class="r">rank B</th>'
+            '<th class="r">Score</th></tr></thead><tbody>'
+            + body + '</tbody></table>')
+
+    notes = [blurb]
+    notes.append(
+        f'Ranked separately on <b>{e_attr(fa["label"])}</b> and '
+        f'<b>{e_attr(fb["label"])}</b>; the two ranks are added and the lowest '
+        'total wins — Greenblatt\'s arithmetic applied to a different pair of '
+        'questions. Ranks are computed WITHIN each exchange, so a rank of 3 '
+        'means third on that exchange, not third in the world.')
+    if data.get("excluded"):
+        top = list((data.get("exclusion_reasons") or {}).items())[:3]
+        notes.append(
+            f'{data["excluded"]} names were excluded before ranking: '
+            + "; ".join(f'{e_attr(k)} ({v})' for k, v in top)
+            + '. A top thirty drawn from forty survivors is a different object '
+              'from one drawn from three hundred, so the count is published.')
+    if data.get("fallback_markets"):
+        notes.append(
+            '<b>Gate relaxed on '
+            + ", ".join(e_attr(MARKET_LABELS.get(m, m))
+                        for m in data["fallback_markets"])
+            + '.</b> Fewer than '
+            + str(data.get("fallback_floor", 8))
+            + ' names on those exchanges clear the three business tenets, so '
+              'the list there ranks everything eligible instead. It is still a '
+              'quality-and-price ranking, but it is not the tenet-gated list '
+              'the other exchanges show.')
+    for n in (extra_notes or []):
+        notes.append(n)
+    return (
+        '<details class="dalio cmd"><summary>'
+        f'<span class="stg">{e_attr(title)}</span>'
+        f'<span class="muted-ink">top {data.get("top_n", 30)} per exchange &mdash; '
+        f'{data.get("total_eligible", 0)} names ranked</span>'
+        '<span class="muted-ink" style="margin-left:auto">details &#9662;</span>'
+        '</summary><div class="body">'
+        + blocks
+        + "".join(f'<div class="dnote">{n}</div>' for n in notes)
+        + '</div></details>')
+
+
 def _magic_formula_panel(mf: Dict[str, Any]) -> str:
     """The list the Magic Formula actually prescribes, and what to do with it.
 
@@ -2145,6 +2244,30 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     dis_html = _dislocation_panel(screened.get("dislocation_summary") or {})
     sen_html = _sentiment_panel(screened.get("sentiment") or {})
     mf_html = _magic_formula_panel(screened.get("magic_formula") or {})
+    buf_html = _ranked_panel(
+        "Buffett list",
+        "A wonderful business at a fair price, as two rankings: how much the "
+        "business earns on the tangible capital it actually needs, and how much "
+        "cash it throws off against what it costs. Eligibility is the three "
+        "business tenets — the B label — because a list carrying his name that "
+        "includes businesses outside your circle of competence, without a moat, "
+        "or mid-turnaround would not be his list.",
+        screened.get("buffett_ranking") or {})
+    mun_html = _ranked_panel(
+        "Munger list",
+        "Munger's contribution is not a valuation method, it is inversion: "
+        "&ldquo;all I want to know is where I&rsquo;m going to die, so I&rsquo;ll "
+        "never go there.&rdquo; So this ranks return on capital against how many "
+        "of the obvious ways to lose money are ABSENT — earnings that turn into "
+        "cash, book value that is not mostly goodwill, no dangerous leverage, a "
+        "margin that is not eroding, earnings predictable enough to estimate, no "
+        "dilution, no loss years. That second axis is what makes this a "
+        "different list from Buffett&rsquo;s rather than a reordering of it.",
+        screened.get("munger_ranking") or {},
+        ["The inversion score is the share of those checks that could be "
+         "evaluated and came back clean, so a four-year feed is judged on the "
+         "same standard as a ten-year one rather than marked down for its "
+         "provider. The number evaluated travels with each row in the drawer."])
     lyn_html = _lynch_panel(screened.get("lynch_census") or {},
                             screened.get("value_regime") or {},
                             screened.get("rule_of_20") or {},
@@ -2170,7 +2293,8 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
-            .replace("__GATE__", debt_html + sen_html + mf_html + cmd_html
+            .replace("__GATE__", debt_html + sen_html + mf_html + buf_html
+                     + mun_html + cmd_html
                      + lyn_html + rfx_html + dis_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
