@@ -675,9 +675,9 @@ text-transform:uppercase;padding:1px 6px;border-radius:4px;
 border:1px solid var(--line);color:var(--tx3);background:var(--panel)}
 .verdict .tchip.t-up{color:var(--ok);border-color:rgba(63,191,127,.4)}
 .verdict .tchip.t-down{color:var(--bad);border-color:rgba(214,88,72,.4)}
-.pchart{position:relative}
-.pchart svg{width:100%;height:auto;display:block}
-.pchart .hit{cursor:crosshair}
+.pchart,.cchart{position:relative}
+.pchart svg,.cchart svg{width:100%;height:auto;display:block}
+.pchart .hit,.cchart .hit{cursor:crosshair}
 .ptip{position:absolute;top:6px;pointer-events:none;background:var(--panel);
 border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:11.5px;
 line-height:1.5;box-shadow:0 4px 14px rgba(0,0,0,.22);white-space:nowrap;z-index:3}
@@ -713,6 +713,14 @@ border-radius:5px;overflow:hidden}
 .chart .lgd{font-size:10px;color:var(--tx3);display:flex;gap:10px;margin-top:6px;flex-wrap:wrap}
 .chart .lgd i{font-style:normal;display:inline-flex;align-items:center;gap:4px}
 .chart .lgd b{display:inline-block;width:14px;height:2px;border-radius:2px}
+/* The legend swatches for the candle chart carry the SHAPE difference, not
+   just the colour — a reader who cannot separate green from red still learns
+   the rule here, and the chart then obeys it. */
+.chart .lgd b.ck{width:9px;height:13px;border-radius:1px;border:1.4px solid}
+.chart .lgd b.ck.up{border-color:var(--ok);background:var(--panel2)}
+.chart .lgd b.ck.dn{border-color:var(--bad);background:var(--bad)}
+.chart .lgd b.ck.tri{width:0;height:0;border:none;border-left:6px solid transparent;
+border-right:6px solid transparent;border-bottom:9px solid var(--ok);border-radius:0}
 .syn{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--acc);
 border-radius:0 9px 9px 0;padding:12px 15px;margin-bottom:13px;font-size:13px;line-height:1.62}
 .syn .what{color:var(--tx2);margin-bottom:8px}
@@ -954,6 +962,17 @@ function fillPriceCharts(root){
       head.textContent = `${sp.years}y · ${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%`
         + ` · ${row.currency || ''} ${sp.lo} – ${sp.hi}`;
       slot.innerHTML = priceChart(sp, row.currency);
+      // The candlestick view lives in its own slot in the same card fetch, so
+      // opening a drawer costs one request rather than two.
+      const cslot = card.parentElement
+        && card.parentElement.querySelector('[data-candles-for="' + t + '"] .cslot');
+      if(cslot){
+        const ch = sp.ohlc ? candleChart(sp.ohlc, row.currency) : '';
+        cslot.innerHTML = ch || '<div class="cap">This row has no daily bars '
+          + 'stored yet &mdash; the candlestick view needs at least twenty '
+          + 'sessions, and it is written by the same refresh that writes the '
+          + 'price series above.</div>';
+      }
     });
   });
 }
@@ -1001,12 +1020,21 @@ function priceChart(sp, ccy){
     lines+=`<path d="${path(s[0])}" fill="none" stroke="var(--series-${s[1]})"
       stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
   });
+  // The three end labels sit at their own line's last value, which means they
+  // land on top of each other exactly when the averages converge — the moment
+  // the chart is most worth reading. Dodge them apart, dot still on the line.
+  const placed=[];
   SER.forEach(s=>{
     const e=endOf(s[0]); if(!e) return;
+    let ty=e.y-9;
+    while(placed.some(v=>Math.abs(v-ty)<12)) ty+=12;
+    ty=Math.max(padT+10,Math.min(padT+ph-2,ty));
+    placed.push(ty);
     labels+=`<circle cx="${e.x.toFixed(1)}" cy="${e.y.toFixed(1)}" r="4"
         fill="var(--series-${s[1]})" stroke="var(--panel2)" stroke-width="2"/>
-      <text x="${(e.x-7).toFixed(1)}" y="${(e.y-9).toFixed(1)}" font-size="11"
-        font-weight="600" text-anchor="end"
+      <text x="${(e.x-7).toFixed(1)}" y="${ty.toFixed(1)}" font-size="11"
+        font-weight="600" text-anchor="end" stroke="var(--panel2)"
+        stroke-width="3" paint-order="stroke"
         fill="var(--series-${s[1]})">${s[2]}</text>`;
   });
 
@@ -1036,6 +1064,197 @@ function priceChart(sp, ccy){
       fill="transparent"/>
   </svg><div class="ptip" style="display:none"></div></div>`;
 }
+
+// The candlestick chart. Sixty daily bars — the same window the pattern
+// scanner reads, so the marks below can never point at a candle the chart does
+// not draw.
+//
+// Rising and falling candles are told apart TWICE: by colour, and by whether
+// the body is hollow or filled. That is not decoration. Green against red is
+// the one pair that can never pass a colourblind check — measured, the app's
+// own green and red separate by ΔE 7 under deuteranopia, which is inside the
+// band that is only legal WITH a second, non-colour encoding. Hollow-up and
+// filled-down is that encoding, and it happens to be the original Japanese
+// convention, so it costs a reader nothing to learn.
+function candleChart(o, ccy){
+  if(!o || !o.c || o.c.length < 10) return '';
+  const n=o.c.length;
+  let lo=Math.min.apply(null,o.l), hi=Math.max.apply(null,o.h);
+  const span=(hi-lo)||1; lo-=span*0.08; hi+=span*0.12;   // headroom for labels
+  const W=880,H=300,padL=8,padR=78,padT=16,padB=26;
+  const pw=W-padL-padR, ph=H-padT-padB;
+  const step=pw/n, bw=Math.max(2.5,Math.min(11,step*0.62));
+  const X=i=>padL+step*(i+0.5);
+  const Y=v=>padT+ph-(v-lo)/(hi-lo)*ph;
+
+  let grid='';
+  for(let k=0;k<5;k++){
+    const v=lo+(hi-lo)*k/4, y=Y(v);
+    grid+=`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(padL+pw).toFixed(1)}"
+      y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+      <text x="${(padL+pw+6).toFixed(1)}" y="${(y+3.5).toFixed(1)}" font-size="10.5"
+        fill="var(--tx3)">${fmtPx(v)}</text>`;
+  }
+
+  let sticks='';
+  for(let i=0;i<n;i++){
+    const up=o.c[i]>=o.o[i], col=up?'var(--ok)':'var(--bad)';
+    const yh=Y(o.h[i]), yl=Y(o.l[i]);
+    const yo=Y(o.o[i]), yc=Y(o.c[i]);
+    const top=Math.min(yo,yc);
+    // A doji has no body at all. Floored to one pixel so the bar does not
+    // vanish — a session that opened and closed at the same price is
+    // information, and an invisible candle reads as missing data.
+    const hgt=Math.max(1,Math.abs(yc-yo));
+    sticks+=`<line x1="${X(i).toFixed(1)}" y1="${yh.toFixed(1)}"
+        x2="${X(i).toFixed(1)}" y2="${yl.toFixed(1)}" stroke="${col}"
+        stroke-width="1"/>
+      <rect x="${(X(i)-bw/2).toFixed(1)}" y="${top.toFixed(1)}"
+        width="${bw.toFixed(1)}" height="${hgt.toFixed(1)}"
+        fill="${up?'var(--panel2)':col}" stroke="${col}" stroke-width="1.2"/>`;
+  }
+
+  // Where the stop line will sit, so a pattern label can dodge it. The two
+  // collide by construction rather than by accident: the stop IS the low of
+  // the bullish pattern, so its marker and its level are at the same height.
+  const liveStop=((o.marks||[])[0]||{}).stop;
+  const stopY=(liveStop!==null&&liveStop!==undefined&&liveStop>lo&&liveStop<hi)
+    ? Y(liveStop) : null;
+
+  // Pattern markers. Directional only, and each is direct-labelled rather than
+  // relying on a colour key — the label is what makes the chart readable to
+  // someone who cannot separate the two hues at all.
+  // Every marker is drawn, but each pattern NAME is spelled out only once.
+  // A stock that gapped up five sessions running prints five rising windows,
+  // and five copies of the same words stacked on each other is a smear, not
+  // five facts. The triangles still show where each one occurred.
+  let marks='', taken=[], named={};
+  (o.marks||[]).slice(0,6).forEach(mk=>{
+    const i=mk.i; if(i<0||i>=n) return;
+    const label=named[mk.n]?'':mk.n;
+    named[mk.n]=1;
+    const bull=mk.dir==='bullish';
+    const col=bull?'var(--ok)':'var(--bad)';
+    const y=Math.max(padT+8,Math.min(padT+ph-8,
+      bull?Y(o.l[i])+13:Y(o.h[i])-13));
+    const x=X(i);
+    // Nudge a label that would sit on top of one already placed.
+    let ly=bull?y+12:y-12, tries=0;
+    while(taken.some(t=>Math.abs(t.x-x)<58 && Math.abs(t.y-ly)<11) && tries<4){
+      ly+=bull?11:-11; tries++;
+    }
+    // Keep the label inside the plot, and off the stop line. A bullish mark
+    // sits at the low of its candle and the stop IS that low, so the two
+    // collide by construction rather than by accident. Where there is no room
+    // on the marker's own side, the label moves to the other side of the
+    // candle — clamping instead would park it ON the axis or ON the stop line,
+    // and a label squeezed into another element is worse than one that moved.
+    const ceilY=padT+9, floorY=padT+ph-3;
+    if(stopY!==null && Math.abs(ly-stopY)<11) ly=bull?stopY+14:stopY-12;
+    // Flipping to the other side of the candle solves the vertical collision
+    // and creates a horizontal one: the label is centred on the candle it
+    // names, so above the high it lands ON the candle. Flipped labels step
+    // aside instead, to whichever side has more room.
+    let lx=x, anchor='middle';
+    if((bull && ly>floorY) || (!bull && ly<ceilY)){
+      ly=bull?Y(o.h[i])-7:Y(o.l[i])+13;
+      const room=x-padL>pw*0.5;
+      lx=room?x-bw/2-4:x+bw/2+4;
+      anchor=room?'end':'start';
+    }
+    ly=Math.max(ceilY,Math.min(floorY,ly));
+    if(label) taken.push({x:lx,y:ly});
+    const tri=bull
+      ? `${x},${(y-7).toFixed(1)} ${(x-5).toFixed(1)},${(y+1).toFixed(1)} ${(x+5).toFixed(1)},${(y+1).toFixed(1)}`
+      : `${x},${(y+7).toFixed(1)} ${(x-5).toFixed(1)},${(y-1).toFixed(1)} ${(x+5).toFixed(1)},${(y-1).toFixed(1)}`;
+    const solid=mk.st==='confirmed';
+    marks+=`<polygon points="${tri}" fill="${solid?col:'var(--panel2)'}"
+        stroke="${col}" stroke-width="1.5"
+        ${mk.st==='failed'?'opacity=".45"':''}/>
+      <text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" font-size="9.5"
+        font-weight="600" text-anchor="${anchor}" fill="${col}"
+        stroke="var(--panel2)" stroke-width="3" paint-order="stroke"
+        ${mk.st==='failed'?'opacity=".55"':''}>${esc(label)}</text>`;
+  });
+
+  // The invalidation level, drawn where it belongs — on the price axis, so it
+  // can be read against the candles instead of looked up as a number.
+  let stopline='';
+  if(stopY!==null){
+    const y=stopY, live={stop:liveStop};
+    stopline=`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(padL+pw).toFixed(1)}"
+        y2="${y.toFixed(1)}" stroke="var(--warn)" stroke-width="1.5"
+        stroke-dasharray="5 4"/>
+      <text x="${(padL+4)}" y="${(y-4).toFixed(1)}" font-size="9.5"
+        font-weight="600" fill="var(--warn)" stroke="var(--panel2)"
+        stroke-width="3" paint-order="stroke">stop ${fmtPx(live.stop)}</text>`;
+  }
+
+  let xlab='';
+  const dt=k=>{ const b=Date.parse(o.d0);
+    return isNaN(b)?'':new Date(b+(o.dx[k]||0)*864e5).toISOString().slice(0,10); };
+  [[0,'start'],[Math.floor((n-1)/2),'middle'],[n-1,'end']].forEach(t=>{
+    const s=dt(t[0]); if(!s) return;
+    xlab+=`<text x="${X(t[0]).toFixed(1)}" y="${H-7}" font-size="10.5"
+      fill="var(--tx3)" text-anchor="${t[1]}">${esc(s)}</text>`;
+  });
+
+  const data=JSON.stringify({o:o.o,h:o.h,l:o.l,c:o.c,d0:o.d0,dx:o.dx,
+    marks:o.marks||[],ccy:ccy||''});
+  return `<div class="cchart"><svg viewBox="0 0 ${W} ${H}" role="img"
+    data-candles='${data.replace(/'/g,"&#39;")}'
+    aria-label="Candlestick chart of the last ${n} trading sessions">
+    ${grid}${stopline}${sticks}${marks}${xlab}
+    <g class="cross" style="display:none">
+      <line y1="${padT}" y2="${padT+ph}" stroke="var(--tx3)" stroke-width="1"
+        stroke-dasharray="3 3"/>
+    </g>
+    <rect class="hit" x="${padL}" y="${padT}" width="${pw}" height="${ph}"
+      fill="transparent"/>
+  </svg><div class="ptip" style="display:none"></div></div>`;
+}
+
+// The candle hover layer, kept separate from the line-chart one because the
+// payload and the readout are different: OHLC for four numbers, not a
+// crosshair against three interpolated series.
+document.addEventListener('mousemove', function(ev){
+  const svg=ev.target.closest ? ev.target.closest('.cchart svg') : null;
+  // Clear every OTHER candle chart first, or a tooltip left behind on one
+  // drawer reads as a live value on the next.
+  document.querySelectorAll('.cchart').forEach(w=>{
+    if(svg && w.contains(svg)) return;
+    const c=w.querySelector('.cross'), t=w.querySelector('.ptip');
+    if(c) c.style.display='none';
+    if(t) t.style.display='none';
+  });
+  if(!svg) return;
+  const wrap=svg.parentElement;
+  let d; try{ d=JSON.parse(svg.getAttribute('data-candles')); }catch(e){ return; }
+  if(!d || !d.c) return;
+  const box=svg.getBoundingClientRect();
+  const W=880,H=300,padL=8,padR=78,padT=16,padB=26;
+  const pw=W-padL-padR, ph=H-padT-padB, n=d.c.length, step=pw/n;
+  const sx=(ev.clientX-box.left)/box.width*W;
+  let i=Math.floor((sx-padL)/step);
+  i=Math.max(0,Math.min(n-1,i));
+  const X=k=>padL+step*(k+0.5);
+  const g=svg.querySelector('.cross');
+  g.style.display='';
+  g.querySelector('line').setAttribute('x1',X(i).toFixed(1));
+  g.querySelector('line').setAttribute('x2',X(i).toFixed(1));
+  const b=Date.parse(d.d0);
+  const when=isNaN(b)?'':new Date(b+(d.dx[i]||0)*864e5).toISOString().slice(0,10);
+  const up=d.c[i]>=d.o[i];
+  const hit=(d.marks||[]).filter(m=>i>=m.i-(m.b||1)+1 && i<=m.i);
+  const tip=wrap.querySelector('.ptip');
+  tip.innerHTML=`<b>${esc(when)}</b>`
+    +`<span>O ${fmtPx(d.o[i])} &nbsp; H ${fmtPx(d.h[i])}</span>`
+    +`<span>L ${fmtPx(d.l[i])} &nbsp; C ${fmtPx(d.c[i])}</span>`
+    +`<span style="color:${up?'var(--ok)':'var(--bad)'}">${up?'rising (hollow)':'falling (filled)'}</span>`
+    +hit.map(m=>`<span><b>${esc(m.n)}</b> · ${esc(m.st)}</span>`).join('');
+  tip.style.display='';
+  tip.style.left=Math.max(0,Math.min(72,X(i)/W*100))+'%';
+});
 
 // One delegated listener rather than one per chart: drawers are built and
 // discarded as rows are opened, and per-chart handlers would leak with them.
@@ -1273,6 +1492,19 @@ function technicalPanel(r){
     trend.push('MACD histogram '+(t.macd>=0?'positive':'negative'));
   if(t.vol!==null&&t.vol!==undefined)
     trend.push('volume at '+t.vol.toFixed(2)+'× its own baseline');
+  // The candlestick chart, then the reading of it. Picture first: the patterns
+  // named in the card below are marked on these candles, so the reader can see
+  // the thing being described before reading the description.
+  if(r.has_series){
+    cards+=`<div class="chart wide" data-candles-for="${esc(r.ticker)}">
+      <h5>Candlestick chart &mdash; last 60 sessions
+      <span>hollow = rising &middot; filled = falling</span></h5>
+      <div class="cslot"><div class="cap">loading daily bars&hellip;</div></div>
+      <div class="lgd"><i><b class="ck up"></b>rising session (hollow body)</i>
+      <i><b class="ck dn"></b>falling session (filled body)</i>
+      <i><b class="ck tri"></b>pattern found &mdash; solid marker means the next
+      session confirmed it, outlined means it did not</i></div></div>`;
+  }
   cards+=candleCard(r);
   cards+=`<div class="chart wide"><h5>Tests against their thresholds
     <span>${esc(d.summary||'')}</span></h5>${testBars(d.tests||[])}

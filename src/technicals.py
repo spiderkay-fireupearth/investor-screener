@@ -12,8 +12,19 @@ from __future__ import annotations
 
 from typing import Dict, Optional, Any
 
+import datetime as _dt
+import math as _math
+
 import numpy as np
 import pandas as pd
+
+
+def _sig(x: float, digits: int = 4) -> float:
+    """Round to significant figures, so a $340 stock and a HK$0.86 one both keep
+    the precision a chart actually needs without either carrying dead digits."""
+    if x is None or x != x or x == 0 or _math.isinf(x):
+        return 0.0 if x == 0 else x
+    return round(x, -int(_math.floor(_math.log10(abs(x)))) + (digits - 1))
 
 
 def _last(s: pd.Series) -> Optional[float]:
@@ -69,6 +80,10 @@ def obv(df: pd.DataFrame) -> pd.Series:
 
 SPARK_POINTS = 100
 SPARK_YEARS = 2
+# Sixty sessions of candles — about three months. Matched deliberately to the
+# scanner's own scan_bars: a chart showing bars the scanner never looked at
+# would invite "why is there no marker on that obvious hammer?".
+CANDLE_BARS = 60
 
 
 def sparkline(df: pd.DataFrame, points: int = SPARK_POINTS,
@@ -135,7 +150,82 @@ def sparkline(df: pd.DataFrame, points: int = SPARK_POINTS,
         "lo": round(float(window.min()), 4), "hi": round(float(window.max()), 4),
         "points": len(px),
         "years": round(len(window) / 252.0, 1),
+        # The daily bars for the candlestick chart, which is a DIFFERENT view of
+        # the same instrument and cannot reuse the series above: candles need
+        # open/high/low/close, they need real daily bars rather than a sampled
+        # every-fifth-day line, and they need a window short enough that a body
+        # is wider than a hairline. Sixty sessions is that window, and it is
+        # also exactly what the pattern scanner looks at, so the chart and the
+        # verdict can never disagree about which bars they are describing.
+        "ohlc": candle_series(df),
     }
+
+
+def candle_series(df: pd.DataFrame, bars: int = CANDLE_BARS
+                  ) -> Optional[Dict[str, Any]]:
+    """Daily OHLC for the candle chart, plus the patterns found in that window.
+
+    Stored as parallel arrays rather than a list of objects: the same numbers
+    as `[{"o":..,"h":..,"l":..,"c":..}, ...]` cost roughly three times the bytes
+    in key names alone, and this file is fetched per market for hundreds of
+    companies.
+
+    Prices are kept REAL, not normalised to 100 like the two-year line. A
+    candlestick chart is read against actual price levels — the stop-loss the
+    scanner quotes is a price, and it has to land on the same axis.
+    """
+    need = ("Open", "High", "Low", "Close")
+    if df is None or any(k not in df for k in need):
+        return None
+    sub = df[list(need)].astype(float).dropna()
+    if len(sub) < 20:
+        return None
+    sub = sub.iloc[-bars:]
+
+    # Four significant figures, not four decimals. A US stock at 34.6288 does
+    # not need the last two digits to draw a body a few pixels tall, and a Hong
+    # Kong stock at 0.8624 would lose its precision entirely under a fixed
+    # 2-decimal rule. Significant figures serve both, and roughly halve the file.
+    def col(name):
+        return [_sig(float(v), 4) for v in sub[name]]
+
+    dates = [str(x)[:10] for x in sub.index]
+    # Dates as a base plus day offsets. Sixty ISO strings cost about 780 bytes
+    # per company; sixty small integers cost about 150. Multiplied by every row
+    # in a market shard, that is the difference between a chart that opens
+    # instantly on a phone and one that stalls.
+    base = _dt.date.fromisoformat(dates[0]) if dates[0] else None
+    offs = ([(_dt.date.fromisoformat(d) - base).days for d in dates]
+            if base else list(range(len(dates))))
+    out = {"d0": dates[0], "dx": offs, "o": col("Open"), "h": col("High"),
+           "l": col("Low"), "c": col("Close"), "marks": []}
+    # The patterns, positioned by their index INTO THIS WINDOW so the chart can
+    # mark the exact candle. Detection still runs on the full history, because
+    # the trend test needs bars that precede the window.
+    try:
+        from . import candles as _cd
+        scan = _cd.detect(df)
+        if scan.get("available"):
+            for s in scan["signals"]:
+                # Only DIRECTIONAL patterns are marked. A choppy stock can print
+                # twenty indecision candles in sixty sessions, and twenty
+                # markers is not twenty pieces of information — it is a chart
+                # you cannot read. The indecision count still reaches the reader
+                # through the card's verdict, which is where it belongs.
+                if s["direction"] == "neutral":
+                    continue
+                i = len(dates) - 1 - int(s["bars_ago"])
+                if 0 <= i < len(dates):
+                    out["marks"].append({
+                        "i": i, "n": s["name"], "dir": s["direction"],
+                        "st": s["state"], "b": s["bars"],
+                        "stop": (_sig(float(s["stop"]), 4)
+                                 if s.get("stop") is not None else None),
+                    })
+            out["marks"] = out["marks"][:10]           # newest first, already sorted
+    except Exception:                                  # noqa: BLE001
+        pass
+    return out
 
 
 def compute(df: pd.DataFrame,

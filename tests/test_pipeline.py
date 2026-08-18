@@ -4549,6 +4549,88 @@ def test_candlestick_patterns():
           "function trendPhrase(" in rn.TEMPLATE and "after an uptrend" in rn.TEMPLATE,
           True)
 
+    # ---- the CHART, which is what the request actually asked for ------------
+    # A list of pattern names is not a candlestick chart. The drawn candles
+    # need open/high/low/close per session, which the two-year sampled line
+    # does not carry and cannot be derived from.
+    rows, p = run_down(40)
+    for _ in range(30):
+        p *= 1.012
+        rows.append([p * 0.995, p * 1.012, p * 0.99, p])
+    df = frame(rows)
+    sp = ta.sparkline(df)
+    o = sp.get("ohlc")
+    check("the sparkline payload carries daily OHLC bars", bool(o), True)
+    for k in ("o", "h", "l", "c"):
+        check(f"with the {k} series", len(o[k]), min(ta.CANDLE_BARS, len(rows)))
+    check("the window matches the scanner's, so the chart cannot show a bar "
+          "the scan never read", ta.CANDLE_BARS, cd.DEFAULTS["scan_bars"])
+    check("a high is never below its own low",
+          all(h >= l for h, l in zip(o["h"], o["l"])), True)
+    check("prices stay REAL, not indexed to 100 like the two-year line",
+          abs(o["c"][-1] - rows[-1][3]) < rows[-1][3] * 0.001, True)
+
+    # Payload shape: this file is fetched per market for hundreds of rows, so
+    # the encoding is part of the design, not an implementation detail.
+    check("dates are a base plus day offsets, not sixty ISO strings",
+          "d0" in o and "dx" in o and isinstance(o["dx"][0], int), True)
+    check("the offsets start at zero", o["dx"][0], 0)
+    check("and increase", o["dx"][-1] > o["dx"][0], True)
+    import json as _json
+    check("which keeps one row's bars under 2.5kB",
+          len(_json.dumps(o, separators=(",", ":"))) < 2500, True)
+
+    # Significant figures, not decimal places: the app covers a $340 US stock
+    # and a HK$0.86 one, and a fixed 2dp rule destroys the second.
+    check("a penny price keeps four significant figures",
+          ta._sig(0.86241234, 4), 0.8624)
+    check("and a large one is not padded with dead digits",
+          ta._sig(341.28714, 4), 341.3)
+    check("zero survives", ta._sig(0.0, 4), 0.0)
+
+    # Only directional patterns are marked. Twenty indecision markers is a
+    # chart you cannot read.
+    choppy = [[q * 1.0, q * 1.06, q * 0.94, q * 1.002]
+              for q in [50.0 + 0.01 * k for k in range(80)]]
+    oc = ta.sparkline(frame(choppy))["ohlc"]
+    check("indecision candles are not marked on the chart",
+          [m for m in oc["marks"] if m["dir"] == "neutral"], [])
+
+    marks = o["marks"]
+    if marks:
+        check("marks index into the drawn window, not the full history",
+              all(0 <= m["i"] < len(o["c"]) for m in marks), True)
+        check("and carry their confirmation state",
+              all(m["st"] in ("confirmed", "unconfirmed", "failed")
+                  for m in marks), True)
+
+    html = rn.TEMPLATE
+    check("the drawer draws a candlestick chart", "function candleChart(" in html, True)
+    check("with a slot fetched alongside the price series",
+          "data-candles-for=" in html, True)
+    check("rising and falling are told apart by FILL as well as colour, "
+          "because green against red can never pass a colourblind check",
+          "up?'var(--panel2)':col" in html, True)
+    check("and the legend teaches that rule",
+          "rising session (hollow body)" in html, True)
+    check("a doji still draws — an invisible candle reads as missing data",
+          "Math.max(1,Math.abs(yc-yo))" in html, True)
+    check("the stop is drawn on the price axis, not just quoted",
+          "stop ${fmtPx(live.stop)}" in html, True)
+    check("each pattern name is labelled once, not once per occurrence",
+          "named[mk.n]" in html, True)
+    check("labels get a surface halo so they stay legible over candles",
+          'paint-order="stroke"' in html, True)
+    check("the candle chart has its own hover handler",
+          "data-candles" in html and ".cchart svg" in html, True)
+    check("and does NOT wear the line chart's class, whose handler would "
+          "parse a payload that is not there",
+          'class="pchart cchart"' in html, False)
+    # The price chart's own end labels land on each other precisely when the
+    # two averages converge, which is when the chart is most worth reading.
+    check("the price chart's end labels dodge each other",
+          "while(placed.some(v=>Math.abs(v-ty)<12)) ty+=12;" in html, True)
+
     # Too little history refuses rather than guessing.
     short = cd.detect(frame([[10, 11, 9, 10]] * 8))
     check("a short series produces no scan", short["available"], False)
