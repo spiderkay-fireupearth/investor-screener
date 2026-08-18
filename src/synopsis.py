@@ -46,6 +46,10 @@ SYNOPSIS_FIELDS = (
     "growth_plus_yield_to_pe", "eps_vs_5y_avg", "net_cash_per_share",
     "pe_ex_cash", "insider_ownership", "institutional_ownership",
     "listing_age_years", "pct_above_10y_low",
+    "buffett_b_label", "buffett_tenets_summary", "owner_earnings_yield",
+    "owner_earnings_to_net_income", "intrinsic_value_per_share",
+    "margin_of_safety", "net_margin_ttm", "gross_margin_ttm",
+    "one_dollar_premise",
 )
 
 MAX_DESCRIPTION_CHARS = 260
@@ -245,6 +249,41 @@ def _price_action(m: Dict[str, Any]) -> str:
     return s + "."
 
 
+def _buffett(m: Dict[str, Any]) -> List[str]:
+    """The B label and the valuation, said in words rather than in ratios."""
+    out = []
+    if _g(m, "buffett_b_label"):
+        out.append("Labelled B: it clears all three of Buffett's business "
+                   "tenets — inside the circle of competence declared in "
+                   "config, showing the footprint of a durable moat, and with "
+                   "an operating history steady enough to project.")
+    # The ratio recital is deliberately NOT repeated here — owner earnings
+    # yield, conversion and the one-dollar premise are all in the metrics grid
+    # a few centimetres below. A synopsis that restates the table is noise. The
+    # one-dollar premise earns a sentence only when it FAILS, because a dollar
+    # retained that did not become a dollar of value is the finding.
+    odp = _g(m, "one_dollar_premise")
+    if odp is not None and odp < 1.0:
+        out.append(f"Buffett's one-dollar test fails here: each dollar the "
+                   f"company retained over five years turned into ${odp:.2f} "
+                   "of market value, so the earnings would have been worth "
+                   "more paid out than reinvested.")
+    mos, iv = _g(m, "margin_of_safety"), _g(m, "intrinsic_value_per_share")
+    if mos is not None and iv is not None:
+        if mos > 0:
+            out.append(f"A two-stage discounted cash flow on owner earnings "
+                       f"puts intrinsic value near {iv:,.2f} a share, a "
+                       f"{_pct(mos)} margin of safety — but a DCF is an opinion "
+                       "about the far future dressed as arithmetic, and most of "
+                       "that value sits in the terminal figure.")
+        else:
+            out.append(f"A two-stage discounted cash flow on owner earnings "
+                       f"puts intrinsic value near {iv:,.2f} a share, which is "
+                       f"BELOW the current price — no margin of safety on these "
+                       "assumptions.")
+    return out
+
+
 def _category(m: Dict[str, Any]) -> List[str]:
     """Lynch's label, and the warning that only a label makes possible."""
     out = []
@@ -350,6 +389,7 @@ def build(res: Dict[str, Any], metrics: Dict[str, Any],
         s = fn(m)
         if s:
             numbers.append(s)
+    numbers.extend(_buffett(m))
     numbers.extend(_category(m))
     numbers.extend(_flags(res))
 

@@ -39,6 +39,9 @@ except ImportError:                       # pragma: no cover
 INCOME_MAP: Dict[str, List[str]] = {
     "revenue": ["Total Revenue", "Operating Revenue"],
     "gross_profit": ["Gross Profit"],
+    "sga_expense": ["Selling General And Administration",
+                    "Selling General Administrative",
+                    "General And Administrative Expense"],
     "operating_income": ["Operating Income", "EBIT", "Total Operating Income As Reported"],
     "pretax_income": ["Pretax Income"],
     "net_income": ["Net Income", "Net Income Common Stockholders",

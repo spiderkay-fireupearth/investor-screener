@@ -41,6 +41,7 @@ from . import commodities as cmd
 from . import reflexivity as rfx
 from . import dislocation as dis
 from . import events as evt
+from . import buffett as bf
 
 log = logging.getLogger("screener")
 
@@ -553,8 +554,27 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         log.warning("debt-cycle stage failed: %s", e)
         debt_state = {"enabled": False, "reason": f"failed: {e}"}
 
+    # Buffett's own market-level gauge. Two FRED series with different units,
+    # so the provider reads the units rather than assuming them, and the whole
+    # thing refuses to publish a figure it cannot defend.
+    try:
+        buf_ind = bf.buffett_indicator(fred)
+        if buf_ind.get("available"):
+            log.info("Buffett Indicator: %.1f%% — %s", buf_ind["pct"],
+                     buf_ind["verdict"])
+            if buf_ind.get("units_assumed"):
+                log.warning("FRED units metadata unavailable — the Buffett "
+                            "Indicator used assumed millions/billions scaling")
+        else:
+            log.warning("Buffett Indicator unavailable: %s",
+                        buf_ind.get("reason"))
+    except Exception as e:                           # noqa: BLE001
+        log.warning("Buffett Indicator failed: %s", e)
+        buf_ind = {"available": False, "reason": f"failed: {e}"}
+
     screened = sc.screen_universe(records, metrics_by_ticker, thresholds, macro,
                                   cycle=cycle_state)
+    screened["buffett_indicator"] = buf_ind
     screened["debt_cycle"] = debt_state
 
     # Rogers: "Why not just stop after that analysis and buy or sell the

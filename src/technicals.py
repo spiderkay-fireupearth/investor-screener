@@ -160,6 +160,12 @@ def compute(df: pd.DataFrame,
     out["low_5y"] = low5
     out["pct_above_5y_low"] = (price - low5) / low5 if low5 else None
     out["years_of_price_history"] = round(n / 252, 1)
+    # The price five years ago, for Buffett's one-dollar test: what the market
+    # capitalisation was then is half of "did a dollar retained become a dollar
+    # of value?" and nothing else on the page carries it.
+    out["price_5y_ago"] = float(close.iloc[-1260]) if n > 1260 else None
+    out["return_5y"] = (float(price / out["price_5y_ago"] - 1)
+                        if out["price_5y_ago"] else None)
 
     # Schloss's false-bottom check. A stock down from 125 to 60 looks like a
     # bargain until you notice it traded at 20 three years ago: the 52-week

@@ -1079,8 +1079,8 @@ def test_soros_and_rogers_from_source():
 def test_buffett_additions_and_graham():
     """New value metrics, the two Buffett additions, and the Graham screen."""
     th = yaml.safe_load(open("config/thresholds.yml"))
-    check("Buffett now has 8 tests", len(th["buffett"]["tests"]), 8)
-    check("Buffett bar is 6 of 8", th["buffett"]["min_tests_passed"], 6)
+    check("Buffett now has 16 tests", len(th["buffett"]["tests"]), 16)
+    check("Buffett bar is 11 of 16", th["buffett"]["min_tests_passed"], 11)
     check("Graham has 9 tests", len(th["graham"]["tests"]), 9)
     check("renderer shows 11 frameworks", len(rn.FRAMEWORKS), 11)
 
@@ -1185,7 +1185,7 @@ def test_buffett_additions_and_graham():
     out = sc.screen_universe([rec], {"Q": m}, th, {}, cycle=None)
     fw = out["results"]["Q"]["frameworks"]
     check("Graham is evaluated in the pipeline", "graham" in fw, True)
-    check("Buffett reports 8 tests in the pipeline", fw["buffett"]["n_total"], 8)
+    check("Buffett reports 16 tests in the pipeline", fw["buffett"]["n_total"], 16)
     check("a fund is ineligible for Graham, not failed",
           bool(sc.screen_universe(
               [CompanyRecord(ticker="ETF", market="US", quote_type="ETF",
@@ -2087,7 +2087,7 @@ def test_synopsis():
     check("and the RSI in words, not just a number",
           "RSI at 31" in text and "oversold" in text, True)
     check("the description is reported, not generated", s["what_source"], "feed")
-    check("it is brief", len(s["numbers"]) <= 7, True)
+    check("it is brief", len(s["numbers"]) <= 10, True)
     check("the one-liner fits a tooltip", len(s["one_liner"]) < 100, True)
 
     # ---- the parity test that matters -------------------------------------
@@ -2331,10 +2331,12 @@ def test_lynch_categories():
     check("the panel says which yardstick was used",
           "stalwart ratio" in (t_pegy.get("note") or ""), True)
 
-    fast = {"lynch_category": "fast_grower", "history_years": 8,
-            "peg_ratio": 0.8}
-    check("a fast grower still runs on PEG",
-          sc.evaluate_test("valuation", val, fast)["metric"], "peg_ratio")
+    fast = {"lynch_category": "fast_grower", "history_years": 5,
+            "peg_ratio_lynch": 0.8}
+    t_fast = sc.evaluate_test("valuation", val, fast)
+    check("a fast grower still runs on PEG", t_fast["metric"], "peg_ratio_lynch")
+    check("and five years of statements is now enough to run it",
+          t_fast["result"], True)
 
     # --- not applicable is not a failure ------------------------------------
     # Every non-category field is supplied, so the only tests leaving the
@@ -2494,6 +2496,396 @@ def test_schloss_deep_value():
           "15–20%" in panel, True)
 
 
+def test_buffett_owner_earnings_and_b_label():
+    """Owner earnings, the DCF and its refusals, and the three business tenets."""
+    from src import buffett as bf
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    bcfg = th["buffett"]
+
+    # --- owner earnings ------------------------------------------------------
+    ys = [mkyear(2025 - i, revenue=1000.0 - 50 * i, net_income=100.0,
+                 depreciation_amortization=60.0, capex=80.0,
+                 current_assets=400.0, current_liabilities=200.0,
+                 cash_and_equivalents=100.0, shares_diluted=100.0)
+          for i in range(8)]
+    oe = bf.owner_earnings(ys)
+    check("owner earnings are computed", oe["available"], True)
+    check("maintenance capex never exceeds total capex",
+          oe["maintenance_capex"] <= oe["capex_total"], True)
+    check("the more conservative estimate is the one used",
+          oe["maintenance_capex"] >= min(60.0, 80.0), True)
+    check("and the method is named", bool(oe["maintenance_method"]), True)
+    check("Buffett's own caveat travels with the number",
+          "must be a guess" in oe["caveat"], True)
+    check("owner earnings sit below reported earnings plus depreciation",
+          oe["owner_earnings"] < oe["net_income"] + oe["depreciation"], True)
+
+    check("no depreciation line means no owner earnings, not a guess",
+          bf.owner_earnings([mkyear(2025, net_income=100.0, capex=10.0)]
+                            )["available"], False)
+    check("and no capex line likewise",
+          bf.owner_earnings([mkyear(2025, net_income=100.0,
+                                    depreciation_amortization=10.0)
+                             ])["available"], False)
+
+    # --- the discounted cash flow, and what it refuses to do ----------------
+    dcf = bcfg["intrinsic_value"]
+    v = bf.intrinsic_value(2.0, 0.08, 0.10, dcf)
+    check("a DCF runs on positive owner earnings", v["available"], True)
+    check("and returns a per-share value above zero", v["value_per_share"] > 0, True)
+    check("the discount rate used is reported", v["discount_rate"], 0.10)
+    check("so is the share of value sitting in the terminal figure",
+          0 < v["terminal_share"] < 1, True)
+    check("and the caveat says so out loud",
+          "terminal" in v["caveat"], True)
+    # Growth is capped: an unsustainable rate must not be extrapolated for a
+    # decade, which is the classic way a DCF produces a nonsense number.
+    fast = bf.intrinsic_value(2.0, 0.60, 0.10, dcf)
+    check("a 60% growth rate is capped, not projected",
+          fast["growth_used"], dcf["growth_cap"])
+    check("and the capping is flagged", fast["growth_capped"], True)
+    check("a loss-making business gets no DCF at all",
+          bf.intrinsic_value(-1.0, 0.08, 0.10, dcf)["available"], False)
+    check("and the refusal explains itself",
+          "not a valuation" in
+          bf.intrinsic_value(-1.0, 0.08, 0.10, dcf)["reason"], True)
+    check("no growth history means no projection",
+          bf.intrinsic_value(2.0, None, 0.10, dcf)["available"], False)
+    # A near-zero discount rate must not produce an infinite value.
+    zero = bf.intrinsic_value(2.0, 0.08, 0.001, dcf)
+    check("the discount rate is floored so the value stays finite",
+          zero["discount_rate"], dcf["min_discount_rate"])
+    check("and the terminal growth stays below it",
+          zero["terminal_growth"] < zero["discount_rate"], True)
+    check("a higher discount rate always gives a lower value",
+          bf.intrinsic_value(2.0, 0.08, 0.14, dcf)["value_per_share"]
+          < v["value_per_share"], True)
+
+    check("margin of safety is the discount to value",
+          round(bf.margin_of_safety(75.0, 100.0), 4), 0.25)
+    check("a price above value gives a negative margin",
+          bf.margin_of_safety(120.0, 100.0) < 0, True)
+    check("and a nonsense value gives none at all",
+          bf.margin_of_safety(75.0, 0.0), None)
+
+    # --- the B label ---------------------------------------------------------
+    tcfg = bcfg["business_tenets"]
+    good = {"gross_margin_ttm": 0.62, "gross_margin_cv": 0.05,
+            "roic_5y_avg": 0.22, "return_on_net_tangible_assets": 0.45,
+            "roe_years_above_15": 10, "roe_years_evaluated": 10,
+            "loss_years_in_10": 0, "loss_years_in_3": 0, "eps_cv_5y": 0.12,
+            "listing_age_years": 42, "history_years": 10,
+            "lynch_category": "stalwart"}
+    t = bf.business_tenets(good, "Consumer Defensive", "Beverages", tcfg)
+    check("a wide-moat, steady, in-circle business is labelled B", t["label"], "B")
+    check("and the summary names all three tenets",
+          all(k in t["summary"] for k in ("competence", "returns", "steady")), True)
+    check("the moat evidence is itemised, not asserted",
+          len(t["moat"]["evidence"]) >= 4, True)
+    check("with the caveat that these are footprints, not the moat",
+          "footprints" in t["moat"]["caveat"].lower(), True)
+
+    # Each tenet can veto on its own.
+    # Outside the list AND without a strong moat: no admission.
+    weak = dict(good, gross_margin_ttm=0.22, roic_5y_avg=0.08,
+                return_on_net_tangible_assets=0.09)
+    out_of_circle = bf.business_tenets(
+        weak, "Aerospace", "Aerospace & Defense",
+        {**tcfg, "circle_of_competence": ["Consumer Defensive"]})
+    check("outside the declared circle there is no B", out_of_circle["label"], None)
+    check("and it says whose declaration that was",
+          "declared in config" in out_of_circle["circle"]["why"], True)
+    # "Aerospace" must not be caught by the "space" disruption word — that is a
+    # substring, not an industry, and mature manufacturers were being excluded.
+    check("aerospace is not mistaken for a disruption zone",
+          out_of_circle["history"]["ok"], True)
+
+    # The high-barrier route: outside the list, but every moat marker holds.
+    via_moat = bf.business_tenets(
+        good, "Aerospace", "Aerospace & Defense",
+        {**tcfg, "circle_of_competence": ["Consumer Defensive"]})
+    check("a genuine high-barrier business is admitted to the circle",
+          via_moat["circle"]["ok"], True)
+    check("and is labelled as having come in that way",
+          via_moat["circle"]["via_moat"], True)
+    check("the row says so in words",
+          "high-barrier route" in via_moat["circle"]["why"], True)
+    check("that route needs EVERY marker, not a majority",
+          bf.business_tenets(
+              dict(good, return_on_net_tangible_assets=0.09), "Aerospace",
+              "Aerospace & Defense",
+              {**tcfg, "circle_of_competence": ["Consumer Defensive"]}
+          )["circle"]["ok"], False)
+    check("and it can be switched off entirely",
+          bf.business_tenets(
+              good, "Aerospace", "Aerospace & Defense",
+              {**tcfg, "circle_of_competence": ["Consumer Defensive"],
+               "admit_on_strong_moat": False})["circle"]["ok"], False)
+
+    thin = dict(good, gross_margin_ttm=0.18, roic_5y_avg=0.06,
+                return_on_net_tangible_assets=0.05, roe_years_above_15=1)
+    check("a commodity business gets no B",
+          bf.business_tenets(thin, "Consumer Defensive", "Beverages",
+                             tcfg)["label"], None)
+
+    lossy = dict(good, loss_years_in_10=2, loss_years_in_3=1)
+    r_lossy = bf.business_tenets(lossy, "Consumer Defensive", "Beverages", tcfg)
+    check("loss years break the consistent-history tenet", r_lossy["label"], None)
+    check("and the reason is specific",
+          any("loss" in x for x in r_lossy["history"]["reasons"]), True)
+
+    ta_ = dict(good, lynch_category="turnaround")
+    check("a turnaround is excluded by name",
+          bf.business_tenets(ta_, "Consumer Defensive", "Beverages",
+                             tcfg)["label"], None)
+    check("a disruption-zone industry is excluded too",
+          bf.business_tenets(good, "Healthcare", "Biotechnology",
+                             tcfg)["label"], None)
+    young = dict(good, listing_age_years=4)
+    check("and so is a business too young to have been tested",
+          bf.business_tenets(young, "Consumer Defensive", "Beverages",
+                             tcfg)["label"], None)
+
+    # The circle of competence is never inferred. With nothing declared, the
+    # tenet must stand aside and SAY it is standing aside.
+    undeclared = bf.business_tenets(good, "Anything", "At all",
+                                    {**tcfg, "circle_of_competence": []})
+    check("with no circle declared the tenet does not bite",
+          undeclared["circle"]["ok"], True)
+    check("but the row says the tenet is untested",
+          "not being tested" in undeclared["circle"]["why"], True)
+    check("and points at the file to edit",
+          "thresholds.yml" in undeclared["circle"]["why"], True)
+
+    # --- the metrics behind the new tests ------------------------------------
+    rec = CompanyRecord(ticker="BRK", market="US", currency="USD",
+                        sector="Consumer Defensive", industry="Beverages")
+    rec.years = [mkyear(2025 - i, revenue=1000.0, gross_profit=620.0,
+                        sga_expense=200.0, net_income=180.0,
+                        eps_diluted=1.8, shares_diluted=100.0,
+                        total_equity=600.0, total_assets=1100.0,
+                        total_debt=300.0, long_term_debt=250.0,
+                        short_term_debt=50.0, cash_and_equivalents=200.0,
+                        current_assets=500.0, current_liabilities=250.0,
+                        operating_income=300.0, pretax_income=280.0,
+                        depreciation_amortization=50.0, capex=40.0,
+                        cfo=230.0, dividends_paid=-60.0) for i in range(8)]
+    rec.price, rec.market_cap = 30.0, 3000.0
+    rec.first_trade_date = "1980-01-02"
+    rec.technicals = {"price_5y_ago": 15.0}
+    m = mx.compute_metrics(rec)
+    check("net margin is computed", m["net_margin_ttm"], 0.18)
+    check("SG&A is measured against gross profit, not revenue",
+          round(m["sga_to_gross_profit"], 4), round(200.0 / 620.0, 4))
+    check("debt payoff is stated in years of earnings",
+          round(m["debt_payoff_years"], 4), round(250.0 / 180.0, 4))
+    check("capex is measured against net income",
+          round(m["capex_to_net_income"], 4), round(40.0 / 180.0, 4))
+    check("owner earnings reach the metrics", m["owner_earnings"] is not None, True)
+    check("as a per-share figure too",
+          m["owner_earnings_per_share"] is not None, True)
+    # 5 years of retained earnings = 5 x (180 - 60) = 600; market cap went from
+    # 15 x 100 = 1500 to 30 x 100 = 3000, so 1500 of value on 600 retained.
+    check("retained earnings over five years are summed", m["retained_earnings_5y"], 600.0)
+    check("against the change in market value", m["market_cap_change_5y"], 1500.0)
+    check("giving the one-dollar premise", m["one_dollar_premise"], 2.5)
+
+    # --- end to end ----------------------------------------------------------
+    out = sc.screen_universe([rec], {"BRK": m}, th,
+                             {"us_10y": 4.5, "_enabled": True}, cycle=None)
+    res = out["results"]["BRK"]
+    check("the discount rate is the long bond plus a premium",
+          round(out["buffett_valuation"]["discount_rate"], 4), 0.09)
+    check("the risk-free rate used is reported",
+          out["buffett_valuation"]["risk_free_pct"], 4.5)
+    check("the B label is attached in the pipeline",
+          m["buffett_b_label"], "B")
+    check("with its evidence", bool(m["business_tenets"]["moat"]["evidence"]), True)
+    fw = res["frameworks"]["buffett"]
+    names = {t["name"]: t for t in fw["tests"]}
+    check("the margin-of-safety test is present", "margin_of_safety" in names, True)
+    check("the one-dollar premise is scored", names["one_dollar_premise"]["value"], 2.5)
+    check("and overheads against gross profit",
+          names["overhead_discipline"]["value"] is not None, True)
+
+    rows = rn.build_payload({"BRK": res}, {"BRK": m}, out)
+    check("the row carries the B label", rows[0]["b"], True)
+    check("and the evidence behind it", bool(rows[0]["b_detail"]), True)
+    html = rn.TEMPLATE
+    check("the badge is rendered", 'class="blab"' in html, True)
+    check("there is a filter for it", 'id="bOnly"' in html, True)
+    check("the drawer shows the three tenets",
+          "Buffett business tenets" in html, True)
+    check("and the B filter survives a copied link", "p.set('b','1')" in html, True)
+
+    # The label must round-trip through the store, or merged rows lose it.
+    stored = res["metrics"]
+    check("the B label is persisted", stored.get("buffett_b_label"), "B")
+    check("so is the evidence", bool(stored.get("business_tenets")), True)
+    merged = rn.build_payload({"BRK": res}, {}, out)
+    check("and a merged row still shows the badge", merged[0]["b"], True)
+
+
+def test_buffett_indicator():
+    """Two FRED series in different units — the classic way to be wrong by 1000x."""
+    from src import buffett as bf
+
+    class FakeFred:
+        """Stands in for FRED. Units arrive from the metadata call, as in life."""
+        enabled = True
+
+        def __init__(self, eq=62_000_000.0, gdp=29_000.0, eq_units="Mil. of $",
+                     gdp_units="Bil. of $", meta=True,
+                     eq_date="2026-04-01", gdp_date="2026-04-01"):
+            self.eq, self.gdp, self.meta = eq, gdp, meta
+            self.eq_units, self.gdp_units = eq_units, gdp_units
+            self.eq_date, self.gdp_date = eq_date, gdp_date
+
+        def series_meta(self, sid):
+            if not self.meta:
+                return {}
+            from src.providers.fred import UNIT_SCALE
+            u = self.eq_units if sid == bf.EQUITIES_SERIES else self.gdp_units
+            return {"id": sid, "units": u, "scale": UNIT_SCALE.get(u.lower())}
+
+        def latest_observation(self, sid):
+            return ((self.eq_date, self.eq) if sid == bf.EQUITIES_SERIES
+                    else (self.gdp_date, self.gdp))
+
+    r = bf.buffett_indicator(FakeFred())
+    check("the indicator computes", r["available"], True)
+    # 62,000,000 million = 62 trillion of equity; 29,000 billion = 29 trillion
+    # of GDP. Only correct unit handling gets from those two numbers to 2.14.
+    check("units are applied, not assumed", round(r["ratio"], 3), 2.138)
+    check("and the verdict follows Buffett's own bands",
+          r["verdict"], "substantially overvalued")
+    check("which is quoted rather than paraphrased",
+          "playing with fire" in r["reading"], True)
+    check("the units used are reported", r["equities_units"], "Mil. of $")
+    check("and the caveat says which version of the ratio this is",
+          "Z.1" in r["caveat"], True)
+
+    check("a cheap market reads as undervalued",
+          bf.buffett_indicator(FakeFred(eq=20_000_000.0))["verdict"],
+          "significantly undervalued")
+    check("and a reading near 100% is fair",
+          bf.buffett_indicator(FakeFred(eq=29_000_000.0))["verdict"],
+          "fairly valued")
+
+    # THE BUG THIS GUARDS AGAINST. Skip the scaling and the ratio comes out at
+    # 2,138x — still a number, still renderable, completely wrong.
+    check("without unit handling the ratio would be absurd",
+          62_000_000.0 / 29_000.0 > 1000, True)
+    refused = bf.buffett_indicator(FakeFred(gdp_units="Mil. of $"))
+    check("such a value is refused, not published", refused["available"], False)
+    check("with the raw numbers shown so the cause is visible",
+          bool(refused["raw"]["equities"]), True)
+    check("and a reason that names the plausible range",
+          "plausible" in refused["reason"], True)
+
+    assumed = bf.buffett_indicator(FakeFred(meta=False))
+    check("with no metadata it falls back to the documented units",
+          assumed["available"], True)
+    check("and flags that it assumed them", assumed["units_assumed"], True)
+    check("in the caveat a reader will actually see",
+          "assumed" in assumed["caveat"], True)
+
+    lagged = bf.buffett_indicator(FakeFred(eq_date="2025-10-01"))
+    check("series published out of step are disclosed",
+          "dated differently" in lagged["reading"], True)
+
+    class NoKey:
+        enabled = False
+
+    nk = bf.buffett_indicator(NoKey())
+    check("no API key means no number", nk["available"], False)
+    check("and the fix is named", "FRED_API_KEY" in nk["reason"], True)
+
+    class Empty(FakeFred):
+        def latest_observation(self, sid):
+            return None
+
+    check("a missing series is reported, not guessed around",
+          bf.buffett_indicator(Empty())["available"], False)
+
+    line = rn._buffett_indicator_line(bf.buffett_indicator(FakeFred()))
+    check("the panel renders the number", "Buffett Indicator: 214%" in line, True)
+    check("and renders the refusal just as plainly",
+          "not computed" in rn._buffett_indicator_line(nk), True)
+    panel = rn._lynch_panel({"stalwart": 2}, {}, {},
+                            bf.buffett_indicator(FakeFred()),
+                            {"names": 10, "b_labelled": 3})
+    check("it sits in the market-gauge panel", "Buffett Indicator" in panel, True)
+    check("beside a count of the B-labelled names",
+          "3 of 10 names" in panel, True)
+
+    # The provider knows how to read units off FRED rather than assuming them.
+    from src.providers import fred as fredmod
+    check("millions scale to dollars", fredmod.UNIT_SCALE["mil. of $"], 1e6)
+    check("and billions likewise", fredmod.UNIT_SCALE["bil. of $"], 1e9)
+    check("the provider exposes a metadata call",
+          hasattr(fredmod.FredProvider, "series_meta"), True)
+    check("and a dated observation call",
+          hasattr(fredmod.FredProvider, "latest_observation"), True)
+
+
+def test_lynch_five_year_window():
+    """Lynch runs on five years of statements, not six."""
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    lyn = th["lynch"]
+    for t in ("valuation", "growth_floor", "growth_ceiling"):
+        check(f"{t} needs five years, not six",
+              lyn["tests"][t]["min_history_years"], 5)
+    check("the PEG used is the five-year one",
+          lyn["tests"]["valuation"]["metric"], "peg_ratio_lynch")
+    check("as is the growth rate",
+          lyn["tests"]["growth_floor"]["metric"], "eps_cagr_lynch")
+
+    # Exactly five statements: the case the fencepost used to make unevaluable.
+    rec = CompanyRecord(ticker="FIVE", market="SG", currency="SGD",
+                        sector="Industrials", industry="Specialty Machinery")
+    rec.years = [mkyear(2025 - i, revenue=1000.0,
+                        net_income=100.0 * (0.88 ** i),
+                        eps_diluted=1.0 * (0.88 ** i), shares_diluted=100.0,
+                        total_equity=700.0, total_assets=1200.0,
+                        total_debt=150.0, short_term_debt=30.0,
+                        long_term_debt=120.0, cash_and_equivalents=200.0,
+                        current_assets=500.0, current_liabilities=250.0,
+                        inventory=80.0, cfo=150.0, capex=30.0,
+                        depreciation_amortization=40.0,
+                        operating_income=140.0, pretax_income=130.0)
+                 for i in range(5)]
+    rec.price, rec.market_cap = 10.0, 1000.0
+    m = mx.compute_metrics(rec)
+    check("five statements give a growth rate",
+          m["eps_cagr_lynch"] is not None, True)
+    check("struck over the four-year span they actually cover",
+          m["eps_cagr_lynch_years"], 4)
+    check("and the span is reported, not silently called five years",
+          m["eps_cagr_lynch_years"] < 5, True)
+    check("the six-year metric stays empty, as it should", m["eps_cagr_5y"], None)
+    check("the Lynch PEG is computed from the five-year rate",
+          m["peg_ratio_lynch"] is not None, True)
+    check("and PEGY with it", m["growth_plus_yield_to_pe"] is not None, True)
+
+    out = sc.screen_universe([rec], {"FIVE": m}, th, {}, cycle=None)
+    names = {t["name"]: t
+             for t in out["results"]["FIVE"]["frameworks"]["lynch"]["tests"]}
+    check("the growth floor now runs on five years of statements",
+          names["growth_floor"]["result"] is not None, True)
+    check("rather than dropping out for want of a sixth",
+          bool(names["growth_floor"].get("insufficient")), False)
+    check("and the valuation test runs too",
+          bool(names["valuation"].get("insufficient")), False)
+
+    # Four statements is still too few: the span would be three years.
+    rec4 = CompanyRecord(ticker="FOUR", market="SG", currency="SGD")
+    rec4.years = rec.years[:4]
+    rec4.price, rec4.market_cap = 10.0, 1000.0
+    check("four statements are still not enough",
+          mx.compute_metrics(rec4)["eps_cagr_lynch"], None)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -2521,6 +2913,9 @@ if __name__ == "__main__":
     test_synopsis()
     test_lynch_categories()
     test_schloss_deep_value()
+    test_buffett_owner_earnings_and_b_label()
+    test_buffett_indicator()
+    test_lynch_five_year_window()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

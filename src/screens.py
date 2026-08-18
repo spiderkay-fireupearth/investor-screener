@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Any, Tuple
 
 import numpy as np
 
+from . import buffett as _bf
 from . import lynch as _lynch
 from . import reflexivity as rfx
 from . import synopsis as syn
@@ -414,6 +415,47 @@ def set_value_regime(metrics_by_ticker: Dict[str, Dict[str, Any]],
             "names_scored": len(scored), "floor": floor}
 
 
+def add_buffett_valuation(records: List[Any],
+                          metrics_by_ticker: Dict[str, Dict[str, Any]],
+                          macro: Dict[str, Any],
+                          cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Intrinsic value, margin of safety, and the B label — done once, here.
+
+    This lives outside `metrics.py` because it needs the risk-free rate, which
+    is a property of the world rather than of the company. Buffett's own
+    practice: discount "at the rate of the long-term government bond". The rate
+    is reported on the page beside the answer, because a DCF whose discount
+    rate is invisible is not a valuation anyone can check.
+    """
+    dcf_cfg = cfg.get("intrinsic_value", {})
+    rf = macro.get("us_10y")
+    prem = dcf_cfg.get("equity_risk_premium", 0.045)
+    discount = (rf / 100.0 + prem) if _is_num(rf) else None
+    labelled = 0
+    for rec in records:
+        m = metrics_by_ticker.get(rec.ticker)
+        if m is None:
+            continue
+        iv = _bf.intrinsic_value(m.get("owner_earnings_per_share"),
+                                 m.get("owner_earnings_cagr_5y"),
+                                 discount, dcf_cfg)
+        m["intrinsic_value_detail"] = iv
+        m["intrinsic_value_per_share"] = iv.get("value_per_share")
+        m["discount_rate_used"] = iv.get("discount_rate")
+        m["margin_of_safety"] = _bf.margin_of_safety(
+            getattr(rec, "price", None), iv.get("value_per_share"))
+        tenets = _bf.business_tenets(m, getattr(rec, "sector", None),
+                                     getattr(rec, "industry", None),
+                                     cfg.get("business_tenets", {}))
+        m["business_tenets"] = tenets
+        m["buffett_b_label"] = tenets["label"]
+        m["buffett_tenets_summary"] = tenets["summary"]
+        labelled += bool(tenets["passed"])
+    return {"risk_free_pct": rf, "equity_risk_premium": prem,
+            "discount_rate": discount, "b_labelled": labelled,
+            "names": len(records)}
+
+
 def screen_universe(records: List[Any],
                     metrics_by_ticker: Dict[str, Dict[str, Any]],
                     thresholds: Dict[str, Any],
@@ -434,6 +476,8 @@ def screen_universe(records: List[Any],
     add_relative_value(records, metrics_by_ticker)
     value_regime = set_value_regime(
         metrics_by_ticker, thresholds.get("schloss", {}))
+    buffett_valuation = add_buffett_valuation(
+        records, metrics_by_ticker, macro, thresholds.get("buffett", {}))
 
     framework_names = ["buffett", "munger", "schloss", "klarman", "lynch",
                        "templeton", "marks", "soros", "rogers", "graham"]
@@ -565,6 +609,7 @@ def screen_universe(records: List[Any],
         "macro_gate_reason": gate_reason,
         "macro": macro,
         "value_regime": value_regime,
+        "buffett_valuation": buffett_valuation,
         "lynch_census": lynch_census(metrics_by_ticker),
         # Lynch's macro sanity check, computed on this screener's own US rows
         # so the gauge and the table are struck on the same numbers.

@@ -32,17 +32,144 @@ global:
 # ---------------------------------------------------------------------------
 buffett:
   label: Quality compounders
-  min_tests_passed: 6      # of 8
+  min_tests_passed: 11     # of 16
+  # --- the discounted cash flow -------------------------------------------
+  # Buffett discounts owner earnings "at the rate of the long-term government
+  # bond". The rate used is that bond plus an equity risk premium, floored so
+  # a zero-rate world cannot produce an infinite valuation. Growth is capped
+  # because a five-year rate extrapolated for a decade is how a DCF starts
+  # printing absurdities.
+  intrinsic_value:
+    equity_risk_premium: 0.045
+    min_discount_rate: 0.09
+    growth_cap: 0.15
+    terminal_growth: 0.025
+    stage_one_years: 10
+    margin_of_safety_required: 0.25   # buy at a 25% discount, per the letters
+  # --- the three business tenets, i.e. the "B" label -----------------------
+  business_tenets:
+    # YOUR circle, not the app's guess at it. Empty means the tenet is not
+    # tested and the label says so. Each entry is matched against the feed's
+    # sector AND industry text, case-insensitively, as a substring — so
+    # "construction" catches "Engineering & Construction" and "Residential
+    # Construction" without either being listed.
+    #
+    # As declared: consumables, construction, mining, and the manufacture of
+    # goods and services.
+    circle_of_competence:
+      # consumables
+      - Consumer Defensive
+      - Beverages
+      - Packaged Foods
+      - Household
+      - Personal Products
+      - Tobacco
+      - Farm Products
+      - Confectioners
+      - Grocery
+      # construction and what goes into it
+      - construction
+      - Building Materials
+      - Building Products
+      - Cement
+      # NOT "Infrastructure": as a substring it also matches "Software —
+      # Infrastructure", which is not what was meant by construction.
+      # mining and materials
+      - Basic Materials
+      - mining
+      - Metals
+      - Gold
+      - Copper
+      - Steel
+      - Aluminum
+      - Coal
+      # manufacture of goods and services
+      - Industrials
+      - Manufactur
+      - Machinery
+      - Packaging
+      - Containers
+      - Industrial Distribution
+      - Specialty Chemicals
+    # "Products or services with a moat and a high barrier to entry" is not a
+    # sector — it is a qualifier, so it gets its own admission route. A name
+    # outside the list above is still admitted to the circle if it clears a
+    # STRICTER moat test: all four markers, not three. The reasoning is yours:
+    # a genuine high-barrier business is understandable on its economics even
+    # when its industry is not on your list. This is the one route where the
+    # app can widen your circle, so it is set deliberately hard.
+    admit_on_strong_moat: true
+    strong_moat_requires_all: true
+    moat:
+      gross_margin: 0.40           # the pricing-power marker
+      gross_margin_cv: 0.15        # and that it holds through a cycle
+      roic: 0.12
+      return_on_tangible: 0.20
+      roe_years_share: 0.80        # ROE above 15% in 8 years of 10
+      min_checks_passed: 3         # of the four markers
+    history:
+      max_loss_years_in_10: 0
+      max_eps_cv: 0.35
+      min_listing_age_years: 10
+      min_history_years: 5
+      exclude_disruption_zones: true
   tests:
     roe_consistency:
       metric: roe
       threshold: 0.15
       lookback_years: 10
       min_years_above: 8
+    # "Above-average profit margins reflect pricing power." 40% is the gross
+    # margin he associates with a brand moat; the old 30% floor let through
+    # businesses that compete on price.
     gross_margin_floor:
       metric: gross_margin_ttm
-      threshold: 0.30
+      threshold: 0.40
       operator: gte
+    net_margin_floor:
+      metric: net_margin_ttm
+      threshold: 0.15
+      operator: gte
+    # Owner earnings, not accounting earnings: net income plus non-cash
+    # charges less the capital the business must spend to stand still.
+    owner_earnings_quality:
+      metric: owner_earnings_to_net_income
+      threshold: 0.80
+      operator: gte
+    # "Long-term debt payable in under three or four years of earnings."
+    debt_payoff_years:
+      metric: debt_payoff_years
+      threshold: 4.0
+      operator: lte
+    liquidity_cushion:
+      metric: current_ratio
+      threshold: 1.5
+      operator: gte
+    # Asset-light: little of each year's profit is consumed just maintaining
+    # the business.
+    capital_intensity:
+      metric: capex_to_net_income
+      threshold: 0.30
+      operator: lte
+    # "The really good business... doesn't need a big sales force." Overheads
+    # measured against gross profit, where the brand shows up or does not.
+    overhead_discipline:
+      metric: sga_to_gross_profit
+      threshold: 0.40
+      operator: lte
+      skip_if_missing: true
+      missing_note: the feed carries no SG&A line for this filer
+    # The one-dollar premise: each dollar retained must become a dollar of
+    # market value. Needs five years of statements AND a five-year-old price.
+    one_dollar_premise:
+      metric: one_dollar_premise
+      threshold: 1.0
+      operator: gte
+      min_history_years: 6
+      skip_if_missing: true
+      missing_note: >-
+        needs both five years of retained earnings and a five-year-old market
+        capitalisation; one of the two is missing for this name
     gross_margin_stability:
       metric: gross_margin_cv     # coefficient of variation over 10y
       threshold: 0.15
@@ -84,6 +211,18 @@ buffett:
       metric: inflation_resilient       # 1 = all three conditions hold
       threshold: 1
       operator: gte
+    # "Buy only when the price is at a significant discount to a
+    # conservatively estimated intrinsic value." The estimate is a two-stage
+    # DCF on owner earnings; where it cannot be defended (negative owner
+    # earnings, no growth history) the test is skipped rather than guessed.
+    margin_of_safety:
+      metric: margin_of_safety
+      threshold: 0.25
+      operator: gte
+      skip_if_missing: true
+      missing_note: >-
+        no defensible intrinsic value for this name — owner earnings are
+        negative or there is no growth history to project from
 
 # ---------------------------------------------------------------------------
 munger:
@@ -260,10 +399,13 @@ lynch:
     # The valuation test IS the category test. Each category gets the yardstick
     # Lynch applied to it, and the panel shows which one was used.
     valuation:
-      metric: peg_ratio
+      metric: peg_ratio_lynch
       threshold: 1.0
       operator: lte
-      min_history_years: 6        # PEG needs a 5-year EPS CAGR
+      # Five years of statements, not six. The growth rate is struck
+      # over the longest window the feed carries up to five years, and
+      # the span it used is reported beside it.
+      min_history_years: 5
       by: lynch_category
       cases:
         stalwart:
@@ -276,7 +418,7 @@ lynch:
           # was 15%; on a modern index constituent it is very demanding. The
           # plain PEG survives as an alternative satisfying route so the test
           # discriminates instead of rejecting every stalwart in the universe.
-          alt_metric: peg_ratio
+          alt_metric: peg_ratio_lynch
           alt_threshold: 1.0
           alt_operator: lte
           note: growth plus yield against the P/E, Lynch's stalwart ratio
@@ -314,10 +456,10 @@ lynch:
     # Lynch's sweet spot is 15–25%. The floor moves by category; the ceiling
     # is his own caution about growth that cannot last.
     growth_floor:
-      metric: eps_cagr_5y
+      metric: eps_cagr_lynch
       threshold: 0.15
       operator: gte
-      min_history_years: 6
+      min_history_years: 5
       by: lynch_category
       cases:
         stalwart:
@@ -338,10 +480,10 @@ lynch:
           not_applicable: true
           note: an asset play is valued on what it owns, not on its growth
     growth_ceiling:
-      metric: eps_cagr_5y
+      metric: eps_cagr_lynch
       threshold: 0.30             # above 30% Lynch turned cautious, not greedy
       operator: lte
-      min_history_years: 6
+      min_history_years: 5
       by: lynch_category
       cases:
         cyclical:

@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Any
 
 import numpy as np
 
+from . import buffett as _buffett
 from . import lynch as _lynch
 from .schema import CompanyRecord, FundamentalYear
 
@@ -636,6 +637,32 @@ def compute_metrics(rec: CompanyRecord,
                   "cash_to_short_term_debt"):
             m[k] = None
 
+    # --- Lynch on FIVE years of statements, not six -------------------------
+    # `eps_cagr_5y` needs a year -5 to compare against, i.e. six statements —
+    # the fencepost that made Lynch unevaluable for a company with exactly five
+    # years on file. This is the same growth idea measured over the longest
+    # window the feed actually carries, up to five years, with the span it used
+    # reported beside it. A four-year rate labelled as a four-year rate is
+    # honest; a four-year rate called a five-year rate is not.
+    m["eps_cagr_lynch"] = None
+    m["eps_cagr_lynch_years"] = None
+    _eps_pts = [(k, y.eps_diluted) for k, y in enumerate(ys[:6])
+                if _n(y.eps_diluted)]
+    if len(_eps_pts) >= 2:
+        newest_i, newest_v = _eps_pts[0]
+        oldest_i, oldest_v = _eps_pts[-1]
+        span = oldest_i - newest_i
+        if span >= 4 and _n(newest_v) and _n(oldest_v) and oldest_v > 0:
+            m["eps_cagr_lynch"] = _cagr(newest_v, oldest_v, span)
+            m["eps_cagr_lynch_years"] = span
+    if m["eps_cagr_lynch"] is None and _n(m.get("eps_cagr_5y")):
+        m["eps_cagr_lynch"] = m["eps_cagr_5y"]
+        m["eps_cagr_lynch_years"] = 5
+    _lynch_growth_pct = (m["eps_cagr_lynch"] * 100
+                         if _n(m["eps_cagr_lynch"]) else None)
+    m["peg_ratio_lynch"] = _safe_div(m["pe_ttm"], _lynch_growth_pct) if (
+        _n(m["pe_ttm"]) and _n(_lynch_growth_pct) and _lynch_growth_pct > 0) else None
+
     # --- PEGY: the stalwart's ratio -----------------------------------------
     # Lynch: "the ratio of the long-term growth rate PLUS the dividend yield,
     # divided by the P/E." A stalwart's return arrives partly as a cheque, and
@@ -643,9 +670,11 @@ def compute_metrics(rec: CompanyRecord,
     # (under 1 is good) and Lynch's own multiple form (over 1.5 is good, over
     # 2 is excellent), because his books quote both and they invert each other.
     yld_pct = dy * 100 if _n(dy) else 0.0
-    if _n(m.get("pe_ttm")) and _n(growth_pct) and (growth_pct + yld_pct) > 0:
-        m["pegy_ratio"] = m["pe_ttm"] / (growth_pct + yld_pct)
-        m["growth_plus_yield_to_pe"] = (growth_pct + yld_pct) / m["pe_ttm"]
+    # Struck on the Lynch growth rate so the whole framework runs on one window.
+    _g_pct = _lynch_growth_pct if _n(_lynch_growth_pct) else growth_pct
+    if _n(m.get("pe_ttm")) and _n(_g_pct) and (_g_pct + yld_pct) > 0:
+        m["pegy_ratio"] = m["pe_ttm"] / (_g_pct + yld_pct)
+        m["growth_plus_yield_to_pe"] = (_g_pct + yld_pct) / m["pe_ttm"]
     else:
         m["pegy_ratio"] = m["growth_plus_yield_to_pe"] = None
 
@@ -682,6 +711,78 @@ def compute_metrics(rec: CompanyRecord,
         sc_1y = ys[1].shares_diluted or ys[1].shares_outstanding
         m["share_count_change_1y"] = _safe_div(
             (sc_now - sc_1y) if (_n(sc_now) and _n(sc_1y)) else None, sc_1y)
+
+    # ========================================================================
+    # Buffett — owner earnings, overheads, and the one-dollar test
+    # ========================================================================
+    if ys:
+        y0 = ys[0]
+        m["net_margin_ttm"] = _safe_div(y0.net_income, y0.revenue)
+        m["sga_to_gross_profit"] = _safe_div(y0.sga_expense, y0.gross_profit) if (
+            _n(y0.gross_profit) and y0.gross_profit > 0) else None
+        m["capex_to_net_income"] = _safe_div(
+            abs(y0.capex) if _n(y0.capex) else None,
+            y0.net_income if (_n(y0.net_income) and y0.net_income > 0) else None)
+        # "Long-term debt should be payable in under three or four years of
+        # earnings." Stated as the number of years, so the threshold reads the
+        # way the rule is spoken.
+        m["debt_payoff_years"] = _safe_div(
+            y0.long_term_debt if _n(y0.long_term_debt) else y0.total_debt,
+            y0.net_income if (_n(y0.net_income) and y0.net_income > 0) else None)
+    else:
+        for k in ("net_margin_ttm", "sga_to_gross_profit",
+                  "capex_to_net_income", "debt_payoff_years"):
+            m[k] = None
+
+    # Owner earnings, from the 1986 letter. The maintenance-capex component is
+    # an estimate and is labelled as one wherever it surfaces.
+    _oe = _buffett.owner_earnings(ys)
+    m["owner_earnings_detail"] = _oe
+    if _oe.get("available"):
+        m["owner_earnings"] = _oe["owner_earnings"]
+        m["maintenance_capex"] = _oe["maintenance_capex"]
+        m["owner_earnings_per_share"] = _safe_div(_oe["owner_earnings"], sc_now)
+        m["owner_earnings_yield"] = _safe_div(_oe["owner_earnings"], mcap)
+        m["owner_earnings_to_net_income"] = _safe_div(
+            _oe["owner_earnings"], _oe["net_income"]
+            if (_n(_oe["net_income"]) and _oe["net_income"] > 0) else None)
+    else:
+        for k in ("owner_earnings", "maintenance_capex",
+                  "owner_earnings_per_share", "owner_earnings_yield",
+                  "owner_earnings_to_net_income"):
+            m[k] = None
+    # Five-year owner-earnings growth, the input the DCF projects from. Taken
+    # from owner earnings rather than reported EPS on purpose: the whole point
+    # of the measure is that reported earnings are not the spendable cash.
+    _oe5 = _buffett.owner_earnings(ys, n=6) if len(ys) >= 6 else {"available": False}
+    m["owner_earnings_cagr_5y"] = None
+    if _oe.get("available") and _oe5.get("available"):
+        a, b = _oe["owner_earnings"], _oe5["owner_earnings"]
+        if _n(a) and _n(b) and b > 0 and a > 0:
+            m["owner_earnings_cagr_5y"] = _cagr(a, b, 5)
+
+    # The one-dollar premise. Every dollar retained must become at least a
+    # dollar of market value over five to ten years. Needs a market cap from
+    # five years ago, which is why the price series carries `price_5y_ago`.
+    m["retained_earnings_5y"] = None
+    m["market_cap_change_5y"] = None
+    m["one_dollar_premise"] = None
+    if len(ys) >= 6:
+        retained = 0.0
+        seen = 0
+        for y in ys[:5]:
+            if _n(y.net_income):
+                retained += y.net_income - abs(y.dividends_paid or 0.0)
+                seen += 1
+        px5 = rec.technicals.get("price_5y_ago")
+        sh5 = ys[5].shares_diluted or ys[5].shares_outstanding
+        if seen >= 4 and _n(px5) and _n(sh5) and _n(rec.price) and _n(sc_now):
+            mcap_then = px5 * sh5
+            mcap_now = rec.price * sc_now
+            m["retained_earnings_5y"] = retained
+            m["market_cap_change_5y"] = mcap_now - mcap_then
+            if retained > 0:
+                m["one_dollar_premise"] = (mcap_now - mcap_then) / retained
 
     # --- the category, and the benchmarks that follow from it ---------------
     cat = _lynch.classify(m, getattr(rec, "sector", None),

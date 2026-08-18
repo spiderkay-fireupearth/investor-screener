@@ -39,6 +39,11 @@ class FundamentalYear:
     net_income: Optional[float] = None
     eps_diluted: Optional[float] = None
     interest_expense: Optional[float] = None
+    # Buffett's overhead test: "the really good business... doesn't require
+    # much in the way of a big sales force." SG&A measured against GROSS
+    # profit, not revenue, is what separates a brand that sells itself from
+    # one that has to be sold.
+    sga_expense: Optional[float] = None
 
     # --- Balance sheet ----------------------------------------------------
     total_assets: Optional[float] = None

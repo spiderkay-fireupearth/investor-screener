@@ -61,6 +61,17 @@ DISPLAY_METRICS = (
     "price_to_sales", "cfo_positive_share_10y", "goodwill_to_assets",
     "value_regime", "below_book_share_of_universe",
     "loss_years_in_10", "loss_years_in_3",
+    # Buffett: owner earnings, the DCF, and the B label. `business_tenets` is
+    # a nested dict rather than a scalar — it carries the evidence behind the
+    # label, and a badge without its evidence is an instruction, not a finding.
+    "net_margin_ttm", "gross_margin_ttm", "gross_margin_cv",
+    "owner_earnings_per_share", "owner_earnings_yield",
+    "owner_earnings_to_net_income", "owner_earnings_cagr_5y",
+    "maintenance_capex", "debt_payoff_years", "capex_to_net_income",
+    "sga_to_gross_profit", "one_dollar_premise", "current_ratio",
+    "intrinsic_value_per_share", "margin_of_safety", "discount_rate_used",
+    "buffett_b_label", "buffett_tenets_summary", "business_tenets",
+    "return_on_net_tangible_assets", "roic_5y_avg", "eps_cv_5y",
 )
 
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
@@ -225,6 +236,10 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             "cat_label": m.get("lynch_category_label"),
             "cat_why": m.get("lynch_category_why") or "",
             "cat_warn": m.get("lynch_peak_earnings_warning") or "",
+            # Buffett's three business tenets, as a label plus its evidence.
+            "b": bool(m.get("buffett_b_label")),
+            "b_summary": m.get("buffett_tenets_summary") or "",
+            "b_detail": m.get("business_tenets") or {},
             "surfaced": bool(r.get("surfaced")),
             "has_report": ticker in report_tickers,
             "themes": r.get("themes") or [],
@@ -283,6 +298,21 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "Above 10y low": _fmt_num(m.get("pct_above_10y_low"), 0, pct=True),
                 "In 10y range": _fmt_num(m.get("price_in_10y_range"), 0, pct=True),
                 "P/S": _fmt_num(m.get("price_to_sales")),
+                # Buffett
+                "Owner earnings/share": _fmt_num(m.get("owner_earnings_per_share")),
+                "Owner earnings yield": _fmt_num(m.get("owner_earnings_yield"),
+                                                 1, pct=True),
+                "Owner earnings ÷ NI": _fmt_num(m.get("owner_earnings_to_net_income")),
+                "Intrinsic value/share": _fmt_num(m.get("intrinsic_value_per_share")),
+                "Margin of safety": _fmt_num(m.get("margin_of_safety"), 0, pct=True),
+                "Net margin": _fmt_num(m.get("net_margin_ttm"), 1, pct=True),
+                "Gross margin": _fmt_num(m.get("gross_margin_ttm"), 1, pct=True),
+                "Debt payoff (years)": _fmt_num(m.get("debt_payoff_years"), 1),
+                "Capex ÷ net income": _fmt_num(m.get("capex_to_net_income"),
+                                               0, pct=True),
+                "SG&A ÷ gross profit": _fmt_num(m.get("sga_to_gross_profit"),
+                                                0, pct=True),
+                "$1 retained → $ value": _fmt_num(m.get("one_dollar_premise")),
                 "Years CFO positive": _fmt_num(m.get("cfo_positive_share_10y"),
                                                0, pct=True),
             },
@@ -333,6 +363,9 @@ letter-spacing:.04em}
 .cat.turnaround{background:rgba(226,88,94,.14);color:var(--bad);border-color:rgba(226,88,94,.4)}
 .cat.fast_grower{background:rgba(63,191,127,.13);color:var(--ok);border-color:rgba(63,191,127,.38)}
 .cat.warnflag{background:rgba(226,88,94,.2);color:var(--bad);border-color:rgba(226,88,94,.5)}
+.blab{font-size:10px;font-weight:800;margin-left:4px;padding:1px 6px;border-radius:4px;
+background:rgba(63,191,127,.18);color:var(--ok);border:1px solid rgba(63,191,127,.5);
+cursor:help;letter-spacing:.04em}
 .dalio{background:var(--panel);border:1px solid var(--line);border-radius:10px;
 margin:14px 0;padding:0;overflow:hidden}
 .dalio summary{list-style:none;cursor:pointer;padding:12px 15px;display:flex;
@@ -485,6 +518,7 @@ __GATE__
   <button class="chip" id="techOnly">Technical pass</button>
   <button class="chip" id="disOnly" title="Every name down more than 30% over six months, whatever the reason">Fell &gt;30% (6m)</button>
   <button class="chip" id="disQual" title="Of those, the ones whose last published accounts do NOT explain the fall">&hellip; accounts intact</button>
+  <button class="chip" id="bOnly" title="Buffett's three business tenets: inside the circle of competence you declared, showing the footprint of a durable moat, and with a consistent operating history">B &mdash; business tenets</button>
   <button class="chip" id="rfxOnly" title="Soros stage DE or EF — price rising through an earnings setback, or expectations run far ahead of reality">Reflexive risk</button>
   <button class="chip on" id="surfOnly">Surfaced only</button>
   <span class="sep"></span>
@@ -525,6 +559,7 @@ let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="", fTheme="ALL";
 let fRfx=false;   // Soros stage DE/EF only
 let fDis=false;   // fell >30% in 6m
 let fDisQ=false;  // ...and the accounts do not explain it
+let fB=false;     // Buffett's three business tenets
 
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 
@@ -538,6 +573,7 @@ function visible(){
       const q=fQ.trim().toLowerCase();
       return r.ticker.toLowerCase().includes(q) || r.name.toLowerCase().includes(q);
     }
+    if(fB && !r.b) return false;
     if(fRfx && !r.rfx_late) return false;
     if(fDis && !r.dis_fell) return false;
     if(fDisQ && !r.dis) return false;
@@ -557,6 +593,7 @@ function syncUrl(){
   if(fTheme!=="ALL") p.set('theme',fTheme);
   if(fFw.size) p.set('pass',[...fFw].join(','));
   if(fTech) p.set('tech','1');
+  if(fB) p.set('b','1');
   if(!fSurf) p.set('all','1');
   if(fQ.trim()) p.set('q',fQ.trim());
   const s=p.toString();
@@ -577,6 +614,7 @@ function loadUrl(){
   if(pass) pass.split(',').filter(Boolean).forEach(k=>{ fFw.add(k);
     const b=document.querySelector(`[data-fw="${k}"]`); if(b) b.classList.add('on'); });
   if(p.get('tech')==='1'){ fTech=true; document.getElementById('techOnly').classList.add('on'); }
+  if(p.get('b')==='1'){ fB=true; document.getElementById('bOnly').classList.add('on'); }
   if(p.get('all')==='1'){ fSurf=false; document.getElementById('surfOnly').classList.remove('on'); }
   const q=p.get('q');
   if(q){ fQ=q; document.getElementById('q').value=q; }
@@ -648,6 +686,24 @@ function detail(r){
       +'excluded rather than failed.</div>';
   if(r.cat_warn)
     h+='<div class="warn"><b>Cyclical warning.</b> '+esc(r.cat_warn)+'</div>';
+  // The B label, with the evidence that earned it — or the reason it did not.
+  // A badge whose reasoning is hidden is an instruction, and this app does not
+  // give instructions.
+  const bd=r.b_detail||{};
+  if(bd.circle||bd.moat||bd.history){
+    h+='<div class="note" style="border-left-color:'+(r.b?'var(--ok)':'var(--tx3)')+'">'
+      +'<b>Buffett business tenets'+(r.b?' — labelled B':'')+'.</b><br>'
+      +'<span style="color:var(--tx3)">Circle of competence:</span> '+esc((bd.circle||{}).why||'—')+'<br>'
+      +'<span style="color:var(--tx3)">Durable moat:</span> '+esc((bd.moat||{}).why||'—')
+      +((bd.moat&&bd.moat.evidence&&bd.moat.evidence.length)
+         ? '<br><span style="font-size:11.5px;color:var(--tx3)">'
+           +bd.moat.evidence.map(esc).join(' &nbsp;·&nbsp; ')+'</span>' : '')
+      +'<br><span style="color:var(--tx3)">Consistent history:</span> '+esc((bd.history||{}).why||'—')
+      +((bd.moat&&bd.moat.caveat)
+         ? '<div style="font-size:11.5px;font-style:italic;color:var(--tx3);margin-top:7px">'
+           +esc(bd.moat.caveat)+'</div>' : '')
+      +'</div>';
+  }
   if(r.is_fund)
     h+='<div class="warn"><b>This is a fund, not an operating company.</b> Revenue, '
       +'equity, ROE and EV/EBIT are undefined for an ETF, so the six value '
@@ -712,7 +768,11 @@ function render(){
     const ct = r.cat
       ? `<span class="cat ${r.cat}${r.cat_warn?' warnflag':''}" title="${esc(r.cat_label||'')} — ${esc(r.cat_why||'')}${r.cat_warn?' ⚠ '+esc(r.cat_warn):''}">${esc(CATS[r.cat]||'?')}</span>`
       : '';
-    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${ct}${rx}${dl}</td><td class="nm" title="${esc(r.name)}${r.syn&&r.syn.one_liner?' — '+esc(r.syn.one_liner):''}">${esc(r.name)}</td>
+    // Buffett's three business tenets. A single letter, because that is what
+    // it is: a business you could understand, protected, and boringly steady.
+    const bl = r.b
+      ? `<span class="blab" title="${esc(r.b_summary)}">B</span>` : '';
+    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${bl}${ct}${rx}${dl}</td><td class="nm" title="${esc(r.name)}${r.syn&&r.syn.one_liner?' — '+esc(r.syn.one_liner):''}">${esc(r.name)}</td>
       <td><span class="mk">${esc(r.market_label)}</span></td>
       <td class="num">${esc(r.price)}</td><td class="num">${esc(r.mcap_usd)}</td>`;
     for(const [key] of FWS){
@@ -742,6 +802,8 @@ document.getElementById('techOnly').onclick=function(){
   fTech=!fTech; this.classList.toggle('on',fTech); render();};
 document.getElementById('rfxOnly').onclick=function(){
   fRfx=!fRfx; this.classList.toggle('on',fRfx); render();};
+document.getElementById('bOnly').onclick=function(){
+  fB=!fB; this.classList.toggle('on',fB); render();};
 document.getElementById('disOnly').onclick=function(){
   fDis=!fDis; this.classList.toggle('on',fDis); render();};
 document.getElementById('disQual').onclick=function(){
@@ -936,13 +998,31 @@ def _reflexive_legend(census: Dict[str, int]) -> str:
             '</div></details>')
 
 
+def _buffett_indicator_line(bi: Dict[str, Any]) -> str:
+    """Buffett's market-level gauge, or an honest account of why there isn't one."""
+    if not bi:
+        return ""
+    if not bi.get("available"):
+        return ('<div class="dnote muted-ink"><b>Buffett Indicator:</b> not '
+                'computed — ' + e_attr(str(bi.get("reason", "unknown"))) + '.</div>')
+    cls = {"significantly undervalued": "cool", "fairly valued": "",
+           "on the expensive side": "warm",
+           "substantially overvalued": "hot"}.get(bi["verdict"], "")
+    return (f'<div class="dnote"><b>Buffett Indicator: {bi["pct"]:.0f}% '
+            f'<span class="pill {cls}">{e_attr(bi["verdict"])}</span></b> — '
+            f'{e_attr(bi["reading"])} '
+            f'<span class="muted-ink">{e_attr(bi["caveat"])}</span></div>')
+
+
 CAT_SHORT = {"fast_grower": "FG", "stalwart": "SW", "slow_grower": "SG",
              "cyclical": "CY", "turnaround": "TA", "asset_play": "AP",
              "unclassified": "?"}
 
 
 def _lynch_panel(census: Dict[str, int], regime: Dict[str, Any],
-                 rule20: Optional[Dict[str, Any]] = None) -> str:
+                 rule20: Optional[Dict[str, Any]] = None,
+                 buffett_ind: Optional[Dict[str, Any]] = None,
+                 b_count: Optional[Dict[str, Any]] = None) -> str:
     """Lynch's six categories across the universe, plus Schloss's value regime.
 
     Both are published for the same reason: they change how every row below is
@@ -1014,9 +1094,25 @@ def _lynch_panel(census: Dict[str, int], regime: Dict[str, Any],
                 f'<b>Schloss is in deep-value mode.</b> {share_txt} trade below '
                 'tangible book, so the book discount is still available and the '
                 'valuation test stays on it.')
+    # The two market-level gauges sit here rather than in six separate boxes:
+    # both answer "what is the whole market priced at", and both belong beside
+    # the categories they should temper.
+    notes.append(_buffett_indicator_line(buffett_ind or {})
+                 .replace('<div class="dnote">', '<span>')
+                 .replace('<div class="dnote muted-ink">', '<span class="muted-ink">')
+                 .replace('</div>', '</span>'))
+    if b_count and b_count.get("names"):
+        notes.append(
+            f'<b>{b_count.get("b_labelled", 0)} of {b_count["names"]} names '
+            'carry the <span class="blab">B</span> label</b> — inside the '
+            'circle of competence declared in <code>config/thresholds.yml</code>, '
+            'showing the footprint of a durable moat, and with a consistent '
+            'operating history. Edit that list and the label moves: the circle '
+            'of competence is a fact about you, not about the company, and it '
+            'is the one thing here the app refuses to guess.')
     return (
         '<details class="dalio"><summary>'
-        '<span class="stg">Lynch categories</span>'
+        '<span class="stg">Categories &amp; market gauges</span>'
         + r20 +
         f'<span class="muted-ink">{total} names classified — the category sets '
         'the bar each name is judged against</span>'
@@ -1325,7 +1421,9 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     dis_html = _dislocation_panel(screened.get("dislocation_summary") or {})
     lyn_html = _lynch_panel(screened.get("lynch_census") or {},
                             screened.get("value_regime") or {},
-                            screened.get("rule_of_20") or {})
+                            screened.get("rule_of_20") or {},
+                            screened.get("buffett_indicator") or {},
+                            screened.get("buffett_valuation") or {})
 
     gate = (f'<div class="gate {"open" if open_ else "closed"}">'
             f'<b>Soros macro gate: {"OPEN" if open_ else "CLOSED"}</b> — {reason}.'

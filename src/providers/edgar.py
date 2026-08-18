@@ -83,6 +83,11 @@ TAGS: Dict[str, List[str]] = {
         "SalesRevenueGoodsNet",
     ],
     "gross_profit": ["GrossProfit"],
+    "sga_expense": [
+        "SellingGeneralAndAdministrativeExpense",
+        "GeneralAndAdministrativeExpense",
+        "SellingAndMarketingExpense",
+    ],
     "operating_income": ["OperatingIncomeLoss"],
     "pretax_income": [
         "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
