@@ -704,6 +704,21 @@ def compute_metrics(rec: CompanyRecord,
     m["cfo_positive_share_10y"] = (
         m["positive_cfo_years_in_10"] / len(_cfo_years) if _cfo_years else None)
 
+    # The same two records over FIVE years. Schloss is run on a five-year
+    # statement window so that the Asian markets, where the feed carries four
+    # or five years, are judged on the window they actually have rather than
+    # on a decade the provider cannot supply. The ten-year versions above stay
+    # for the frameworks that genuinely want a decade — Buffett's consistency
+    # tenets read the whole run.
+    _cfo5 = [y.cfo for y in ys[:5] if _n(y.cfo)]
+    m["positive_cfo_years_in_5"] = sum(1 for v in _cfo5 if v > 0)
+    m["cfo_years_evaluated_5"] = len(_cfo5)
+    m["cfo_positive_share_5y"] = (
+        m["positive_cfo_years_in_5"] / len(_cfo5) if _cfo5 else None)
+    m["loss_years_in_5"] = sum(1 for y in ys[:5]
+                               if _n(y.net_income) and y.net_income < 0)
+    m["statement_years_used_schloss"] = min(len(ys), 5)
+
     # Buybacks: `share_count_change_1y` is computed above from diluted shares.
     # When that line is missing from the feed, fall back to shares outstanding
     # rather than leaving Lynch's buyback test unevaluable.

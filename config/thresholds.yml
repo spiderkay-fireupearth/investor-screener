@@ -332,14 +332,21 @@ schloss:
       missing_note: >-
         no first-trade date in the feed, so listing age cannot be checked —
         Schloss's 20-year bar is untested rather than failed
+    # Both records below are read over a FIVE-year statement window, not a
+    # decade. Schloss himself reviewed ten to twenty years, but no feed reaching
+    # SGX, HKEX, SET, IDX or Bursa carries that — asking for a decade means
+    # asking a question only the US names can answer, which turns a statement
+    # about our plumbing into a verdict on Asian companies. Five years is the
+    # window every market can actually supply. The price-history tests above
+    # still use ten years, because prices we do have.
     earnings_durability:
-      metric: loss_years_in_10
-      threshold: 2
+      metric: loss_years_in_5
+      threshold: 1                # at most one loss year in five
       operator: lte
-    # Baseline cash generation through a full decade, scaled to the years the
-    # feed actually carries so a four-year history is judged on the same bar.
+    # Baseline cash generation, as a share of the years the feed carries, so a
+    # four-year history is judged on the same bar as a five-year one.
     cash_generation_record:
-      metric: cfo_positive_share_10y
+      metric: cfo_positive_share_5y
       threshold: 0.70
       operator: gte
     # "Management should own a good bit of stock" — alignment, not incentives.

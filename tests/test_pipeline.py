@@ -2886,6 +2886,87 @@ def test_lynch_five_year_window():
           mx.compute_metrics(rec4)["eps_cagr_lynch"], None)
 
 
+def test_schloss_five_year_window():
+    """Schloss reads a five-year statement window, so Asia is judged on Asia's feed."""
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    sch = th["schloss"]["tests"]
+    check("earnings durability reads five years, not ten",
+          sch["earnings_durability"]["metric"], "loss_years_in_5")
+    check("at most one loss year in five",
+          sch["earnings_durability"]["threshold"], 1)
+    check("the cash-flow record reads five years too",
+          sch["cash_generation_record"]["metric"], "cfo_positive_share_5y")
+    # Prices are not statements: a ten-year price window costs nothing and the
+    # false-bottom test needs it, so it stays.
+    check("but the price-history tests still use ten years",
+          sch["no_false_bottom"]["metric"], "pct_above_10y_low")
+
+    def mk(ni_by_year, cfo_by_year):
+        r = CompanyRecord(ticker="W5", market="TH", currency="THB")
+        r.years = [mkyear(2025 - i, revenue=1000.0, net_income=ni_by_year[i],
+                          eps_diluted=ni_by_year[i] / 100.0, shares_diluted=100.0,
+                          total_equity=800.0, total_assets=1200.0,
+                          total_debt=200.0, long_term_debt=150.0,
+                          short_term_debt=50.0, cash_and_equivalents=150.0,
+                          current_assets=500.0, current_liabilities=250.0,
+                          total_liabilities=400.0, cfo=cfo_by_year[i],
+                          capex=30.0, depreciation_amortization=40.0,
+                          operating_income=140.0, pretax_income=130.0)
+                   for i in range(len(ni_by_year))]
+        r.price, r.market_cap = 8.0, 800.0
+        return r
+
+    # A company that lost money EIGHT and NINE years ago but has been steady
+    # since. On a ten-year window those old losses still count; on the five-year
+    # window Schloss now uses, the record being judged is the recent one.
+    old_trouble = mk([100.0] * 8 + [-50.0, -60.0], [120.0] * 8 + [-20.0, -30.0])
+    m = mx.compute_metrics(old_trouble)
+    check("the ten-year count still sees the old losses", m["loss_years_in_10"], 2)
+    check("the five-year count does not", m["loss_years_in_5"], 0)
+    check("and the five-year cash record is clean",
+          m["cfo_positive_share_5y"], 1.0)
+    check("while the ten-year one is not",
+          m["cfo_positive_share_10y"] < 1.0, True)
+
+    # A four-year Asian feed: the share metric scales, so it is judged on the
+    # same bar rather than being marked down for the provider's depth.
+    thin = mk([100.0, 90.0, 95.0, 110.0], [120.0, 110.0, 115.0, 130.0])
+    m4 = mx.compute_metrics(thin)
+    check("four years of statements still produce a cash record",
+          m4["cfo_positive_share_5y"], 1.0)
+    check("computed on the years actually there", m4["cfo_years_evaluated_5"], 4)
+    check("and the window used is reported",
+          m4["statement_years_used_schloss"], 4)
+
+    out = sc.screen_universe([thin], {"W5": m4}, th, {}, cycle=None)
+    names = {t["name"]: t
+             for t in out["results"]["W5"]["frameworks"]["schloss"]["tests"]}
+    check("earnings durability is evaluated on a four-year feed",
+          names["earnings_durability"]["result"], True)
+    check("so is the cash-flow record",
+          names["cash_generation_record"]["result"], True)
+    check("neither drops out for want of a decade",
+          bool(names["cash_generation_record"].get("insufficient")), False)
+
+    # One loss in five passes; two do not.
+    one = mx.compute_metrics(mk([100.0, -20.0, 95.0, 110.0, 105.0],
+                                [120.0, 110.0, 115.0, 130.0, 125.0]))
+    two = mx.compute_metrics(mk([-10.0, -20.0, 95.0, 110.0, 105.0],
+                                [120.0, 110.0, 115.0, 130.0, 125.0]))
+    check("one loss year in five is tolerated", one["loss_years_in_5"], 1)
+    check("two are not", two["loss_years_in_5"], 2)
+    check("and the threshold sits between them",
+          one["loss_years_in_5"] <= sch["earnings_durability"]["threshold"]
+          < two["loss_years_in_5"], True)
+
+    # The five-year fields must survive the round trip through the store, or a
+    # merged Asian row loses the very tests this change was made for.
+    stored = out["results"]["W5"]["metrics"]
+    for k in ("loss_years_in_5", "cfo_positive_share_5y",
+              "statement_years_used_schloss"):
+        check(f"{k} is persisted", k in stored, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -2916,6 +2997,7 @@ if __name__ == "__main__":
     test_buffett_owner_earnings_and_b_label()
     test_buffett_indicator()
     test_lynch_five_year_window()
+    test_schloss_five_year_window()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

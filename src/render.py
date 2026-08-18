@@ -58,7 +58,8 @@ DISPLAY_METRICS = (
     "insider_ownership", "institutional_ownership",
     # Schloss: price history depth and the listing-age proxy for his 20-year bar
     "listing_age_years", "pct_above_10y_low", "price_in_10y_range",
-    "price_to_sales", "cfo_positive_share_10y", "goodwill_to_assets",
+    "price_to_sales", "cfo_positive_share_10y", "cfo_positive_share_5y",
+    "loss_years_in_5", "statement_years_used_schloss", "goodwill_to_assets",
     "value_regime", "below_book_share_of_universe",
     "loss_years_in_10", "loss_years_in_3",
     # Buffett: owner earnings, the DCF, and the B label. `business_tenets` is
@@ -313,8 +314,9 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "SG&A ÷ gross profit": _fmt_num(m.get("sga_to_gross_profit"),
                                                 0, pct=True),
                 "$1 retained → $ value": _fmt_num(m.get("one_dollar_premise")),
-                "Years CFO positive": _fmt_num(m.get("cfo_positive_share_10y"),
-                                               0, pct=True),
+                "Years CFO positive (5y)": _fmt_num(m.get("cfo_positive_share_5y"),
+                                                    0, pct=True),
+                "Loss years in 5": _fmt_num(m.get("loss_years_in_5"), 0),
             },
         })
     rows.sort(key=lambda x: (-x["n_passed"], -x["mcap_sort"]))
