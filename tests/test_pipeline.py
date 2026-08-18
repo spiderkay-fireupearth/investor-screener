@@ -4005,8 +4005,11 @@ def test_buffett_and_munger_lists():
     # --- the panel -----------------------------------------------------------
     html = rn._ranked_panel("Buffett list", "blurb", br)
     check("the panel renders", "Buffett list" in html, True)
+    # Assert against the label table rather than a literal, so renaming a
+    # market is a one-line config change and not a test failure in an
+    # unrelated file.
     check("with one heading per exchange",
-          "US large cap" in html and "Nikkei 225" in html, True)
+          rn.MARKET_LABELS["US"] in html and rn.MARKET_LABELS["JP"] in html, True)
     check("the relaxed gate is flagged on the exchange it applies to",
           "gate relaxed" in html, True)
     check("and explained underneath",
@@ -4407,9 +4410,32 @@ def test_nasdaq_coverage():
     # Naming the count separates the two facts, because they are different
     # problems with different fixes.
     check("an empty listing filter says how many DID arrive",
-          'DATA.filter(x=>(x.listing||"")===fList).length' in rsrc, True)
+          "function emptyReason(" in rsrc, True)
     check("and distinguishes arriving from passing",
           "arriving in the universe and" in rsrc, True)
+    # Three genuinely different causes, three different fixes. The one that
+    # bit hardest: Nasdaq names are US-listed, so Market=SG plus
+    # Listing=Nasdaq is a contradiction, not a strict screen — and telling the
+    # reader to relax the screens would send them hunting for nothing.
+    check("a market/listing contradiction is named as such",
+          "can never overlap" in rsrc, True)
+    check("and points at the market filter, not the screens",
+          "Set <b>Market</b>" in rsrc, True)
+    check("a listing that produced nothing is called a coverage problem",
+          "That is a coverage problem rather than a" in rsrc, True)
+
+    # The coverage line is generated, not hard-coded. The old one still read
+    # "S&P 500 + Nasdaq 100" after 150 more Nasdaq names were added, and never
+    # mentioned Bursa Malaysia at all — the page understating its own reach.
+    check("the coverage line is built from the run", "__COVERAGE__" in rsrc, True)
+    check("and is not the old hard-coded string",
+          "S&amp;P 500 + Nasdaq 100 ·" in rsrc, False)
+    check("the US market is no longer mislabelled 'large cap' when it holds "
+          "150 names ranked by turnover",
+          rn.MARKET_LABELS["US"], "US")
+    check("a listing view is linkable, so it can be shared",
+          "p.set('listing',fList)" in rsrc, True)
+    check("and restored from the URL", "p.get('listing')" in rsrc, True)
 
 
 def test_candlestick_patterns():

@@ -107,7 +107,7 @@ DISPLAY_METRICS = (
 # payload budget to ration and every row gets a chart.
 MAX_SPARKLINES = None
 
-MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
+MARKET_LABELS = {"US": "US", "JP": "Nikkei 225", "SG": "SGX",
                  "HK": "HKEX", "TH": "SET", "ID": "IDX",
                  "MY": "Bursa Malaysia"}
 
@@ -750,7 +750,7 @@ padding:11px 15px;margin:14px 0;font-size:13px;color:var(--tx2)}
 
 <div class="eyebrow">__REGION__ refresh · run __RUNID__</div>
 <h1>Value + Technical Screener</h1>
-<div class="meta">S&amp;P 500 + Nasdaq 100 · Nikkei 225 · SGX · HKEX · SET · IDX &nbsp;·&nbsp; generated __TS__ &nbsp;·&nbsp; <a href="deepdive/">Deep dives &rarr;</a></div>
+<div class="meta">__COVERAGE__ &nbsp;·&nbsp; generated __TS__ &nbsp;·&nbsp; <a href="deepdive/">Deep dives &rarr;</a></div>
 
 <div class="statbar" id="statbar"></div>
 __GATE__
@@ -847,11 +847,49 @@ function visible(){
   });
 }
 
+
+// Why is the table empty? Three different causes, three different fixes.
+// Collapsing them into "No names match these filters" is what makes a reader
+// conclude that coverage is missing when it is merely filtered away.
+function emptyReason(){
+  const inList = fList==="ALL" ? [] : DATA.filter(x=>(x.listing||"")===fList);
+  if(fList!=="ALL"){
+    // Cause 1: the listing and the market are mutually exclusive. Nasdaq
+    // names are US-listed, so pinning the market to Singapore can never show
+    // one. This is a contradiction, not a strict screen.
+    const mkts=[...new Set(inList.map(x=>x.market))];
+    if(fMkt!=="ALL" && !mkts.includes(fMkt)){
+      const lbl=(DATA.find(x=>x.market===fMkt)||{}).market_label||fMkt;
+      return `<b>${esc(fList)}</b> holds ${inList.length} name${inList.length===1?'':'s'},
+        and every one of them is in <b>${esc(mkts.map(m=>(DATA.find(x=>x.market===m)||{}).market_label||m).join(', '))}</b>
+        &mdash; but the market filter is set to <b>${esc(lbl)}</b>, so the two
+        can never overlap.<br><span style="font-size:12.5px">Set <b>Market</b>
+        back to <b>All</b> to see them.</span>`;
+    }
+    // Cause 2: the listing arrived, but nothing in it cleared the screens.
+    if(inList.length) return `<b>${inList.length}</b> name${inList.length===1?'':'s'}
+      came in on the <b>${esc(fList)}</b> list this run, and none of them cleared
+      a screen under the filters you have set.<br>
+      <span style="font-size:12.5px">Turn off <b>Surfaced only</b> to see them
+      all with their per-test results &mdash; arriving in the universe and
+      passing a screen are different things.</span>`;
+    // Cause 3: the listing genuinely produced nothing this run.
+    return `No names came in on the <b>${esc(fList)}</b> list this run.<br>
+      <span style="font-size:12.5px">That is a coverage problem rather than a
+      filter one &mdash; check the run log for the line beginning
+      &ldquo;Nasdaq extra&rdquo;.</span>`;
+  }
+  return `No names match these filters.<br><span style="font-size:12.5px">Try turning off
+    <b>Surfaced only</b> to see every name in the universe with its per-test
+    results.</span>`;
+}
+
 // ---- shareable deep links -------------------------------------------------
 function syncUrl(){
   const p=new URLSearchParams();
   if(fMkt!=="ALL") p.set('market',fMkt);
   if(fTheme!=="ALL") p.set('theme',fTheme);
+  if(fList!=="ALL") p.set('listing',fList);
   if(fFw.size) p.set('pass',[...fFw].join(','));
   if(fTech) p.set('tech','1');
   if(fB) p.set('b','1');
@@ -873,6 +911,10 @@ function loadUrl(){
   if(m){ fMkt=m;
     document.querySelectorAll('[data-mkt]').forEach(b=>
       b.classList.toggle('on', b.dataset.mkt===m)); }
+  const li=p.get('listing');
+  if(li){ fList=li;
+    document.querySelectorAll('[data-listing]').forEach(b=>
+      b.classList.toggle('on', b.dataset.listing===li)); }
   const pass=p.get('pass');
   if(pass) pass.split(',').filter(Boolean).forEach(k=>{ fFw.add(k);
     const b=document.querySelector(`[data-fw="${k}"]`); if(b) b.classList.add('on'); });
@@ -1670,20 +1712,7 @@ function render(){
          the last run.<br><span style="font-size:12.5px">Either it isn't an index
          constituent, or the most recent refresh didn't reach it — check
          <code>config/universe.yml</code>.</span>`
-      : (fList!=="ALL"
-        // Naming the number is the point. "No names match" reads as "the
-        // Nasdaq coverage never arrived"; "62 arrived, none cleared a screen"
-        // is a different fact and the one that is actually true.
-        ? `<b>${DATA.filter(x=>(x.listing||"")===fList).length}</b> name${
-             DATA.filter(x=>(x.listing||"")===fList).length===1?'':'s'} came in on
-           the <b>${esc(fList)}</b> list this run, and none of them cleared a
-           screen under the filters you have set.<br>
-           <span style="font-size:12.5px">Turn off <b>Surfaced only</b> to see
-           them all with their per-test results — arriving in the universe and
-           passing a screen are different things.</span>`
-        : `No names match these filters.<br><span style="font-size:12.5px">Try turning off
-           <b>Surfaced only</b> to see every name in the universe with its per-test
-           results.</span>`);
+      : emptyReason();
   }
   rows.forEach((r,i)=>{
     const tr=document.createElement('tr'); tr.className='row';
@@ -2757,6 +2786,22 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 f'{e_attr(k)} <b>{v}</b></button>'
                 for k, v in sorted(listings.items(), key=lambda kv: -kv[1])))
 
+    # The coverage line, built from what this run actually produced. Written
+    # from the data for the same reason the listing chips are: a hard-coded
+    # line drifts, and a page that understates its own coverage sends the
+    # reader looking for something they already have.
+    _lparts = []
+    if listings.get("S&P 500"):
+        _lparts.append(f"S&P 500 ({listings['S&P 500']})")
+    _nas = listings.get("Nasdaq-100", 0) + listings.get("Nasdaq listed", 0)
+    if _nas:
+        _lparts.append(f"Nasdaq ({_nas})")
+    for _k, _v in sorted(listings.items(), key=lambda kv: -kv[1]):
+        if _k not in ("S&P 500", "Nasdaq-100", "Nasdaq listed"):
+            _lparts.append(f"{_k} ({_v})")
+    coverage = e_attr(" · ".join(_lparts)) if _lparts else e_attr(
+        " · ".join(MARKET_LABELS.get(m, m) for m in markets_present))
+
     fw_chips = "".join(
         f'<button class="chip" data-fw="{k}">{lbl}</button>' for k, lbl in FRAMEWORKS)
     fw_head = "".join(f'<th class="c">{lbl[:4]}</th>' for _k, lbl in FRAMEWORKS)
@@ -2839,6 +2884,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
             .replace("__LISTINGROW__", listing_row)
+            .replace("__COVERAGE__", coverage)
             .replace("__GATE__", debt_html + sen_html + mf_html + buf_html
                      + mun_html + cmd_html
                      + lyn_html + rfx_html + dis_html + cycle_html + gate)

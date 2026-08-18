@@ -660,6 +660,15 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
                      len(added), len(tickers_by_market["US"]))
         except Exception as e:                    # noqa: BLE001
             log.warning("Nasdaq extra coverage failed, continuing without it: %s", e)
+    for _mkt, _lst in tickers_by_market.items():
+        for _t in _lst:
+            listing_by_ticker.setdefault(str(_t).upper(), "Theme list")
+    _lcounts: Dict[str, int] = {}
+    for _v in listing_by_ticker.values():
+        _lcounts[_v] = _lcounts.get(_v, 0) + 1
+    log.info("Listings: %s", ", ".join(f"{k} {v}" for k, v in
+                                       sorted(_lcounts.items(), key=lambda kv: -kv[1])))
+
     themes_by_ticker = theme_map(universe_cfg)
     fund_tickers = {str(t).upper() for t in (universe_cfg.get("etfs") or [])}
 
