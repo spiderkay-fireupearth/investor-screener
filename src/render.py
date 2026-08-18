@@ -278,6 +278,12 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                          or (r.get("reflexive") or {}).get("note") or ""),
             "rfx_late": bool((r.get("reflexive") or {}).get("late")),
             "rfx_evidence": "; ".join((r.get("reflexive") or {}).get("evidence") or []),
+            # The stage's practical reading, on the row rather than only in the
+            # legend. A badge you have to go and look up is a badge nobody
+            # reads twice.
+            "rfx_rule": (r.get("reflexive") or {}).get("rule") or "",
+            "rfx_action": (r.get("reflexive") or {}).get("action") or "",
+            "rfx_group": (r.get("reflexive") or {}).get("group") or "",
             # Two separate facts. `dis_fell` is "dropped more than 30% in six
             # months" — the thing actually asked for. `dis` is the narrower
             # "and the accounts do not explain it". Showing only the second
@@ -1232,6 +1238,16 @@ function detail(r){
   // stated before the panels rather than buried inside one of them.
   // Value or growth, with the percentiles that produced it. The badge is one
   // letter; this is where the letter has to justify itself.
+  // The stage's practical reading, on the row rather than only in the legend.
+  // A badge you have to go and look up is a badge nobody reads twice.
+  if(r.rfx_action)
+    h+='<div class="note" style="border-left-color:'
+      +(r.rfx_group==='caution'?'var(--bad)':(r.rfx_group==='opportunity'?'var(--ok)':'var(--tx3)'))
+      +'"><b>Reflexive stage '+esc(r.rfx||'')+' &mdash; '+esc(r.rfx_label||'')+'.</b> '
+      +esc(r.rfx_action)
+      +'<div style="font-size:11.5px;color:var(--tx3);margin-top:6px">Fires when '
+      +esc(r.rfx_rule)+(r.rfx_evidence?' &nbsp;&middot;&nbsp; '+esc(r.rfx_evidence):'')
+      +'</div></div>';
   if(r.sty_why)
     h+='<div class="note" style="border-left-color:var(--tx3)"><b>Style: '
       +esc((r.sty||'').charAt(0).toUpperCase()+(r.sty||'').slice(1))+'.</b> '
@@ -1530,65 +1546,100 @@ def _dislocation_panel(summary: Dict[str, Any]) -> str:
         '</div></details>')
 
 def _reflexive_legend(census: Dict[str, int]) -> str:
-    """A legend for the stage badges, plus the census that keeps them honest.
+    """The stage key, what each one means for a buyer, and the census.
 
-    Two jobs. First, a two-letter code with no key is a puzzle, not a label.
-    Second — and this is why the counts are shown rather than just the key —
-    a stage that fires on most of the universe has stopped discriminating.
-    Printing the distribution means over-firing is visible on the page rather
-    than something you have to go and audit.
+    Three jobs, in order of how easy they are to get wrong:
+
+      1. A two-letter code with no key is a puzzle, not a label.
+      2. A stage that fires on most of the universe has stopped
+         discriminating, so the distribution is printed rather than described.
+      3. A taxonomy is not advice. The sequence AB->HI is a story about a
+         market; what an investor needs is which END of it they are standing
+         at, so the stages are grouped by that and each carries the practical
+         reading rather than only the quotation.
     """
+    from . import reflexivity as rfx
     if not census:
         return ""
-    order = [("AB", "trend unrecognised"), ("BC", "recognition"),
-             ("CD", "tested and held"), ("DE", "conviction through a setback"),
-             ("EF", "expectations excessive"), ("FG", "de-rating"),
-             ("GH", "break, fundamentals following"), ("HI", "pessimism overdone"),
-             ("EQ", "near-equilibrium — framework off")]
     total = sum(census.values()) or 1
-    bits = []
-    for code, label in order:
+    unclassified = census.get("n/a", 0)
+    classified = total - unclassified
+
+    def row(code):
+        st = rfx.STAGES[code]
         n = census.get(code, 0)
-        if not n:
-            continue
         share = n / total
-        cls = "rfx late" if code in ("DE", "EF") else "rfx"
-        bits.append(f'<span class="{cls}">{code}</span>&nbsp;{label} '
-                    f'<b>{n}</b> <span class="muted-ink">({share:.0%})</span>')
-    if not bits:
+        cls = "rfx late" if code in rfx.LATE_STAGES else "rfx"
+        return (f'<tr><td><span class="{cls}">{code}</span></td>'
+                f'<td class="nm">{e_attr(st["label"])}</td>'
+                f'<td class="r"><b>{n}</b> <span class="muted-ink">'
+                f'{share:.0%}</span></td>'
+                f'<td class="muted-ink">{e_attr(st["rule"])}</td>'
+                f'<td>{e_attr(st["action"])}</td></tr>')
+
+    blocks = ""
+    for group in ("opportunity", "caution", "neutral", "off"):
+        codes = [c for c in rfx.GROUPS[group] if census.get(c)]
+        if not codes:
+            continue
+        blocks += (
+            f'<h4 style="margin:15px 0 2px;font-size:12px;letter-spacing:.06em;'
+            f'text-transform:uppercase;color:var(--tx3)">'
+            f'{e_attr(rfx.GROUP_LABELS[group])}</h4>'
+            f'<div class="dnote" style="margin:0 0 6px">'
+            f'{e_attr(rfx.GROUP_NOTES[group])}</div>'
+            '<table><thead><tr><th></th><th>Stage</th><th class="r">Names</th>'
+            '<th>Fires when</th><th>What it means for a buyer</th>'
+            '</tr></thead><tbody>'
+            + "".join(row(c) for c in codes) + '</tbody></table>')
+    if not blocks:
         return ""
 
-    # The honesty check, stated on the page.
+    notes = []
+    # The coverage line comes FIRST, because every count above it is a share of
+    # this number and not of the classified subset.
+    if unclassified:
+        notes.append(
+            f'<b>{classified} of {total} names carry a badge.</b> The other '
+            f'{unclassified} have no stage at all: the read needs a full year '
+            'of earnings AND a full year of price, and much of the Asian '
+            'universe arrives with a four-year statement feed that cannot '
+            'always supply the earnings half. Every percentage above is a share '
+            'of the whole table, so a stage showing 3% is 3% of everything, not '
+            '3% of what was classified.')
     late = census.get("DE", 0) + census.get("EF", 0)
-    warn = ""
-    if late / total > 0.5:
-        warn = ('<div class="dnote"><b>Read this before trusting the badges.</b> '
-                f'{late / total:.0%} of the universe is reading DE or EF. A '
-                'stage that fires on most names is not identifying anything — '
-                'it is describing a market where prices rose faster than '
-                'earnings across the board, which is a fact about the index '
-                'rather than about these companies. Treat the badge as '
-                'contextual until that share falls.</div>')
-    elif census.get("EQ", 0) / total > 0.8:
-        warn = ('<div class="dnote"><span class="muted-ink">Most names show '
-                'no reflexive channel at all, which is the expected result — '
-                'Soros\'s framework describes prices that CHANGE fundamentals, '
-                'and most companies do not transact in their own equity.</span>'
-                '</div>')
+    if classified and late / max(classified, 1) > 0.5:
+        notes.append(
+            '<b>Read this before trusting the badges.</b> '
+            f'{late / classified:.0%} of the classified names are reading DE or '
+            'EF. A stage that fires on most names is not identifying anything — '
+            'it is describing a market where prices rose faster than earnings '
+            'across the board, which is a fact about the index rather than '
+            'about these companies.')
+    notes.append(
+        'The path runs AB to HI, and it is a LOOP rather than a ladder: a name '
+        'can sit in one stage for years or skip several in a quarter. Two are '
+        'worth knowing by name. <b>DE</b> is the diagnostic stage — price '
+        'rising through an earnings setback near the highs, where the market '
+        'has stopped listening to what it was originally responding to. '
+        '<b>GH</b> is the only stage where reflexivity is confirmed rather '
+        'than asserted, because the earnings deteriorated AFTER the price did.')
+    notes.append(
+        '<span class="muted-ink">What this measures is POSITIONING AND '
+        'NARRATIVE, not value. A badge tells you what the market has already '
+        'believed and paid for; it says nothing about what the business is '
+        'worth. That is what the framework columns are for, and the two '
+        'questions are best answered separately.</span>')
 
-    return ('<details class="dalio"><summary>'
+    return ('<details class="dalio cmd"><summary>'
             '<span class="stg">Reflexive stage &middot; what the badges mean</span>'
-            '<span class="muted-ink">Soros\'s boom/bust path, one label per '
-            'name</span><span class="muted-ink" style="margin-left:auto">'
+            f'<span class="muted-ink">Soros&rsquo;s boom/bust path &mdash; '
+            f'{classified} of {total} names classified, grouped by what to do '
+            'about it</span><span class="muted-ink" style="margin-left:auto">'
             'details &#9662;</span></summary><div class="body">'
-            + '<div class="dnote">' + ' &nbsp;&middot;&nbsp; '.join(bits) + '</div>'
-            + warn
-            + '<div class="dnote"><span class="muted-ink">The path runs AB to '
-              'HI. DE is the diagnostic one: price rising through an earnings '
-              'setback near the highs. GH is where reflexivity is confirmed '
-              'rather than asserted, because the earnings deteriorated AFTER '
-              'the price did.</span></div>'
-            '</div></details>')
+            + blocks
+            + "".join(f'<div class="dnote">{n}</div>' for n in notes)
+            + '</div></details>')
 
 
 def _b_badge(row: Dict[str, Any]) -> str:

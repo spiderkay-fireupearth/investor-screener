@@ -51,49 +51,102 @@ STAGES: Dict[str, Dict[str, str]] = {
            "note": "earnings are moving and the price has not noticed. Soros: "
                    "'recognition of an underlying trend is lagging but the "
                    "trend is strong enough to manifest itself in earnings per "
-                   "share'. The stage before the crowd arrives."},
+                   "share'. The stage before the crowd arrives.",
+           "rule": 'earnings up more than 5%, price up less than 5%',
+           "group": 'opportunity',
+           "action": 'The business is improving and the market has not repriced it. The best risk/reward in the sequence — you are paid for noticing early. The risk is that you are early BECAUSE the earnings gain is not durable, so the question to answer is whether the improvement is structural.'},
     "BC": {"label": "Recognition",
            "note": "'the underlying trend is finally recognized, it is "
                    "reinforced by rising expectations'. Price and earnings "
                    "rising together, the multiple expanding. The self-"
-                   "reinforcing phase."},
+                   "reinforcing phase.",
+           "rule": 'earnings up, price up',
+           "group": 'neutral',
+           "action": 'The healthy phase: both moving together, the multiple expanding on real news. Nothing to act on — this is simply what owning a good business looks like while it works.'},
     "CD": {"label": "Tested and held",
            "note": "'Doubts arise, but the trend survives... Such testing may "
                    "be repeated several times.' A correction that was bought. "
-                   "He notes the bias is harder to shake after each test."},
+                   "He notes the bias is harder to shake after each test.",
+           "rule": 'earnings up, price up more, survived a drawdown of 10% or worse, still above its 200-day average',
+           "group": 'neutral',
+           "action": 'A correction that got bought. The trend is intact, but conviction hardens with each test — the holders are now less willing to hear bad news than they were before it.'},
     "DE": {"label": "Conviction through a setback",
            "note": "'conviction develops and it is no longer shaken by a "
                    "setback in the earning trend'. THE diagnostic stage: the "
                    "price is rising while the earnings are not. The market has "
-                   "stopped listening to what it was originally responding to."},
+                   "stopped listening to what it was originally responding to.",
+           "rule": 'earnings flat or falling, price up more than 10%, still near the highs',
+           "group": 'caution',
+           "action": 'The price no longer rests on the earnings. Not a sell signal on its own, but the point at which momentum rather than results is carrying the quote. Raise your bar here; do not START a position on this stage.'},
     "EF": {"label": "Expectations excessive",
            "note": "'Expectations become excessive, and fail to be sustained "
                    "by reality.' The gap between what the price has done and "
-                   "what the business has done is now wide."},
+                   "what the business has done is now wide.",
+           "rule": 'price has outrun earnings by more than 60% over the year',
+           "group": 'caution',
+           "action": 'The gap is now wide and explicit. Late. If you own it, this is the stage where trimming costs least in regret — the thing that has to happen for the price to be right keeps getting larger.'},
     "FG": {"label": "De-rating",
            "note": "'The bias is recognized as such and expectations are "
                    "lowered.' Price falling on earnings that are still "
-                   "growing — the multiple is coming out, not the business."},
+                   "growing — the multiple is coming out, not the business.",
+           "rule": 'earnings still growing, price down more than 10%',
+           "group": 'opportunity',
+           "action": 'Often the most interesting badge for a value buyer: the MULTIPLE is coming out, not the business. De-rating without deterioration is what a cheap price on an intact company actually looks like.'},
     "GH": {"label": "Break, and the fundamentals follow",
            "note": "'Stock prices lose their last prop and plunge... The "
                    "underlying trend is reversed, reinforcing the decline.' "
                    "This is where reflexivity is CONFIRMED rather than "
-                   "asserted: the earnings deteriorated after the price did."},
+                   "asserted: the earnings deteriorated after the price did.",
+           "rule": 'earnings falling and price down more than 20%',
+           "group": 'caution',
+           "action": 'The bust, confirmed — and the only stage where reflexivity is PROVEN rather than asserted, because the earnings deteriorated after the price did. Not yet a bottom: the feedback is still running downhill.'},
     "HI": {"label": "Pessimism overdone",
            "note": "'Eventually, the pessimism becomes overdone and the market "
                    "stabilizes.' Price recovering while earnings are still "
-                   "bad. The mirror of DE, and the opposite trade."},
+                   "bad. The mirror of DE, and the opposite trade.",
+           "rule": 'earnings falling, price rising, and more than 25% below the 52-week high',
+           "group": 'opportunity',
+           "action": "The mirror of DE and the opposite trade: price has stopped making lows while the accounts are still bad. Early-cycle recovery — with Soros's own warning that this can be early for a very long time."},
     "EQ": {"label": "Near-equilibrium",
            "note": "no observable channel from this company's share price back "
                    "into its own fundamentals — it neither issues, retires nor "
                    "acquires materially. Soros's framework does not apply, and "
                    "forcing it would be the error the framework exists to "
-                   "avoid."},
+                   "avoid.",
+           "rule": 'the company does not issue, retire or acquire in its own shares to any material degree',
+           "group": 'off',
+           "action": 'The framework is switched OFF, not failed. This price does not feed these fundamentals, so a stage label would be forcing a model onto a company it was not built for.'},
 }
 
 # Stages where the book says the risk is on the downside. Used to raise a
 # visible flag regardless of which framework surfaced the name.
 LATE_STAGES = ("DE", "EF")
+
+# How the stages group for someone deciding whether to buy. This is the part
+# that turns a taxonomy into something usable: the sequence AB->HI is a story,
+# but an investor only needs to know which end of it they are standing at.
+GROUPS = {
+    "opportunity": ("AB", "FG", "HI"),
+    "caution": ("DE", "EF", "GH"),
+    "neutral": ("BC", "CD"),
+    "off": ("EQ",),
+}
+GROUP_LABELS = {
+    "opportunity": "Where to look",
+    "caution": "Where to be careful",
+    "neutral": "Trend intact — nothing to do",
+    "off": "Framework does not apply",
+}
+GROUP_NOTES = {
+    "opportunity": "The price has moved against a business that either has not "
+                   "deteriorated or has already deteriorated as far as it is "
+                   "going to.",
+    "caution": "The price is being supported by something other than the "
+               "business, or the business is still following the price down.",
+    "neutral": "Price and earnings are moving together. The framework has "
+               "nothing to add beyond what the value screens already say.",
+    "off": "No channel from this share price back into its own fundamentals.",
+}
 
 
 def _n(x) -> bool:
@@ -209,6 +262,11 @@ def annotate(results: Dict[str, Any],
             continue
         st = stage(m)
         r["reflexive"] = st
+        # A name with no stage is counted too, under "n/a". The share of the
+        # universe that could not be classified is the single most important
+        # number for reading this panel: a census of 300 badges over 900 rows
+        # describes a third of the table, and a legend that showed only the
+        # 300 would imply it described all of it.
         key = st.get("stage") or "n/a"
         census[key] = census.get(key, 0) + 1
     return census

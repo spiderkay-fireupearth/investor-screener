@@ -1446,12 +1446,38 @@ def test_reflexive_stages():
     check("a Reflexive risk filter chip exists", "Reflexive risk" in t, True)
     check("and the filter is wired to the late flag", "fRfx && !r.rfx_late" in t, True)
 
-    # A two-letter badge with no key is a puzzle, not a label.
-    leg = rn._reflexive_legend({"BC": 120, "CD": 40, "DE": 60, "EQ": 600, "GH": 20})
+    # A two-letter badge with no key is a puzzle, not a label — and a key that
+    # only translates the code is still a taxonomy rather than something an
+    # investor can act on.
+    leg = rn._reflexive_legend({"AB": 30, "BC": 120, "CD": 40, "DE": 60,
+                                "FG": 50, "EQ": 600, "GH": 20, "n/a": 160})
     check("the legend explains the codes", "what the badges mean" in leg, True)
-    check("it shows each stage's share", "(7%)" in leg or "(70%)" in leg, True)
+    check("it shows each stage's share", "11%" in leg and "56%" in leg, True)
     check("a healthy spread raises no warning",
           "not identifying anything" in leg, False)
+
+    # The three things that turn the key into guidance.
+    check("stages are grouped by what to do about them",
+          all(g in leg for g in ("Where to look", "Where to be careful",
+                                 "Framework does not apply")), True)
+    check("each stage states the rule that fires it",
+          "Fires when" in leg, True)
+    check("with the actual condition, not a paraphrase",
+          "price up more than 10%" in leg, True)
+    check("and what it means for a buyer",
+          "What it means for a buyer" in leg, True)
+    check("DE is framed as a bar to raise, not a sell signal",
+          "do not START a position" in leg, True)
+    check("and the whole panel says it measures positioning, not value",
+          "POSITIONING AND NARRATIVE, not value" in leg, True)
+
+    # The coverage line. Percentages are shares of the WHOLE table, and a panel
+    # that showed only the classified names would imply it described all of
+    # them — which on a four-year Asian feed it does not.
+    check("names with no badge at all are counted",
+          "920 of 1080 names carry a badge" in leg, True)
+    check("and the reason is given",
+          "a full year of earnings AND a full year of price" in leg, True)
 
     # The self-check that matters: a stage firing on most of the universe has
     # stopped discriminating, and the page must say so rather than leaving the
@@ -1459,10 +1485,30 @@ def test_reflexive_stages():
     dom = rn._reflexive_legend({"DE": 500, "EF": 60, "BC": 40, "EQ": 30})
     check("DE dominance is called out on the page",
           "not identifying anything" in dom, True)
-    check("and quantified", "89%" in dom, True)
-    check("mostly near-equilibrium is explained as expected, not alarming",
-          "expected result" in rn._reflexive_legend({"EQ": 900, "BC": 50}), True)
+    check("and quantified against the CLASSIFIED names, not the table",
+          "89%" in dom, True)
     check("no census renders nothing", rn._reflexive_legend({}), "")
+
+    # The reading belongs on the ROW as well as in the legend: a badge you have
+    # to go and look up is a badge nobody reads twice.
+    t = rn.TEMPLATE
+    check("the drawer states the stage's practical reading",
+          "Reflexive stage '+esc(r.rfx" in t, True)
+    check("with the rule that fired it", "Fires when '" in t, True)
+    check("and colours the note by whether it is a caution or an opening",
+          "r.rfx_group==='caution'" in t, True)
+    res = {"X": {"ticker": "X", "name": "X", "market": "US", "frameworks": {},
+                 "technical": {"tests": []}, "metrics": {},
+                 "reflexive": {"stage": "DE", "label": "Conviction through a setback",
+                               "rule": "earnings flat or falling",
+                               "action": "raise your bar", "group": "caution"}}}
+    row = rn.build_payload(res, {}, {})[0]
+    check("and the payload carries all three", 
+          (row["rfx_action"], row["rfx_group"]), ("raise your bar", "caution"))
+    check("every stage carries a rule, a group and a buyer's reading",
+          all(all(k in v for k in ("rule", "group", "action"))
+              for v in __import__("src.reflexivity", fromlist=["x"]).STAGES.values()),
+          True)
 
 
 
