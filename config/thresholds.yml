@@ -117,31 +117,105 @@ munger:
       operator: lte
 
 # ---------------------------------------------------------------------------
+# Walter (and Edwin) Schloss — assets first, and almost nothing else.
+#
+# The governing idea: "We like to buy stocks which we feel are undervalued, and
+# then we have to have the guts to buy more when they go down." Assets change
+# slowly and are auditable; earnings fluctuate wildly and are forecast badly.
+# So every test here is a balance-sheet or price-history fact, and not one of
+# them requires an opinion about next year.
+#
+# Note on the 20-year history test: no statement feed carries 20 years, so it
+# is tested on LISTING AGE from the price feed's first trade date — the only
+# 20-year signal available in every market. Where the feed has no first trade
+# date the test is marked not-applicable rather than failed.
 schloss:
   label: Deep value, balance-sheet first
-  min_tests_passed: 4      # of 5
+  min_tests_passed: 7      # of 11
   tests:
-    price_to_tangible_book:
+    # Book value is the starting point for enterprise value, and the discount
+    # to it is the margin of safety. Net-net satisfies this on its own: below
+    # net current asset value you are handed the fixed assets for nothing.
+    cheap_against_assets:
       metric: price_to_tangible_book
       threshold: 1.0
       operator: lt
-    minimal_leverage:
+      alt_metric: ncav_to_market_cap
+      alt_threshold: 1.0
+      alt_operator: gte
+      # In a buoyant market sub-book stocks stop existing. Edwin Schloss's own
+      # adjustment was to switch to relative value rather than to stand aside,
+      # and `value_regime` is set from what the universe actually offers today.
+      by: value_regime
+      cases:
+        relative_value:
+          metric: price_to_sales
+          threshold: 0.60
+          operator: lte
+          note: >-
+            fewer than one name in twenty trades below tangible book right now,
+            so this is judged on relative value (price to sales) as the Schlosses
+            did in buoyant markets, not on a book discount that does not exist
+    # A book value made of goodwill is not asset backing, it is a record of
+    # what somebody once overpaid.
+    book_is_real:
+      metric: goodwill_to_assets
+      threshold: 0.20
+      operator: lte
+    # Schloss's stated hard rule: debt must not exceed common equity.
+    debt_below_equity:
       metric: debt_to_equity
+      threshold: 1.0
+      operator: lt
+    # And his preference within that rule — minimal long-term debt, so the
+    # company can sit out a multi-year downturn until value is recognised.
+    minimal_long_term_debt:
+      metric: long_term_debt_to_equity
       threshold: 0.30
       operator: lte
+      skip_if_missing: true
+      missing_note: the feed does not split long-term from short-term debt here
     near_multiyear_low:
       metric: pct_above_5y_low
       threshold: 0.35             # within 35% of its 5-year low
       operator: lte
-    long_history:
-      metric: years_of_data
-      threshold: 10
+    # The false-bottom test. A fall from 125 to 60 is only a bargain if the
+    # stock was not at 20 three years ago; the ten-year low is what tells you.
+    no_false_bottom:
+      metric: pct_above_10y_low
+      threshold: 1.00             # no more than 100% above its 10-year low
+      operator: lte
+    long_operating_history:
+      metric: listing_age_years
+      threshold: 20
       operator: gte
-      min_history_years: 10       # can't tell a young company from a short feed
+      skip_if_missing: true
+      missing_note: >-
+        no first-trade date in the feed, so listing age cannot be checked —
+        Schloss's 20-year bar is untested rather than failed
     earnings_durability:
       metric: loss_years_in_10
       threshold: 2
       operator: lte
+    # Baseline cash generation through a full decade, scaled to the years the
+    # feed actually carries so a four-year history is judged on the same bar.
+    cash_generation_record:
+      metric: cfo_positive_share_10y
+      threshold: 0.70
+      operator: gte
+    # "Management should own a good bit of stock" — alignment, not incentives.
+    insider_alignment:
+      metric: insider_ownership
+      threshold: 0.05
+      operator: gte
+      skip_if_missing: true
+      missing_note: no insider-ownership figure in the feed for this market
+    # A dividend pays you to wait for the re-rating, which on Schloss's own
+    # three-to-five-year holding period is a long wait.
+    pays_while_you_wait:
+      metric: dividend_yield
+      threshold: 0.0
+      operator: gt
 
 # ---------------------------------------------------------------------------
 klarman:
@@ -170,33 +244,153 @@ klarman:
       operator: gt
 
 # ---------------------------------------------------------------------------
+# Peter Lynch — growth at a reasonable price, judged by CATEGORY.
+#
+# Lynch's first question is not "is it cheap" but "what kind of company is
+# this", because the same number inverts across his six categories: a low P/E
+# is a bargain on a fast grower and a sell signal on a cyclical, where it means
+# the E is at a peak. `by: lynch_category` routes each test through the label
+# `src/lynch.py` assigns, and a test that makes no sense for a category is
+# marked not-applicable rather than failed — scoring a question that was never
+# asked is how a screen quietly rejects every stalwart it sees.
 lynch:
   label: Growth at a reasonable price
-  min_tests_passed: 4      # of 5
+  min_tests_passed: 6      # of 9
   tests:
-    peg:
+    # The valuation test IS the category test. Each category gets the yardstick
+    # Lynch applied to it, and the panel shows which one was used.
+    valuation:
       metric: peg_ratio
       threshold: 1.0
       operator: lte
       min_history_years: 6        # PEG needs a 5-year EPS CAGR
-    growth_band_lower:
+      by: lynch_category
+      cases:
+        stalwart:
+          # Growth PLUS dividend against the P/E — a stalwart's return arrives
+          # partly as a cheque and a plain PEG cannot see the cheque.
+          metric: growth_plus_yield_to_pe
+          threshold: 1.5
+          operator: gte
+          # Lynch's 1.5 bar was written when large-cap P/Es were 10 and growth
+          # was 15%; on a modern index constituent it is very demanding. The
+          # plain PEG survives as an alternative satisfying route so the test
+          # discriminates instead of rejecting every stalwart in the universe.
+          alt_metric: peg_ratio
+          alt_threshold: 1.0
+          alt_operator: lte
+          note: growth plus yield against the P/E, Lynch's stalwart ratio
+        slow_grower:
+          metric: dividend_yield
+          threshold: 0.03
+          operator: gte
+          # A dividend yield needs no history at all, so the six-year floor
+          # that the PEG route requires does not carry over to this route.
+          min_history_years: 1
+          note: a slow grower is bought for the dividend, so the yield is the test
+        cyclical:
+          # The inversion, stated plainly: you want to buy a cyclical when its
+          # earnings are DEPRESSED and the P/E therefore looks awful.
+          metric: eps_vs_5y_avg
+          threshold: 0.85
+          operator: lte
+          min_history_years: 4
+          note: >-
+            earnings against their own five-year average — on a cyclical a low
+            P/E on peak earnings is a sell signal, so the entry test is
+            depressed earnings, not a cheap multiple
+        turnaround:
+          metric: cash_to_short_term_debt
+          threshold: 1.0
+          operator: gte
+          min_history_years: 1
+          note: survival first — liquid assets against the debt that falls due first
+        asset_play:
+          metric: price_to_tangible_book
+          threshold: 1.0
+          operator: lte
+          min_history_years: 1
+          note: judged against what it owns rather than what it earns
+    # Lynch's sweet spot is 15–25%. The floor moves by category; the ceiling
+    # is his own caution about growth that cannot last.
+    growth_floor:
       metric: eps_cagr_5y
-      threshold: 0.10
+      threshold: 0.15
       operator: gte
       min_history_years: 6
-    growth_band_upper:
+      by: lynch_category
+      cases:
+        stalwart:
+          threshold: 0.10
+          note: 10–12% is what a stalwart is supposed to do
+        slow_grower:
+          not_applicable: true
+          note: a slow grower is bought for its dividend, not its growth rate
+        cyclical:
+          not_applicable: true
+          note: >-
+            a cyclical's five-year growth rate is a position in the cycle
+            wearing a trend's clothes
+        turnaround:
+          not_applicable: true
+          note: growth from a depressed base says nothing about the recovery
+        asset_play:
+          not_applicable: true
+          note: an asset play is valued on what it owns, not on its growth
+    growth_ceiling:
       metric: eps_cagr_5y
-      threshold: 0.40             # >40% is rarely sustainable — Lynch's own caution
+      threshold: 0.30             # above 30% Lynch turned cautious, not greedy
       operator: lte
       min_history_years: 6
+      by: lynch_category
+      cases:
+        cyclical:
+          not_applicable: true
+        turnaround:
+          not_applicable: true
+        asset_play:
+          not_applicable: true
+    # "75% equity, 25% debt" — Lynch's healthy balance sheet.
     leverage:
       metric: debt_to_equity
-      threshold: 0.50
+      threshold: 0.33
       operator: lte
+    # Bank debt can be called in a bad quarter; funded debt cannot, so long as
+    # the coupon is paid. Two companies with identical leverage are not in
+    # identical danger.
+    debt_is_not_callable:
+      metric: short_term_debt_share
+      threshold: 0.35
+      operator: lte
+      skip_if_missing: true
+      missing_note: the feed does not split short-term from long-term debt here
     inventory_discipline:
       metric: inventory_growth_less_revenue_growth
       threshold: 0.0              # inventory must not outgrow sales
       operator: lte
+    # "$2 of cash flow on a $20 stock." Lynch's floor for what the business
+    # actually generates, as distinct from what it reports.
+    cash_generation:
+      metric: fcf_yield
+      threshold: 0.05
+      operator: gte
+    # Insiders sell for many reasons and buy for only one.
+    skin_in_the_game:
+      metric: insider_ownership
+      threshold: 0.01
+      operator: gte
+      skip_if_missing: true
+      missing_note: no insider-ownership figure in the feed for this market
+    # Lynch's own bar was under 15–20% institutional ownership. This universe
+    # is made of index constituents, which are by construction the most heavily
+    # institutionally owned equities in the world — the bar is set at what
+    # counts as under-owned WITHIN that universe, and the Lynch panel says so.
+    not_over_owned:
+      metric: institutional_ownership
+      threshold: 0.70
+      operator: lte
+      skip_if_missing: true
+      missing_note: no institutional-ownership figure in the feed for this market
 
 # ---------------------------------------------------------------------------
 # Sir John Templeton — bargain hunting at the point of maximum pessimism.

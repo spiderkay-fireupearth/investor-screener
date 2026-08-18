@@ -161,6 +161,20 @@ def compute(df: pd.DataFrame,
     out["pct_above_5y_low"] = (price - low5) / low5 if low5 else None
     out["years_of_price_history"] = round(n / 252, 1)
 
+    # Schloss's false-bottom check. A stock down from 125 to 60 looks like a
+    # bargain until you notice it traded at 20 three years ago: the 52-week
+    # chart shows a collapse, the 10-year chart shows the collapse is not over.
+    # The ten-year window is the one that tells you which you are looking at.
+    y10 = close.iloc[-2520:] if n >= 2520 else close
+    low10 = float(y10.min())
+    high10 = float(y10.max())
+    out["low_10y"] = low10
+    out["high_10y"] = high10
+    out["pct_above_10y_low"] = (price - low10) / low10 if low10 else None
+    # Where the price sits inside its own decade: 0 is the floor, 1 the ceiling.
+    out["price_in_10y_range"] = ((price - low10) / (high10 - low10)
+                                 if high10 > low10 else None)
+
     # Volume participation
     if len(vol.dropna()) >= 50:
         v20 = vol.rolling(20).mean().iloc[-1]

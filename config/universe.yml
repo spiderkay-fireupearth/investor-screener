@@ -591,6 +591,10 @@ macro_series:
   ig_credit_spread: BAMLC0A0CM
   usd_broad_index: DTWEXBGS
   vix: VIXCLS
+  # Lynch's Rule of 20 needs an inflation rate. This is the index LEVEL; the
+  # run converts it to a year-on-year rate before using it, because adding a
+  # CPI level of 320 to a P/E of 22 would be arithmetic without meaning.
+  us_cpi: CPIAUCSL
 
 
 # ---------------------------------------------------------------------------

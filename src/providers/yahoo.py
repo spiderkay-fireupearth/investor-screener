@@ -15,6 +15,7 @@ adapter implementing the same three methods. Nothing downstream changes.
 """
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 import time
 import random
@@ -56,6 +57,9 @@ BALANCE_MAP: Dict[str, List[str]] = {
                              "Cash Cash Equivalents And Short Term Investments"],
     "short_term_investments": ["Other Short Term Investments", "Short Term Investments"],
     "total_debt": ["Total Debt", "Net Debt"],
+    "short_term_debt": ["Current Debt", "Current Debt And Capital Lease Obligation",
+                        "Short Term Debt", "Other Current Borrowings"],
+    "long_term_debt": ["Long Term Debt", "Long Term Debt And Capital Lease Obligation"],
     "total_equity": ["Stockholders Equity", "Total Equity Gross Minority Interest",
                      "Common Stock Equity"],
     "minority_interest": ["Minority Interest"],
@@ -223,6 +227,32 @@ class YahooProvider:
                 # ROE, so the value frameworks must be skipped rather than
                 # failed on missing data.
                 info["quote_type"] = full.get("quoteType")
+                # Ownership. Lynch bought what the institutions had not found;
+                # Schloss bought where the managers had their own money. Both
+                # come free with the profile call that already runs.
+                info["insider_ownership"] = full.get("heldPercentInsiders")
+                info["institutional_ownership"] = full.get("heldPercentInstitutions")
+                dy = full.get("dividendYield")
+                if dy is None:
+                    dy = full.get("trailingAnnualDividendYield")
+                # Yahoo is inconsistent: some rows carry 0.031, others 3.1 for
+                # the same 3.1%. Anything above 1 is a percentage, not a ratio —
+                # a genuine 100%+ yield does not exist outside a data error.
+                if isinstance(dy, (int, float)) and dy > 1:
+                    dy = dy / 100.0
+                info["dividend_yield"] = dy
+                # First quote date — the only listing-age signal available for
+                # every market. Schloss wanted 20+ years of operating history,
+                # which no 10-year statement feed can confirm on its own.
+                ft = (full.get("firstTradeDateEpochUtc")
+                      or full.get("firstTradeDateMilliseconds"))
+                if isinstance(ft, (int, float)) and ft > 0:
+                    secs = ft / 1000.0 if ft > 4e10 else float(ft)
+                    try:
+                        info["first_trade_date"] = _dt.datetime.fromtimestamp(
+                            secs, _dt.timezone.utc).date().isoformat()
+                    except (OverflowError, OSError, ValueError):
+                        pass
             except Exception:                            # noqa: BLE001
                 pass
             return info

@@ -307,8 +307,13 @@ class EdgarProvider:
                     missing.append(fieldname)
                 else:
                     setattr(fy_obj, fieldname, val)
-            td = debt_long.get(fy, 0.0) + debt_short.get(fy, 0.0)
+            dl, ds = debt_long.get(fy), debt_short.get(fy)
+            td = (dl or 0.0) + (ds or 0.0)
             fy_obj.total_debt = td if td > 0 else None
+            # Kept apart as well as summed: Lynch's bank-debt-versus-funded-debt
+            # test needs the split, and EDGAR has already tagged it.
+            fy_obj.long_term_debt = dl
+            fy_obj.short_term_debt = ds
             if fy_obj.total_debt is None:
                 missing.append("total_debt")
             # Total liabilities is often omitted; derive from assets - equity.

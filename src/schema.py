@@ -48,6 +48,13 @@ class FundamentalYear:
     cash_and_equivalents: Optional[float] = None
     short_term_investments: Optional[float] = None
     total_debt: Optional[float] = None
+    # Lynch's distinction, and the reason this is split out: bank debt can be
+    # CALLED at short notice when a lender takes fright, while funded debt
+    # (bonds) cannot be, so long as the coupon is paid. Two companies with the
+    # same debt-to-equity are not in the same danger if one owes it to a bank
+    # revolver due this year and the other to a bond maturing in 2034.
+    short_term_debt: Optional[float] = None
+    long_term_debt: Optional[float] = None
     total_equity: Optional[float] = None
     minority_interest: Optional[float] = None
     goodwill: Optional[float] = None
@@ -155,6 +162,15 @@ class CompanyRecord:
     sector: Optional[str] = None
     industry: Optional[str] = None
     business_summary: Optional[str] = None    # one-paragraph blurb from the feed
+
+    # Ownership and listing facts, from the profile feed rather than the
+    # statements. Lynch wanted names Wall Street had NOT found; Schloss wanted
+    # managers who owned the thing they ran. Both are ownership questions that
+    # no income statement answers.
+    insider_ownership: Optional[float] = None         # fraction held by insiders
+    institutional_ownership: Optional[float] = None   # fraction held by funds
+    dividend_yield: Optional[float] = None
+    first_trade_date: Optional[str] = None            # ISO date of first quote
     currency: str = "USD"            # currency the SHARES TRADE in
     financial_currency: Optional[str] = None   # currency the STATEMENTS use
     standard: str = "ifrs"

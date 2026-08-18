@@ -46,6 +46,21 @@ DISPLAY_METRICS = (
     "return_3m", "return_6m", "return_12m", "worst_month_in_6m",
     "rsi_label", "rsi_regime", "rsi_note", "rsi_divergence",
     "rsi_divergence_note",
+    # Lynch: the category IS the framework, so it has to survive the round
+    # trip through the store or a merged row loses the reason it passed.
+    "lynch_category", "lynch_category_label", "lynch_category_why",
+    "lynch_peak_earnings_warning",
+    "peg_ratio", "pegy_ratio", "growth_plus_yield_to_pe", "eps_vs_5y_avg",
+    "dividend_yield", "payout_ratio",
+    "net_cash_per_share", "net_cash_share_of_price", "pe_ex_cash",
+    "short_term_debt_share", "long_term_debt_to_equity",
+    "cash_to_short_term_debt",
+    "insider_ownership", "institutional_ownership",
+    # Schloss: price history depth and the listing-age proxy for his 20-year bar
+    "listing_age_years", "pct_above_10y_low", "price_in_10y_range",
+    "price_to_sales", "cfo_positive_share_10y", "goodwill_to_assets",
+    "value_regime", "below_book_share_of_universe",
+    "loss_years_in_10", "loss_years_in_3",
 )
 
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
@@ -74,11 +89,15 @@ def _test_rows(fw: Dict[str, Any]) -> List[Dict[str, Any]]:
     for t in fw.get("tests", []):
         res = t.get("result")
         if t.get("insufficient"):
-            # Not enough YEARS to judge — a property of the data feed, not the
-            # company. Shown greyed and excluded from the score, so a shallow
-            # feed never masquerades as a failing business.
+            # Two different "not scored" cases, both excluded from the score,
+            # and the difference is not cosmetic. "Not enough YEARS" is a
+            # property of our data feed; "does not apply" is a property of the
+            # framework — Lynch does not ask a cyclical for a growth band. A
+            # shallow feed must never masquerade as a failing business, and a
+            # deliberate exclusion must never masquerade as a shallow feed.
             state = "na"
-            thresh = t.get("note") or "insufficient history"
+            thresh = ("not applicable" if t.get("not_applicable")
+                      else "insufficient history")
         else:
             state = "pass" if res is True else ("fail" if res is False else "unknown")
             thresh = (("rank " + str(t.get("rank"))) if t.get("operator") == "rank"
@@ -90,6 +109,10 @@ def _test_rows(fw: Dict[str, Any]) -> List[Dict[str, Any]]:
             "threshold": thresh,
             "state": state,
             "alt": bool(t.get("via_alt")),
+            # Why THIS yardstick. A category-routed test measures a different
+            # metric than the row above it, and without the reason on the page
+            # the panel looks inconsistent rather than deliberate.
+            "note": t.get("note") or "",
         })
     return rows
 
@@ -126,10 +149,19 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 fw_state[key] = "fail"
             eff = f.get("effective_total", f.get("n_total", 0))
             note = f.get("ineligible_reason") or f.get("macro_gate_blocked") or ""
+            n_na = f.get("n_not_applicable", 0)
             if f.get("limited_history") and not note:
                 note = (f"judged on {m.get('history_years', '?')} years of statements — "
-                        f"{f.get('n_insufficient')} test(s) need a longer window and "
-                        f"were excluded, with the bar scaled down to match")
+                        f"{f.get('n_insufficient') - n_na} test(s) need a longer window "
+                        f"and were excluded, with the bar scaled down to match")
+            if n_na and not f.get("ineligible_reason"):
+                # A test that does not apply is NOT a data gap, and saying so
+                # matters: Lynch's growth band is meaningless on a cyclical, and
+                # the app should say that rather than imply a short feed.
+                extra = (f"{n_na} test(s) do not apply to a "
+                         f"{(m.get('lynch_category_label') or 'name of this kind').lower()} "
+                         "and were excluded, with the bar scaled down to match")
+                note = f"{note} · {extra}" if note else extra
             fw_detail[key] = {
                 "label": f.get("label", key),
                 "passed": bool(f.get("passed")),
@@ -187,6 +219,12 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                                1, pct=True),
             "dis_note": _dis_tip(r.get("dislocation")),
             "syn": sy,
+            # Lynch's category, on the row rather than buried in his panel:
+            # it changes how every other number on the line should be read.
+            "cat": m.get("lynch_category"),
+            "cat_label": m.get("lynch_category_label"),
+            "cat_why": m.get("lynch_category_why") or "",
+            "cat_warn": m.get("lynch_peak_earnings_warning") or "",
             "surfaced": bool(r.get("surfaced")),
             "has_report": ticker in report_tickers,
             "themes": r.get("themes") or [],
@@ -225,6 +263,28 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                                    if m.get("rsi_divergence") else "none"),
                 "vs 200d MA": "above" if m.get("price_above_sma200") else "below",
                 "RS 6m vs index": _fmt_num(m.get("rs_vs_market_index_6m"), 1, pct=True),
+                # Lynch
+                "Lynch category": m.get("lynch_category_label") or "—",
+                "PEGY": _fmt_num(m.get("pegy_ratio")),
+                "Growth+yield ÷ P/E": _fmt_num(m.get("growth_plus_yield_to_pe")),
+                "Dividend yield": _fmt_num(m.get("dividend_yield"), 1, pct=True),
+                "Net cash/share": _fmt_num(m.get("net_cash_per_share")),
+                "P/E ex-cash": _fmt_num(m.get("pe_ex_cash")),
+                "EPS vs 5y avg": _fmt_num(m.get("eps_vs_5y_avg")),
+                "Short-term debt share": _fmt_num(m.get("short_term_debt_share"),
+                                                  0, pct=True),
+                "Insider owned": _fmt_num(m.get("insider_ownership"), 1, pct=True),
+                "Institutions owned": _fmt_num(m.get("institutional_ownership"),
+                                               0, pct=True),
+                # Schloss
+                "Listing age": (f'{m.get("listing_age_years"):.0f}y'
+                                if isinstance(m.get("listing_age_years"), (int, float))
+                                else "—"),
+                "Above 10y low": _fmt_num(m.get("pct_above_10y_low"), 0, pct=True),
+                "In 10y range": _fmt_num(m.get("price_in_10y_range"), 0, pct=True),
+                "P/S": _fmt_num(m.get("price_to_sales")),
+                "Years CFO positive": _fmt_num(m.get("cfo_positive_share_10y"),
+                                               0, pct=True),
             },
         })
     rows.sort(key=lambda x: (-x["n_passed"], -x["mcap_sort"]))
@@ -266,6 +326,13 @@ border-radius:4px;background:rgba(91,157,255,.16);color:var(--acc);
 border:1px solid rgba(91,157,255,.45);cursor:help;letter-spacing:.03em}
 .dis.expl{background:var(--panel2);color:var(--tx3);border-color:var(--line)}
 .rfx.late{background:rgba(226,88,94,.16);color:var(--bad);border-color:rgba(226,88,94,.45)}
+.cat{font-size:9.5px;font-weight:700;margin-left:4px;padding:1px 5px;border-radius:4px;
+background:var(--panel2);color:var(--tx2);border:1px solid var(--line);cursor:help;
+letter-spacing:.04em}
+.cat.cyclical{background:rgba(201,162,39,.14);color:var(--warn);border-color:rgba(201,162,39,.4)}
+.cat.turnaround{background:rgba(226,88,94,.14);color:var(--bad);border-color:rgba(226,88,94,.4)}
+.cat.fast_grower{background:rgba(63,191,127,.13);color:var(--ok);border-color:rgba(63,191,127,.38)}
+.cat.warnflag{background:rgba(226,88,94,.2);color:var(--bad);border-color:rgba(226,88,94,.5)}
 .dalio{background:var(--panel);border:1px solid var(--line);border-radius:10px;
 margin:14px 0;padding:0;overflow:hidden}
 .dalio summary{list-style:none;cursor:pointer;padding:12px 15px;display:flex;
@@ -451,6 +518,7 @@ Macro: FRED. Not investment advice — a screen is a starting point for research
 <script>
 const DATA = __DATA__;
 const FWS = __FWS__;
+const CATS = __CATS__;
 const WF_URL = __WFURL__;
 const ISSUE_URL = __ISSUEURL__;
 let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="", fTheme="ALL";
@@ -531,7 +599,9 @@ function stats(rows){
 function testList(tests){
   if(!tests.length) return '<div class="trow"><span class="tn">no tests evaluated</span></div>';
   return tests.map(t=>`<div class="trow"><span class="tn">${esc(t.name)}${t.alt?' *':''}</span>
-    <span class="tv ${t.state}">${esc(t.value)} <span style="color:var(--tx3)">/ ${esc(t.threshold)}</span></span></div>`).join('');
+    <span class="tv ${t.state}">${esc(t.value)} <span style="color:var(--tx3)">/ ${esc(t.threshold)}</span></span></div>`
+    +(t.note?`<div style="font-size:10.5px;color:var(--tx3);font-style:italic;
+       margin:-1px 0 3px;line-height:1.45">${esc(t.note)}</div>`:'')).join('');
 }
 
 function detail(r){
@@ -569,6 +639,15 @@ function detail(r){
   h+='</div>';
   if(r.themes && r.themes.length)
     h+='<div class="tagrow">'+r.themes.map(t=>`<span class="tag">${esc(t)}</span>`).join('')+'</div>';
+  // Lynch's category decides which bar this row was judged against, so it is
+  // stated before the panels rather than buried inside one of them.
+  if(r.cat_label)
+    h+='<div class="note" style="border-left-color:var(--tx3)"><b>Lynch category: '
+      +esc(r.cat_label)+'.</b> '+esc(r.cat_why)+'. The Lynch panel below is scored '
+      +'on this category&rsquo;s benchmarks; tests that do not apply to it are '
+      +'excluded rather than failed.</div>';
+  if(r.cat_warn)
+    h+='<div class="warn"><b>Cyclical warning.</b> '+esc(r.cat_warn)+'</div>';
   if(r.is_fund)
     h+='<div class="warn"><b>This is a fund, not an operating company.</b> Revenue, '
       +'equity, ROE and EV/EBIT are undefined for an ETF, so the six value '
@@ -628,7 +707,12 @@ function render(){
     const dl = r.dis_fell
       ? `<span class="dis${r.dis?'':' expl'}" title="${esc(r.dis_note||'')}">&#8595;${esc(r.dis_6m||'30')}</span>`
       : '';
-    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${rx}${dl}</td><td class="nm" title="${esc(r.name)}${r.syn&&r.syn.one_liner?' — '+esc(r.syn.one_liner):''}">${esc(r.name)}</td>
+    // Lynch's label, inline. It is not decoration: it decides which bar every
+    // value test on this row was measured against.
+    const ct = r.cat
+      ? `<span class="cat ${r.cat}${r.cat_warn?' warnflag':''}" title="${esc(r.cat_label||'')} — ${esc(r.cat_why||'')}${r.cat_warn?' ⚠ '+esc(r.cat_warn):''}">${esc(CATS[r.cat]||'?')}</span>`
+      : '';
+    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${ct}${rx}${dl}</td><td class="nm" title="${esc(r.name)}${r.syn&&r.syn.one_liner?' — '+esc(r.syn.one_liner):''}">${esc(r.name)}</td>
       <td><span class="mk">${esc(r.market_label)}</span></td>
       <td class="num">${esc(r.price)}</td><td class="num">${esc(r.mcap_usd)}</td>`;
     for(const [key] of FWS){
@@ -850,6 +934,103 @@ def _reflexive_legend(census: Dict[str, int]) -> str:
               'rather than asserted, because the earnings deteriorated AFTER '
               'the price did.</span></div>'
             '</div></details>')
+
+
+CAT_SHORT = {"fast_grower": "FG", "stalwart": "SW", "slow_grower": "SG",
+             "cyclical": "CY", "turnaround": "TA", "asset_play": "AP",
+             "unclassified": "?"}
+
+
+def _lynch_panel(census: Dict[str, int], regime: Dict[str, Any],
+                 rule20: Optional[Dict[str, Any]] = None) -> str:
+    """Lynch's six categories across the universe, plus Schloss's value regime.
+
+    Both are published for the same reason: they change how every row below is
+    scored, and a classifier or a regime switch that nobody can see is one
+    nobody can argue with.
+    """
+    from . import lynch as ly
+    rule20 = rule20 or {}
+    total = sum(census.values())
+    if not total and not regime:
+        return ""
+    r20 = ""
+    if rule20.get("available"):
+        cls = {"cheap": "cool", "fair": "warm", "expensive": "hot"}.get(
+            rule20.get("verdict"), "")
+        r20 = (f'<span class="pill {cls}">Rule of 20: '
+               f'{rule20["total"]:.1f}</span>')
+    elif rule20.get("reason"):
+        r20 = '<span class="pill">Rule of 20 unavailable</span>'
+    order = [c for c in ly.CATEGORIES if census.get(c)]
+    cells = "".join(
+        f'<div class="drow"><span class="k">{e_attr(ly.LABELS[c])} '
+        f'<span class="pill">{CAT_SHORT[c]}</span></span>'
+        f'<span class="v">{census[c]} · {census[c] / total:.0%}</span></div>'
+        for c in order)
+    notes = []
+    # The self-check. One category swallowing the universe means the classifier
+    # is wrong, not that the market is uniform — and the page should say so
+    # before anyone trades on a label.
+    if total:
+        top = max(census.items(), key=lambda kv: kv[1])
+        if top[1] / total > 0.60:
+            notes.append(
+                f'<b>Check this.</b> {top[1] / total:.0%} of the universe is '
+                f'landing in one category ({ly.LABELS[top[0]]}). Lynch\'s split '
+                'is meant to be uneven but not this uneven — the industry word '
+                'list in <code>src/lynch.py</code> is probably too greedy.')
+    if rule20.get("available"):
+        notes.append(
+            f'<b>Rule of 20: {rule20["total"]:.1f}</b> — a median trailing P/E '
+            f'of {rule20["median_pe"]:.1f} across {rule20["names"]} US names '
+            f'plus inflation of {rule20["inflation_pct"]:.1f}%. That is '
+            f'{rule20["reading"]}. The P/E is this screener\'s own median, not '
+            'a vendor\'s cap-weighted S&amp;P figure — a median runs cooler, '
+            'and the gap between the two is the mega-caps.')
+    elif rule20.get("reason"):
+        notes.append('<span class="muted-ink">Rule of 20 not computed: '
+                     + e_attr(str(rule20["reason"])) + '.</span>')
+    notes.append(
+        'Lynch looked for names institutions had <em>not</em> found — under '
+        '15–20% institutional ownership. This universe is built from index '
+        'constituents, which are by construction the most heavily '
+        'institution-owned equities in the world, so that bar is set here at '
+        'what counts as under-owned <em>within</em> an index: 70%. It is a '
+        'relative test, not Lynch\'s original one.')
+    if regime.get("regime"):
+        share = regime.get("below_book_share")
+        share_txt = (f'{share:.1%} of {regime.get("names_scored", 0)} names'
+                     if isinstance(share, (int, float)) else "not measurable")
+        if regime["regime"] == "relative_value":
+            notes.append(
+                f'<b>Schloss is in relative-value mode.</b> Only {share_txt} '
+                'trade below tangible book, under the '
+                f'{regime.get("floor", 0.05):.0%} floor — so his valuation test '
+                'switches to price-to-sales, which is what Edwin Schloss did in '
+                'buoyant markets rather than stand aside for a decade.')
+        else:
+            notes.append(
+                f'<b>Schloss is in deep-value mode.</b> {share_txt} trade below '
+                'tangible book, so the book discount is still available and the '
+                'valuation test stays on it.')
+    return (
+        '<details class="dalio"><summary>'
+        '<span class="stg">Lynch categories</span>'
+        + r20 +
+        f'<span class="muted-ink">{total} names classified — the category sets '
+        'the bar each name is judged against</span>'
+        '<span class="muted-ink" style="margin-left:auto">details &#9662;</span>'
+        '</summary><div class="body"><div class="dgrid">'
+        f'<div class="dcard"><h4>Universe split</h4>{cells}</div>'
+        '<div class="dcard"><h4>What each is judged on</h4>'
+        + "".join(f'<div class="drow"><span class="k">{e_attr(ly.LABELS[c])}</span>'
+                  f'<span class="v" style="text-align:left;max-width:60%">'
+                  f'{e_attr(ly.RATIONALE[c])}</span></div>'
+                  for c in (order or list(ly.CATEGORIES)[:4]))
+        + '</div></div>'
+        + "".join(f'<div class="dnote">{n}</div>' for n in notes)
+        + '</div></details>')
 
 
 def _commodity_panel(cb: Dict[str, Any]) -> str:
@@ -1142,6 +1323,9 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     cmd_html = _commodity_panel(screened.get("commodity_board") or {})
     rfx_html = _reflexive_legend(screened.get("reflexive_census") or {})
     dis_html = _dislocation_panel(screened.get("dislocation_summary") or {})
+    lyn_html = _lynch_panel(screened.get("lynch_census") or {},
+                            screened.get("value_regime") or {},
+                            screened.get("rule_of_20") or {})
 
     gate = (f'<div class="gate {"open" if open_ else "closed"}">'
             f'<b>Soros macro gate: {"OPEN" if open_ else "CLOSED"}</b> — {reason}.'
@@ -1153,13 +1337,15 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     html = (TEMPLATE
             .replace("__DATA__", json.dumps(rows, default=str))
             .replace("__FWS__", json.dumps(FRAMEWORKS))
+            .replace("__CATS__", json.dumps(CAT_SHORT))
             .replace("__WFURL__", json.dumps(wf_url))
             .replace("__ISSUEURL__", json.dumps(issue_url))
             .replace("__MKTCHIPS__", mkt_chips)
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
-            .replace("__GATE__", debt_html + cmd_html + rfx_html + dis_html + cycle_html + gate)
+            .replace("__GATE__", debt_html + cmd_html + lyn_html + rfx_html
+                     + dis_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
             .replace("__TS__", datetime.now(timezone.utc)

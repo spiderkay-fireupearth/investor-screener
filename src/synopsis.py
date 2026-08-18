@@ -41,6 +41,11 @@ SYNOPSIS_FIELDS = (
     "rs_vs_market_index_6m", "price_above_sma200", "sma50_above_sma200",
     "rsi_14", "rsi_label", "rsi_regime", "rsi_divergence",
     "history_years", "statement_currency",
+    "lynch_category", "lynch_category_label", "lynch_category_why",
+    "lynch_peak_earnings_warning", "dividend_yield", "pegy_ratio",
+    "growth_plus_yield_to_pe", "eps_vs_5y_avg", "net_cash_per_share",
+    "pe_ex_cash", "insider_ownership", "institutional_ownership",
+    "listing_age_years", "pct_above_10y_low",
 )
 
 MAX_DESCRIPTION_CHARS = 260
@@ -165,6 +170,12 @@ def _valuation(m: Dict[str, Any]) -> str:
     if nc is not None and nc > 0.10:
         s += (f", and {_pct(nc)} of the market capitalisation is cash net of "
               "debt — the operating business costs less than the headline price")
+        pex = _g(m, "pe_ex_cash")
+        if pex is not None and pex > 0:
+            s += f", which is {_x(pex)} earnings once the cash is taken out"
+    dy = _g(m, "dividend_yield")
+    if dy:
+        s += f", and it pays {_pct(dy, 1)}"
     ncav = _g(m, "ncav_to_market_cap")
     if ncav is not None and ncav > 1.0:
         s += (", and it trades below net current asset value, Graham's "
@@ -232,6 +243,23 @@ def _price_action(m: Dict[str, Any]) -> str:
     if div:
         s += f", and momentum shows {div} divergence"
     return s + "."
+
+
+def _category(m: Dict[str, Any]) -> List[str]:
+    """Lynch's label, and the warning that only a label makes possible."""
+    out = []
+    lab, why = _g(m, "lynch_category_label"), _g(m, "lynch_category_why")
+    if lab:
+        line = f"Lynch would file this as a {lab.lower()}"
+        if why:
+            line += f" — {why}"
+        out.append(line + ", and the growth and valuation tests above were "
+                          "scored on that category's bar rather than one "
+                          "universal one.")
+    warn = _g(m, "lynch_peak_earnings_warning")
+    if warn:
+        out.append(warn)
+    return out
 
 
 def _flags(res: Dict[str, Any]) -> List[str]:
@@ -322,6 +350,7 @@ def build(res: Dict[str, Any], metrics: Dict[str, Any],
         s = fn(m)
         if s:
             numbers.append(s)
+    numbers.extend(_category(m))
     numbers.extend(_flags(res))
 
     cur, stmt = res.get("currency"), _g(m, "statement_currency")

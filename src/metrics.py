@@ -9,10 +9,12 @@ conversion point in the system.
 from __future__ import annotations
 
 import math
+from datetime import date as _date
 from typing import Dict, List, Optional, Any
 
 import numpy as np
 
+from . import lynch as _lynch
 from .schema import CompanyRecord, FundamentalYear
 
 
@@ -555,6 +557,141 @@ def compute_metrics(rec: CompanyRecord,
     # -------------------------------------------------- merge in technicals
     for k, v in rec.technicals.items():
         m.setdefault(k, v)
+
+    # ========================================================================
+    # Peter Lynch — GARP, and the ratios that make a category legible
+    # ========================================================================
+    # Ownership and listing facts come from the profile feed rather than the
+    # statements, and are simply carried through so the threshold engine can
+    # see them. Where the feed has nothing, the test is marked not-applicable
+    # rather than failed: an absent field is our provider's gap, not a
+    # judgement on the company.
+    m["insider_ownership"] = getattr(rec, "insider_ownership", None)
+    m["institutional_ownership"] = getattr(rec, "institutional_ownership", None)
+
+    # Dividend yield: prefer the feed's own figure, fall back to cash actually
+    # paid over the market value. The fallback matters for Asian names where
+    # the profile is thin but the cash-flow statement is not.
+    dy = getattr(rec, "dividend_yield", None)
+    if not _n(dy) and ys and _n(ys[0].dividends_paid) and _n(mcap) and mcap:
+        dy = abs(ys[0].dividends_paid) / mcap
+    m["dividend_yield"] = dy
+
+    # Listing age — the only 20-year-history signal available in every market.
+    m["listing_age_years"] = None
+    ftd = getattr(rec, "first_trade_date", None)
+    if ftd:
+        try:
+            y, mo, d = (int(x) for x in str(ftd)[:10].split("-"))
+            today = _date.today()
+            m["listing_age_years"] = round(
+                (today - _date(y, mo, d)).days / 365.25, 1)
+        except (ValueError, TypeError):
+            pass
+
+    # --- the balance sheet Lynch actually read ------------------------------
+    # "75% equity, 25% debt" is his healthy structure; and of that debt, what
+    # matters is whether a bank can call it in a bad quarter.
+    if ys:
+        y0 = ys[0]
+        std, ltd = y0.short_term_debt, y0.long_term_debt
+        total_debt = y0.total_debt
+        if not _n(total_debt) and (_n(std) or _n(ltd)):
+            total_debt = (std or 0.0) + (ltd or 0.0)
+        m["short_term_debt_share"] = (
+            _safe_div(std, total_debt)
+            if (_n(std) and _n(total_debt) and total_debt > 0) else
+            (0.0 if (_n(total_debt) and total_debt == 0) else None))
+        m["long_term_debt_to_equity"] = _safe_div(ltd, y0.total_equity)
+        # Net cash per share, and the price of the BUSINESS once the cash on
+        # the balance sheet is taken out of the price. Lynch's Ford example is
+        # exactly this arithmetic: a $38 stock with $16.60 of net cash is a
+        # $21.40 business, and every multiple should be struck on the $21.40.
+        cash_tot = (y0.cash_and_equivalents or 0.0) + (y0.short_term_investments or 0.0)
+        nc = cash_tot - (y0.total_debt or 0.0) if (
+            _n(y0.cash_and_equivalents) or _n(y0.total_debt)) else None
+        m["net_cash_per_share"] = _safe_div(nc, sc_now)
+        if _n(m["net_cash_per_share"]) and _n(price) and price > 0:
+            ex = price - m["net_cash_per_share"]
+            m["price_ex_cash"] = ex
+            m["net_cash_share_of_price"] = m["net_cash_per_share"] / price
+            m["pe_ex_cash"] = (ex / eps) if (_n(eps) and eps > 0 and ex > 0) else None
+        else:
+            m["price_ex_cash"] = m["pe_ex_cash"] = m["net_cash_share_of_price"] = None
+        m["price_to_sales"] = _safe_div(mcap, y0.revenue) if (
+            _n(y0.revenue) and y0.revenue > 0) else None
+        # A turnaround lives or dies on the debt maturity schedule. The nearest
+        # readable proxy: liquid assets against the debt that comes due first.
+        # No short-term debt at all is reported as a wide margin rather than a
+        # division by zero — that company is not the one Lynch worried about.
+        if _n(std):
+            m["cash_to_short_term_debt"] = (
+                min(_safe_div(cash_tot, std), 99.0) if std > 0 else 99.0)
+        else:
+            m["cash_to_short_term_debt"] = None
+    else:
+        for k in ("short_term_debt_share", "long_term_debt_to_equity",
+                  "net_cash_per_share", "price_ex_cash", "pe_ex_cash",
+                  "net_cash_share_of_price", "price_to_sales",
+                  "cash_to_short_term_debt"):
+            m[k] = None
+
+    # --- PEGY: the stalwart's ratio -----------------------------------------
+    # Lynch: "the ratio of the long-term growth rate PLUS the dividend yield,
+    # divided by the P/E." A stalwart's return arrives partly as a cheque, and
+    # a plain PEG cannot see the cheque. Both forms are kept: the divisor form
+    # (under 1 is good) and Lynch's own multiple form (over 1.5 is good, over
+    # 2 is excellent), because his books quote both and they invert each other.
+    yld_pct = dy * 100 if _n(dy) else 0.0
+    if _n(m.get("pe_ttm")) and _n(growth_pct) and (growth_pct + yld_pct) > 0:
+        m["pegy_ratio"] = m["pe_ttm"] / (growth_pct + yld_pct)
+        m["growth_plus_yield_to_pe"] = (growth_pct + yld_pct) / m["pe_ttm"]
+    else:
+        m["pegy_ratio"] = m["growth_plus_yield_to_pe"] = None
+
+    # --- where the cycle sits ------------------------------------------------
+    # Current earnings against their own five-year average. For a cyclical this
+    # is the only honest read on the P/E: the multiple tells you nothing until
+    # you know whether the E underneath it is at a peak or a trough.
+    _eps5 = [y.eps_diluted for y in ys[:5] if _n(y.eps_diluted)]
+    m["eps_vs_5y_avg"] = None
+    if len(_eps5) >= 3:
+        _mu = float(np.mean(_eps5))
+        if _mu > 0:
+            m["eps_vs_5y_avg"] = _safe_div(_eps5[0], _mu)
+
+    # Recent trouble, as distinct from trouble a decade ago. A turnaround is a
+    # company that has JUST been in difficulty; ten-year loss counts cannot
+    # tell the two apart.
+    m["loss_years_in_3"] = sum(1 for y in ys[:3]
+                               if _n(y.net_income) and y.net_income < 0)
+
+    # Cash-flow record, Schloss's "baseline cash generation capability". Kept
+    # as a share of the years actually evaluated so a four-year feed and a
+    # ten-year one are judged on the same standard.
+    _cfo_years = [y.cfo for y in ys[:10] if _n(y.cfo)]
+    m["positive_cfo_years_in_10"] = sum(1 for v in _cfo_years if v > 0)
+    m["cfo_years_evaluated"] = len(_cfo_years)
+    m["cfo_positive_share_10y"] = (
+        m["positive_cfo_years_in_10"] / len(_cfo_years) if _cfo_years else None)
+
+    # Buybacks: `share_count_change_1y` is computed above from diluted shares.
+    # When that line is missing from the feed, fall back to shares outstanding
+    # rather than leaving Lynch's buyback test unevaluable.
+    if not _n(m.get("share_count_change_1y")) and len(ys) > 1:
+        sc_1y = ys[1].shares_diluted or ys[1].shares_outstanding
+        m["share_count_change_1y"] = _safe_div(
+            (sc_now - sc_1y) if (_n(sc_now) and _n(sc_1y)) else None, sc_1y)
+
+    # --- the category, and the benchmarks that follow from it ---------------
+    cat = _lynch.classify(m, getattr(rec, "sector", None),
+                          getattr(rec, "industry", None))
+    m["lynch_category"] = cat["category"]
+    m["lynch_category_label"] = cat["label"]
+    m["lynch_category_why"] = cat["why"]
+    m["lynch_category_rationale"] = cat["rationale"]
+    m["lynch_peak_earnings_warning"] = _lynch.peak_earnings_warning(
+        m, cat["category"])
 
     # ------------------------------------------------------- sanity guardrail
     flags = sanity_check(m)

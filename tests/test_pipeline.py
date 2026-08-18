@@ -2153,6 +2153,347 @@ def test_synopsis():
           "r.syn.one_liner" in html, True)
 
 
+def test_lynch_categories():
+    """Lynch's six categories, and the bars that follow from them."""
+    from src import lynch as ly
+
+    # --- the classifier ----------------------------------------------------
+    # A cyclical stays a cyclical however fast it grew last cycle: that growth
+    # rate is a position in the cycle, not a trend.
+    c = ly.classify({"eps_cagr_5y": 0.28}, sector="Energy",
+                    industry="Oil & Gas Integrated")
+    check("an energy name is cyclical despite 28% growth", c["category"], "cyclical")
+    c = ly.classify({"eps_cagr_5y": 0.30}, sector="Consumer Cyclical",
+                    industry="Auto Manufacturers")
+    check("so is a carmaker", c["category"], "cyclical")
+
+    # Trouble that is recent AND visible in the price outranks the industry.
+    c = ly.classify({"loss_years_in_3": 1, "pct_below_52w_high": 0.55,
+                     "eps_cagr_5y": -0.4}, sector="Energy", industry="Oil")
+    check("a recent loss plus a collapse is a turnaround", c["category"], "turnaround")
+    check("and the reason is stated", "off the 52-week high" in c["why"], True)
+
+    c = ly.classify({"eps_cagr_5y": 0.05, "price_to_tangible_book": 0.6},
+                    sector="Industrials", industry="Conglomerates")
+    check("priced under tangible book is an asset play", c["category"], "asset_play")
+    c = ly.classify({"eps_cagr_5y": 0.02, "ncav_to_market_cap": 0.9},
+                    sector="Technology", industry="Software")
+    check("so is a name whose current assets cover the price",
+          c["category"], "asset_play")
+
+    check("20%+ growth is a fast grower",
+          ly.classify({"eps_cagr_5y": 0.24}, "Technology", "Software")["category"],
+          "fast_grower")
+    check("10–20% is a stalwart",
+          ly.classify({"eps_cagr_5y": 0.12}, "Consumer Defensive",
+                      "Packaged Foods")["category"], "stalwart")
+    check("under 10% is a slow grower",
+          ly.classify({"eps_cagr_5y": 0.04, "dividend_yield": 0.05},
+                      "Utilities", "Utilities - Regulated")["category"],
+          "slow_grower")
+    check("no growth rate at all is unclassified, not a pass",
+          ly.classify({}, "Technology", "Software")["category"], "unclassified")
+    check("and the strictest bands are applied to it",
+          "strictest" in ly.classify({}, "T", "S")["why"], True)
+    check("every category has a stated rationale",
+          sorted(ly.RATIONALE) == sorted(ly.CATEGORIES), True)
+
+    # --- the single most expensive mistake Lynch names ---------------------
+    w = ly.peak_earnings_warning({"pe_ttm": 8.0, "eps_vs_5y_avg": 1.5}, "cyclical")
+    check("a cyclical on peak earnings and a low P/E is flagged", bool(w), True)
+    check("and flagged as the danger, not the bargain", "peak" in w, True)
+    w2 = ly.peak_earnings_warning({"pe_ttm": 40.0, "eps_vs_5y_avg": 0.5}, "cyclical")
+    check("the inversion also works the other way",
+          "interesting end of the cycle" in (w2 or ""), True)
+    check("and it says nothing about a non-cyclical",
+          ly.peak_earnings_warning({"pe_ttm": 8.0, "eps_vs_5y_avg": 1.5},
+                                   "stalwart"), None)
+
+    # --- the config ---------------------------------------------------------
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    lyn = th["lynch"]
+    check("Lynch runs 9 tests", len(lyn["tests"]), 9)
+    check("and needs 6 of them", lyn["min_tests_passed"], 6)
+    check("the balance sheet bar is Lynch's 75/25 rule",
+          lyn["tests"]["leverage"]["threshold"], 0.33)
+    check("the growth floor is the sweet spot, not 10%",
+          lyn["tests"]["growth_floor"]["threshold"], 0.15)
+    check("and the ceiling is his 30% caution",
+          lyn["tests"]["growth_ceiling"]["threshold"], 0.30)
+    check("callable bank debt is tested separately from total debt",
+          lyn["tests"]["debt_is_not_callable"]["metric"], "short_term_debt_share")
+    check("cash generation has a floor",
+          lyn["tests"]["cash_generation"]["metric"], "fcf_yield")
+    val = lyn["tests"]["valuation"]
+    check("the valuation test routes on the category", val["by"], "lynch_category")
+    check("a stalwart is judged on growth plus yield",
+          val["cases"]["stalwart"]["metric"], "growth_plus_yield_to_pe")
+    check("a slow grower on its dividend",
+          val["cases"]["slow_grower"]["metric"], "dividend_yield")
+    check("a cyclical on where its earnings sit in the cycle",
+          val["cases"]["cyclical"]["metric"], "eps_vs_5y_avg")
+    check("a turnaround on whether it can pay what is due",
+          val["cases"]["turnaround"]["metric"], "cash_to_short_term_debt")
+    check("an asset play on what it owns",
+          val["cases"]["asset_play"]["metric"], "price_to_tangible_book")
+    for cat in ("cyclical", "turnaround", "asset_play"):
+        check(f"the growth floor does not apply to a {cat}",
+              lyn["tests"]["growth_floor"]["cases"][cat]["not_applicable"], True)
+
+    # --- the Rule of 20 ------------------------------------------------------
+    uni = {f"T{i}": {"pe_ttm": 12.0 + i} for i in range(9)}     # median 16
+    r = ly.rule_of_20(uni, 3.0, market=None)
+    check("the rule of 20 sums a median P/E and inflation", r["total"], 19.0)
+    check("and reads under 20 as not expensive", r["verdict"], "cheap")
+    check("it reports the median it used", r["median_pe"], 16.0)
+    check("and how many names it was struck on", r["names"], 9)
+    check("above 23 is expensive",
+          ly.rule_of_20(uni, 8.0, market=None)["verdict"], "expensive")
+    check("between the two is fair",
+          ly.rule_of_20(uni, 5.0, market=None)["verdict"], "fair")
+    # Half a sum is not a sum: with no inflation reading it must refuse rather
+    # than quietly report the P/E as if it were the rule.
+    nocpi = ly.rule_of_20(uni, None, market=None)
+    check("with no inflation reading it declines to answer",
+          nocpi["available"], False)
+    check("but still says what it had", nocpi["median_pe"], 16.0)
+    check("an empty universe is refused too",
+          ly.rule_of_20({}, 3.0, market=None)["available"], False)
+    # Absurd P/Es are excluded from the median rather than dragging it.
+    junk = dict(uni); junk["JUNK"] = {"pe_ttm": 4000.0}; junk["NEG"] = {"pe_ttm": -8.0}
+    check("a 4000x outlier does not move the median",
+          ly.rule_of_20(junk, 3.0, market=None)["median_pe"], 16.0)
+    panel20 = rn._lynch_panel({"stalwart": 3}, {},
+                              ly.rule_of_20(uni, 3.0, market=None))
+    check("the rule reaches the page", "Rule of 20: 19.0" in panel20, True)
+    check("with the caveat that it is our median, not the index's",
+          "cap-weighted" in panel20, True)
+
+    # --- the metrics --------------------------------------------------------
+    rec = CompanyRecord(ticker="LY", market="US", currency="USD",
+                        sector="Consumer Defensive", industry="Packaged Foods")
+    rec.years = [mkyear(2025 - i, revenue=1000.0, net_income=120.0 * (0.9 ** i),
+                        eps_diluted=1.2 * (0.9 ** i), shares_diluted=100.0,
+                        total_equity=800.0, total_assets=1400.0,
+                        total_debt=200.0, short_term_debt=40.0,
+                        long_term_debt=160.0, cash_and_equivalents=300.0,
+                        current_assets=600.0, current_liabilities=250.0,
+                        inventory=100.0, cfo=180.0, capex=40.0,
+                        operating_income=170.0, pretax_income=160.0,
+                        dividends_paid=-30.0) for i in range(8)]
+    rec.price, rec.market_cap = 24.0, 2400.0
+    rec.dividend_yield = 0.025
+    rec.insider_ownership, rec.institutional_ownership = 0.04, 0.62
+    rec.first_trade_date = "1986-03-13"
+    m = mx.compute_metrics(rec)
+
+    check("short-term debt is split out as a share of the total",
+          m["short_term_debt_share"], 0.2)
+    check("long-term debt is measured against equity",
+          m["long_term_debt_to_equity"], 0.2)
+    check("net cash per share is computed", m["net_cash_per_share"], 1.0)
+    check("and the price of the business net of that cash",
+          m["price_ex_cash"], 23.0)
+    check("the P/E is restruck on the ex-cash price",
+          round(m["pe_ex_cash"], 2), round(23.0 / 1.2, 2))
+    check("cash is measured against the debt that falls due first",
+          m["cash_to_short_term_debt"], 7.5)
+    check("current earnings are placed against their own five-year average",
+          round(m["eps_vs_5y_avg"], 3), 1.221)
+    check("the cash-flow record is a share of the years evaluated",
+          m["cfo_positive_share_10y"], 1.0)
+    check("listing age comes from the first trade date",
+          m["listing_age_years"] > 39, True)
+    check("price to sales is available for the relative-value route",
+          m["price_to_sales"], 2.4)
+    check("PEGY divides the P/E by growth plus yield",
+          m["pegy_ratio"] is not None, True)
+    check("and Lynch's own multiple form is the inverse",
+          round(m["pegy_ratio"] * m["growth_plus_yield_to_pe"], 6), 1.0)
+    check("the category is attached to the metrics",
+          m["lynch_category"] in ly.CATEGORIES, True)
+
+    # A stalwart with a dividend: the plain PEG route and the PEGY route give
+    # different answers, which is the entire reason the category exists.
+    # The yield has to be substantial to flip the answer, which is itself worth
+    # knowing: Lynch's 1.5 bar was written when P/Es were 10, and on a modern
+    # large cap it is demanding. That is why the PEG route survives as an
+    # alternative satisfying route rather than being replaced outright.
+    stal = {"lynch_category": "stalwart", "history_years": 8,
+            "pe_ttm": 12.0, "peg_ratio": 1.2, "eps_cagr_5y": 0.10,
+            "growth_plus_yield_to_pe": (10.0 + 8.0) / 12.0,
+            "dividend_yield": 0.08}
+    t_pegy = sc.evaluate_test("valuation", val, stal)
+    check("a stalwart is scored on growth plus yield, not on PEG",
+          t_pegy["metric"], "growth_plus_yield_to_pe")
+    check("and passes on it where a plain PEG of 1.5 would have failed",
+          t_pegy["result"], True)
+    check("the panel says which yardstick was used",
+          "stalwart ratio" in (t_pegy.get("note") or ""), True)
+
+    fast = {"lynch_category": "fast_grower", "history_years": 8,
+            "peg_ratio": 0.8}
+    check("a fast grower still runs on PEG",
+          sc.evaluate_test("valuation", val, fast)["metric"], "peg_ratio")
+
+    # --- not applicable is not a failure ------------------------------------
+    # Every non-category field is supplied, so the only tests leaving the
+    # denominator are the ones Lynch does not ask of a cyclical.
+    cyc_m = {"lynch_category": "cyclical", "history_years": 10,
+             "eps_cagr_5y": 0.02, "short_term_debt_share": 0.2,
+             "insider_ownership": 0.03, "institutional_ownership": 0.5}
+    t_na = sc.evaluate_test("growth_floor", lyn["tests"]["growth_floor"], cyc_m)
+    check("the growth floor on a cyclical is not applicable",
+          t_na["not_applicable"], True)
+    check("it is not scored as a failure", t_na["result"], None)
+    check("and it leaves the denominator", t_na["insufficient"], True)
+    check("with a reason a person can read",
+          "cycle" in (t_na.get("note") or ""), True)
+
+    fwr = sc.run_framework("lynch", lyn, cyc_m)
+    check("the denominator drops for a cyclical", fwr["effective_total"] < 9, True)
+    check("and the bar scales down with it", fwr["required"] < 6, True)
+    check("the two growth-band tests do not apply to a cyclical",
+          fwr["n_not_applicable"], 2)
+    check("this is NOT reported as a short data history",
+          fwr["limited_history"], False)
+
+    # --- missing feed fields are not failures either ------------------------
+    t_miss = sc.evaluate_test("skin_in_the_game",
+                              lyn["tests"]["skin_in_the_game"], {"history_years": 8})
+    check("an absent ownership figure is not scored against the company",
+          t_miss["not_applicable"], True)
+    check("and says whose gap it is",
+          "feed" in (t_miss.get("note") or ""), True)
+
+
+def test_schloss_deep_value():
+    """Assets first: the balance sheet, the ten-year chart, and the regime."""
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    sch = th["schloss"]
+    check("Schloss runs 11 tests", len(sch["tests"]), 11)
+    check("and needs 7 of them", sch["min_tests_passed"], 7)
+    check("his hard rule is debt below equity",
+          sch["tests"]["debt_below_equity"]["threshold"], 1.0)
+    check("with a preference for minimal long-term debt",
+          sch["tests"]["minimal_long_term_debt"]["threshold"], 0.30)
+    check("book value must be real, not goodwill",
+          sch["tests"]["book_is_real"]["metric"], "goodwill_to_assets")
+    check("the false-bottom test uses the ten-year low",
+          sch["tests"]["no_false_bottom"]["metric"], "pct_above_10y_low")
+    check("the 20-year history bar is tested on listing age",
+          sch["tests"]["long_operating_history"]["threshold"], 20)
+    check("and is skipped rather than failed when the feed has no date",
+          sch["tests"]["long_operating_history"]["skip_if_missing"], True)
+    check("net-net satisfies the valuation test on its own",
+          sch["tests"]["cheap_against_assets"]["alt_metric"], "ncav_to_market_cap")
+
+    # --- the ten-year window ------------------------------------------------
+    idx = pd.date_range("2016-01-01", periods=2600, freq="B")
+    # 125 down to 60, but it traded at 20 early on: the classic false bottom.
+    path = np.concatenate([
+        np.linspace(20, 125, 1600), np.linspace(125, 60, 1000)])
+    close = pd.Series(path[:len(idx)], index=idx)
+    df = pd.DataFrame({"Open": close, "High": close * 1.01, "Low": close * .99,
+                       "Close": close, "Volume": np.full(len(idx), 1e6)})
+    t = ta.compute(df)
+    check("the ten-year low is found, far below the 52-week one",
+          t["low_10y"] < 30, True)
+    check("and the price is far above it", t["pct_above_10y_low"] > 1.0, True)
+    check("so the false-bottom test fails it",
+          t["pct_above_10y_low"] <= sch["tests"]["no_false_bottom"]["threshold"],
+          False)
+    check("while the 52-week view alone would have called it a collapse",
+          t["pct_below_52w_high"] > 0.2, True)
+    check("the position inside the decade is reported too",
+          0.0 <= t["price_in_10y_range"] <= 1.0, True)
+
+    # --- the regime switch ---------------------------------------------------
+    rich = {f"T{i}": {"price_to_tangible_book": 3.0 + i} for i in range(40)}
+    reg = sc.set_value_regime(rich, sch)
+    check("with nothing below book, Schloss switches to relative value",
+          reg["regime"], "relative_value")
+    check("and every row carries the regime",
+          rich["T0"]["value_regime"], "relative_value")
+    t_rel = sc.evaluate_test("cheap_against_assets",
+                             sch["tests"]["cheap_against_assets"],
+                             {**rich["T0"], "price_to_sales": 0.4,
+                              "history_years": 10})
+    check("the valuation test switches to price to sales",
+          t_rel["metric"], "price_to_sales")
+    check("and passes a genuinely depressed one", t_rel["result"], True)
+    check("the switch is explained on the row",
+          "relative value" in (t_rel.get("note") or ""), True)
+
+    cheap = {f"T{i}": {"price_to_tangible_book": 0.5 + (i % 4)} for i in range(40)}
+    reg2 = sc.set_value_regime(cheap, sch)
+    check("with book discounts on offer, he stays in deep-value mode",
+          reg2["regime"], "deep_value_available")
+    t_deep = sc.evaluate_test("cheap_against_assets",
+                              sch["tests"]["cheap_against_assets"],
+                              {**cheap["T0"], "history_years": 10})
+    check("and the test stays on tangible book",
+          t_deep["metric"], "price_to_tangible_book")
+
+    # A net-net passes the valuation test even above book.
+    t_nn = sc.evaluate_test("cheap_against_assets",
+                            sch["tests"]["cheap_against_assets"],
+                            {"price_to_tangible_book": 1.4,
+                             "ncav_to_market_cap": 1.2,
+                             "value_regime": "deep_value_available",
+                             "history_years": 10})
+    check("a net-net passes on the alternative route", t_nn["result"], True)
+    check("and is marked as having done so", t_nn["via_alt"], True)
+
+    # --- end to end ----------------------------------------------------------
+    rec = CompanyRecord(ticker="SCH", market="US", currency="USD",
+                        sector="Industrials", industry="Conglomerates")
+    rec.years = [mkyear(2025 - i, revenue=2000.0, net_income=60.0,
+                        eps_diluted=0.6, shares_diluted=100.0,
+                        total_equity=1200.0, total_assets=1800.0,
+                        total_debt=300.0, short_term_debt=50.0,
+                        long_term_debt=250.0, goodwill=50.0,
+                        cash_and_equivalents=200.0, current_assets=900.0,
+                        current_liabilities=400.0, total_liabilities=600.0,
+                        cfo=140.0, capex=40.0, operating_income=90.0,
+                        pretax_income=80.0, dividends_paid=-20.0)
+                 for i in range(10)]
+    rec.price, rec.market_cap = 9.0, 900.0
+    rec.insider_ownership, rec.dividend_yield = 0.11, 0.022
+    rec.first_trade_date = "1978-06-01"
+    rec.technicals = {"pct_above_5y_low": 0.20, "pct_above_10y_low": 0.55,
+                      "pct_below_52w_high": 0.30}
+    m = mx.compute_metrics(rec)
+    out = sc.screen_universe([rec], {"SCH": m}, th, {}, cycle=None)
+    f = out["results"]["SCH"]["frameworks"]["schloss"]
+    check("a cheap, low-debt, long-listed name passes Schloss", f["passed"], True)
+    names = {t["name"]: t for t in f["tests"]}
+    check("the listing-age test actually ran",
+          names["long_operating_history"]["result"], True)
+    check("on a real number rather than a guess",
+          names["long_operating_history"]["value"] > 45, True)
+    check("insider alignment is scored", names["insider_alignment"]["result"], True)
+    check("and the dividend is counted", names["pays_while_you_wait"]["result"], True)
+
+    # The universe split and the regime both reach the page.
+    check("the run reports which value regime it was in",
+          out["value_regime"]["regime"] in
+          ("deep_value_available", "relative_value"), True)
+    check("and how the universe splits across Lynch's categories",
+          sum(out["lynch_census"].values()), 1)
+
+    html = rn.TEMPLATE
+    check("the category badge is rendered on the row", 'class="cat ' in html, True)
+    check("the drawer states the category", "Lynch category:" in html, True)
+    check("and the cyclical warning has somewhere to appear",
+          "Cyclical warning" in html, True)
+    panel = rn._lynch_panel({"cyclical": 9, "stalwart": 1}, out["value_regime"])
+    check("the panel warns when one category swallows the universe",
+          "Check this" in panel, True)
+    check("and states Lynch's real ownership bar against ours",
+          "15–20%" in panel, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -2178,6 +2519,8 @@ if __name__ == "__main__":
     test_display_metric_contract()
     test_malaysia_market()
     test_synopsis()
+    test_lynch_categories()
+    test_schloss_deep_value()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

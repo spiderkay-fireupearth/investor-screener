@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Any, Tuple
 
 import numpy as np
 
+from . import lynch as _lynch
 from . import reflexivity as rfx
 from . import synopsis as syn
 
@@ -76,6 +77,35 @@ def evaluate_test(name: str, spec: Dict[str, Any],
     history = metrics.get("history_years") or 0
     insufficient = False
 
+    # ---- category routing --------------------------------------------------
+    # Lynch's rule that one bar cannot serve six kinds of company, expressed in
+    # config rather than in code. `by:` names a metric holding a LABEL (the
+    # Lynch category, the value regime); `cases:` maps that label to overrides.
+    # A case may replace the metric, the threshold, the operator, or declare
+    # the test not applicable to that kind of company at all.
+    #
+    # `not_applicable` is deliberately NOT a failure. A cyclical has no
+    # meaningful five-year growth band, so failing it on one would be scoring a
+    # question that was never asked. It leaves the denominator instead, exactly
+    # as a test with too little history does, and the bar scales down with it.
+    spec_by = spec.get("by")
+    routed_note = ""
+    if spec_by:
+        label = metrics.get(spec_by)
+        case = (spec.get("cases") or {}).get(label)
+        if case is None and label:
+            case = (spec.get("cases") or {}).get("default")
+        if isinstance(case, dict):
+            if case.get("not_applicable"):
+                return {"name": name, "metric": spec.get("metric"), "value": None,
+                        "threshold": None, "operator": spec.get("operator", "gte"),
+                        "result": UNKNOWN, "via_alt": False, "insufficient": True,
+                        "not_applicable": True,
+                        "note": case.get("note")
+                        or f"does not apply to a {str(label).replace('_', ' ')}"}
+            spec = {**spec, **{k: v for k, v in case.items() if k != "note"}}
+            routed_note = case.get("note", "")
+
     # Tests that need a minimum window before they mean anything at all.
     need_years = spec.get("min_history_years")
     if need_years and history < need_years:
@@ -106,6 +136,18 @@ def evaluate_test(name: str, spec: Dict[str, Any],
         threshold = spec.get("threshold")
         op = spec.get("operator", "gte")
 
+    # Some fields exist only where the feed carries them — insider and
+    # institutional ownership are published for US names and patchily elsewhere.
+    # Scoring their absence as a failure would mark down whole markets for a
+    # gap in our plumbing, which is the one thing this screener refuses to do.
+    if spec.get("skip_if_missing") and not _is_num(value):
+        return {"name": name, "metric": metric_key, "value": None,
+                "threshold": threshold, "operator": spec.get("operator", "gte"),
+                "result": UNKNOWN, "via_alt": False, "insufficient": True,
+                "not_applicable": True,
+                "note": spec.get("missing_note")
+                or "the feed carries no value for this field in this market"}
+
     result: Optional[bool]
     if not _is_num(value) or not _is_num(threshold):
         result = UNKNOWN
@@ -122,7 +164,7 @@ def evaluate_test(name: str, spec: Dict[str, Any],
             result = True
             alt_used = True
 
-    return {
+    out = {
         "name": name,
         "metric": metric_key,
         "value": value,
@@ -132,6 +174,9 @@ def evaluate_test(name: str, spec: Dict[str, Any],
         "via_alt": alt_used,
         "insufficient": insufficient,
     }
+    if routed_note:
+        out["note"] = routed_note
+    return out
 
 
 def run_framework(fw_name: str, cfg: Dict[str, Any],
@@ -143,6 +188,12 @@ def run_framework(fw_name: str, cfg: Dict[str, Any],
 
     passed = sum(1 for r in results if r["result"] is True)
     failed = sum(1 for r in results if r["result"] is False)
+    # Both leave the denominator, but they mean different things and the UI
+    # must not conflate them: "we lack the years to judge" is about our data,
+    # "this question is not asked of this kind of company" is about the
+    # framework. Reporting both as "limited history" would have the app tell
+    # the user its feed was short when the feed was fine.
+    not_applicable = sum(1 for r in results if r.get("not_applicable"))
     insufficient = sum(1 for r in results if r.get("insufficient"))
     unknown = sum(1 for r in results if r["result"] is UNKNOWN
                   and not r.get("insufficient"))
@@ -180,10 +231,11 @@ def run_framework(fw_name: str, cfg: Dict[str, Any],
         "n_failed": failed,
         "n_unknown": unknown,
         "n_insufficient": insufficient,
+        "n_not_applicable": not_applicable,
         "n_total": n_total,
         "effective_total": effective_total,
         "required": required,
-        "limited_history": bool(insufficient),
+        "limited_history": bool(insufficient - not_applicable > 0),
         "tests": results,
     }
 
@@ -337,6 +389,31 @@ def add_relative_value(records, metrics_by_ticker: Dict[str, Dict[str, Any]],
             float(v) / med if (_is_num(v) and v > 0 and med) else None)
 
 
+def set_value_regime(metrics_by_ticker: Dict[str, Dict[str, Any]],
+                     schloss_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """Is deep value on offer today, or must Schloss settle for relative value?
+
+    Schloss bought below book. Edwin Schloss's adjustment, in markets where
+    sub-book stocks had stopped existing, was to switch to relative value —
+    depressed price-to-sales or P/E against normal earning power — rather than
+    to stand aside for a decade. Which regime we are in is not an opinion: it
+    is the share of the universe currently trading below tangible book, and it
+    is measured here and written onto every row so the threshold engine can
+    route the valuation test through it.
+    """
+    floor = schloss_cfg.get("relative_value_below_book_share", 0.05)
+    vals = [m.get("price_to_tangible_book") for m in metrics_by_ticker.values()]
+    scored = [v for v in vals if _is_num(v) and v > 0]
+    share = (sum(1 for v in scored if v < 1.0) / len(scored)) if scored else None
+    regime = ("deep_value_available" if (share is None or share >= floor)
+              else "relative_value")
+    for m in metrics_by_ticker.values():
+        m["value_regime"] = regime
+        m["below_book_share_of_universe"] = share
+    return {"regime": regime, "below_book_share": share,
+            "names_scored": len(scored), "floor": floor}
+
+
 def screen_universe(records: List[Any],
                     metrics_by_ticker: Dict[str, Dict[str, Any]],
                     thresholds: Dict[str, Any],
@@ -355,6 +432,8 @@ def screen_universe(records: List[Any],
                                 thresholds.get("greenblatt", {}), excluded)
 
     add_relative_value(records, metrics_by_ticker)
+    value_regime = set_value_regime(
+        metrics_by_ticker, thresholds.get("schloss", {}))
 
     framework_names = ["buffett", "munger", "schloss", "klarman", "lynch",
                        "templeton", "marks", "soros", "rogers", "graham"]
@@ -485,4 +564,28 @@ def screen_universe(records: List[Any],
         "macro_gate_open": gate_open,
         "macro_gate_reason": gate_reason,
         "macro": macro,
+        "value_regime": value_regime,
+        "lynch_census": lynch_census(metrics_by_ticker),
+        # Lynch's macro sanity check, computed on this screener's own US rows
+        # so the gauge and the table are struck on the same numbers.
+        "rule_of_20": _lynch.rule_of_20(
+            {rec.ticker: metrics_by_ticker.get(rec.ticker, {})
+             for rec in records if getattr(rec, "market", None) == "US"},
+            macro.get("us_cpi_yoy"), market=None),
     }
+
+
+def lynch_census(metrics_by_ticker: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
+    """How the universe splits across Lynch's six categories.
+
+    Published for the same reason the reflexive census is: a classifier nobody
+    can audit is a classifier nobody should trust. If nine names in ten come
+    back 'cyclical', the industry word list is too greedy and the number on the
+    page is what says so.
+    """
+    out: Dict[str, int] = {}
+    for m in metrics_by_ticker.values():
+        c = m.get("lynch_category")
+        if c:
+            out[c] = out.get(c, 0) + 1
+    return out

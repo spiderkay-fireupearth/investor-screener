@@ -317,6 +317,10 @@ def build_record(ticker: str, market_cfg: Dict, market_key: str,
     rec.sector = prof.get("sector")
     rec.industry = prof.get("industry")
     rec.business_summary = prof.get("business_summary")
+    rec.insider_ownership = prof.get("insider_ownership")
+    rec.institutional_ownership = prof.get("institutional_ownership")
+    rec.dividend_yield = prof.get("dividend_yield")
+    rec.first_trade_date = prof.get("first_trade_date")
     if prof.get("currency"):
         rec.currency = prof["currency"]
     rec.financial_currency = prof.get("financial_currency") or rec.currency
@@ -388,6 +392,22 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
 
     refresh_fx(yahoo, store, universe_cfg.get("fx_pairs", {}))
     macro = fred.snapshot(universe_cfg.get("macro_series", {}))
+    # CPI comes back as an index level. Lynch's Rule of 20 wants a rate, and
+    # every other reader of this field wants one too, so the conversion happens
+    # once, here, rather than in each consumer.
+    macro["us_cpi_yoy"] = None
+    _cpi_id = (universe_cfg.get("macro_series", {}) or {}).get("us_cpi")
+    if _cpi_id:
+        try:
+            _cpi = fred.history(_cpi_id, limit=24)
+            if len(_cpi) >= 13 and _cpi[12][1]:
+                macro["us_cpi_yoy"] = (_cpi[0][1] / _cpi[12][1] - 1) * 100.0
+                log.info("US CPI year on year: %.2f%%", macro["us_cpi_yoy"])
+            else:
+                log.warning("CPI history too short for a year-on-year rate — "
+                            "Lynch's Rule of 20 will show as unavailable")
+        except Exception as e:                       # noqa: BLE001
+            log.warning("CPI history failed: %s", e)
 
     tickers_by_market = merge_themes(universe_cfg, 
                                      resolve_universe(universe_cfg, markets), markets)
