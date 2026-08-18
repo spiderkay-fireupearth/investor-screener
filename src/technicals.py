@@ -111,6 +111,14 @@ def compute(df: pd.DataFrame,
 
     r = rsi(close, 14)
     out["rsi_14"] = _last(r)
+    _regime = rsi_regime(price, out.get("sma50"), out.get("sma200"))
+    _div = rsi_divergence(close, r)
+    _read = rsi_reading(out["rsi_14"], _regime, _div)
+    out["rsi_regime"] = _regime
+    out["rsi_label"] = _read.get("label")
+    out["rsi_note"] = _read.get("note")
+    out["rsi_divergence"] = _read.get("divergence")
+    out["rsi_divergence_note"] = _read.get("divergence_note")
 
     line, sig, hist = macd(close)
     out["macd_line"] = _last(line)
@@ -251,4 +259,133 @@ def compute(df: pd.DataFrame,
 
     out["last_bar_date"] = df.index[-1].date().isoformat()
     out["insufficient_history"] = False
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Reading an RSI number, which depends on what the market is doing.
+#
+# The textbook 30/70 bands are a RANGING-market rule. In a strong trend they
+# are actively misleading: RSI rarely reaches 30 in a bull run, so a reading of
+# 45 there is a pullback to buy rather than the "bearish zone" a static table
+# would call it — and in a bear market RSI can sit under 30 for weeks while the
+# price keeps falling, so "oversold" is not a buy signal, it is a description.
+#
+# The app already knows the regime from the moving averages, so the reading is
+# made against that rather than against a fixed table.
+# ---------------------------------------------------------------------------
+
+def rsi_regime(price, sma50, sma200) -> str:
+    """uptrend / downtrend / ranging, from the moving-average structure."""
+    if not all(isinstance(x, (int, float)) and x == x
+               for x in (price, sma50, sma200) if x is not None):
+        return "ranging"
+    if price is None or sma200 is None:
+        return "ranging"
+    if sma50 is not None:
+        if price > sma200 and sma50 > sma200:
+            return "uptrend"
+        if price < sma200 and sma50 < sma200:
+            return "downtrend"
+    return "ranging"
+
+
+def rsi_divergence(close: pd.Series, rsi_series: pd.Series,
+                   window: int = 60) -> Optional[str]:
+    """Bullish or bearish divergence over the recent window.
+
+    Bullish: price makes a LOWER low while RSI makes a HIGHER low — selling
+    momentum is weakening beneath a falling price. Bearish is the mirror.
+
+    Compares the two halves of the window rather than hunting for swing pivots,
+    because pivot detection needs parameters that would themselves need
+    justifying, and the halves version is transparent about what it measured.
+    """
+    c = close.dropna().astype(float)
+    r = rsi_series.dropna().astype(float)
+    j = pd.concat([c.rename("p"), r.rename("r")], axis=1, join="inner").dropna()
+    if len(j) < window:
+        return None
+    w = j.iloc[-window:]
+    half = window // 2
+    a, b = w.iloc[:half], w.iloc[half:]
+    lo_a, lo_b = a["p"].idxmin(), b["p"].idxmin()
+    hi_a, hi_b = a["p"].idxmax(), b["p"].idxmax()
+    if (b["p"].loc[lo_b] < a["p"].loc[lo_a]
+            and b["r"].loc[lo_b] > a["r"].loc[lo_a] + 3):
+        return "bullish"
+    if (b["p"].loc[hi_b] > a["p"].loc[hi_a]
+            and b["r"].loc[hi_b] < a["r"].loc[hi_a] - 3):
+        return "bearish"
+    return None
+
+
+def rsi_reading(rsi: Optional[float], regime: str = "ranging",
+                divergence: Optional[str] = None) -> Dict[str, Any]:
+    """A label and a sentence for one RSI value, in context."""
+    if rsi is None or rsi != rsi:
+        return {"label": None, "note": "RSI unavailable"}
+
+    if regime == "uptrend":
+        # "In a strong uptrend RSI typically stays between 40 and 80."
+        if rsi >= 80:
+            lab, note = "extended", ("very high even for an uptrend — the move "
+                                     "is stretched, though a strong trend can "
+                                     "hold this for weeks")
+        elif rsi >= 70:
+            lab, note = ("overbought — normal in an uptrend",
+                         "above 70, but a rising trend spends much of its life "
+                         "here; not a sell signal on its own")
+        elif rsi >= 50:
+            lab, note = "healthy uptrend", "buyers in control, momentum intact"
+        elif rsi >= 40:
+            lab, note = ("pullback within an uptrend",
+                         "the 40-50 zone is where uptrends usually find "
+                         "support — a continuation area rather than weakness")
+        else:
+            lab, note = ("unusually weak for an uptrend",
+                         "RSI rarely goes below 40 in a healthy uptrend; treat "
+                         "this as the trend being questioned")
+    elif regime == "downtrend":
+        # "In a strong downtrend RSI typically stays between 20 and 60."
+        if rsi <= 20:
+            lab, note = ("deeply oversold",
+                         "extended, but a falling trend can stay oversold for "
+                         "weeks — this describes the fall, it does not end it")
+        elif rsi <= 30:
+            lab, note = ("oversold — normal in a downtrend",
+                         "below 30, which a downtrend does routinely; wait for "
+                         "a cross back ABOVE 30 before reading it as a turn")
+        elif rsi <= 50:
+            lab, note = "downtrend intact", "sellers still in control"
+        elif rsi <= 60:
+            lab, note = ("rally into resistance",
+                         "the 50-60 zone is where downtrend rallies usually "
+                         "stall")
+        else:
+            lab, note = ("unusually strong for a downtrend",
+                         "above 60 in a downtrend is rare and may be the first "
+                         "sign the trend is changing")
+    else:
+        # Ranging: the classic bands, and the classic caution with them.
+        if rsi >= 70:
+            lab, note = "overbought", ("risk of a pullback; the signal is the "
+                                       "cross back BELOW 70, not the 70 itself")
+        elif rsi >= 50:
+            lab, note = "bullish zone", "upward momentum has the upper hand"
+        elif rsi > 30:
+            lab, note = "bearish zone", "downward momentum, but moderating"
+        else:
+            lab, note = "oversold", ("potential rebound; the signal is the "
+                                     "cross back ABOVE 30, not the 30 itself")
+
+    out = {"label": lab, "note": note, "regime": regime}
+    if divergence == "bullish":
+        out["divergence"] = "bullish divergence"
+        out["divergence_note"] = ("price made a lower low while RSI made a "
+                                  "higher low — selling momentum is weakening")
+    elif divergence == "bearish":
+        out["divergence"] = "bearish divergence"
+        out["divergence_note"] = ("price made a higher high while RSI made a "
+                                  "lower high — buying momentum is fading")
     return out

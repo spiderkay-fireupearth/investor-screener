@@ -159,7 +159,18 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "Return 6m": _fmt_num(m.get("return_6m"), 1, pct=True),
                 "Return 12m": _fmt_num(m.get("return_12m"), 1, pct=True),
                 "Worst month in 6m": _fmt_num(m.get("worst_month_in_6m"), 1, pct=True),
-                "RSI(14)": _fmt_num(m.get("rsi_14"), 1),
+                # The number alone is not readable: 45 is weakness in a
+                # range and a buying opportunity in an uptrend, and the same
+                # 28 that means "rebound" sideways means "this is what a
+                # downtrend looks like" in a falling one.
+                "RSI(14)": (f'{_fmt_num(m.get("rsi_14"), 1)} · '
+                            f'{m.get("rsi_label")}'
+                            if m.get("rsi_label") else _fmt_num(m.get("rsi_14"), 1)),
+                "RSI context": (f'{m.get("rsi_regime", "")} — {m.get("rsi_note", "")}'
+                                if m.get("rsi_note") else "—"),
+                "RSI divergence": (f'{m.get("rsi_divergence")} — '
+                                   f'{m.get("rsi_divergence_note")}'
+                                   if m.get("rsi_divergence") else "none"),
                 "vs 200d MA": "above" if m.get("price_above_sma200") else "below",
                 "RS 6m vs index": _fmt_num(m.get("rs_vs_market_index_6m"), 1, pct=True),
             },

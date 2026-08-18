@@ -1775,6 +1775,90 @@ def test_events():
     check("and shouts if none resolve", "NO CIK resolved" in src, True)
 
 
+
+def test_rsi_reading():
+    """RSI read against the regime, not against a fixed 30/70 table."""
+    # The same number means opposite things in different markets. This is the
+    # whole reason the reading is contextual: a static table would call RSI 45
+    # in a bull run "bearish zone" when it is the pullback you buy.
+    check("45 in an uptrend is a pullback to buy",
+          "pullback" in ta.rsi_reading(45, "uptrend")["label"], True)
+    check("45 in a range is the bearish zone",
+          ta.rsi_reading(45, "ranging")["label"], "bearish zone")
+    check("45 in a downtrend is the trend intact",
+          ta.rsi_reading(45, "downtrend")["label"], "downtrend intact")
+
+    check("72 in a range is plainly overbought",
+          ta.rsi_reading(72, "ranging")["label"], "overbought")
+    check("72 in an uptrend is normal, and says so",
+          "normal in an uptrend" in ta.rsi_reading(72, "uptrend")["label"], True)
+    check("28 in a downtrend is normal, and says so",
+          "normal in a downtrend" in ta.rsi_reading(28, "downtrend")["label"], True)
+    check("28 in an uptrend is a warning, not a bargain",
+          "unusually weak" in ta.rsi_reading(28, "uptrend")["label"], True)
+    check("62 in a downtrend flags possible trend change",
+          "unusually strong" in ta.rsi_reading(62, "downtrend")["label"], True)
+
+    # The trap the user's own note calls out: the level is not the signal.
+    check("oversold says to wait for the cross back above 30",
+          "cross back ABOVE 30" in ta.rsi_reading(25, "ranging")["note"], True)
+    check("overbought says to wait for the cross back below 70",
+          "cross back BELOW 70" in ta.rsi_reading(75, "ranging")["note"], True)
+    check("a deep downtrend reading refuses to call it a buy",
+          "does not end it" in ta.rsi_reading(15, "downtrend")["note"], True)
+
+    check("no RSI yields no label", ta.rsi_reading(None)["label"], None)
+
+    # Regime detection from the moving-average structure.
+    check("above both MAs with 50>200 is an uptrend",
+          ta.rsi_regime(110, 105, 100), "uptrend")
+    check("below both with 50<200 is a downtrend",
+          ta.rsi_regime(90, 95, 100), "downtrend")
+    check("mixed structure is ranging", ta.rsi_regime(101, 95, 100), "ranging")
+    check("no 200-day means ranging, not a guess",
+          ta.rsi_regime(100, 100, None), "ranging")
+
+    # Divergence: price lower low, RSI higher low.
+    # Bullish divergence needs the SECOND low to arrive gently: a violent fall
+    # to a low, a bounce, then a slow drift to a marginally lower low. The slow
+    # drift is what leaves RSI higher at the deeper price.
+    idx = pd.bdate_range("2025-01-01", periods=120)
+    shape = ([100.0] * 60                                    # quiet lead-in
+             + [100.0 - 3.4 * i for i in range(15)]          # crash to ~50
+             + [49.0 + 1.05 * i for i in range(20)]          # strong bounce
+             + [70.0 - 0.95 * i for i in range(25)])         # slow drift under it
+    p = pd.Series(shape[:120], index=idx)
+    r = ta.rsi(p, 14)
+    check("the second low really is lower",
+          p.iloc[-1] < p.iloc[60:90].min(), True)
+    check("a marginal new low reached slowly is bullish divergence",
+          ta.rsi_divergence(p, r), "bullish")
+    flat = pd.Series([100.0] * 120, index=idx)
+    check("a flat series has no divergence",
+          ta.rsi_divergence(flat, ta.rsi(flat, 14)), None)
+    check("too little history yields no divergence",
+          ta.rsi_divergence(p.iloc[:20], r.iloc[:20]), None)
+
+    # And it must reach the page.
+    d = ta.rsi_reading(38, "downtrend", "bullish")
+    check("divergence is labelled", d["divergence"], "bullish divergence")
+    check("and explained", "lower low" in d["divergence_note"], True)
+    src = open("src/render.py").read()
+    check("the label is shown beside the number in the drawer",
+          'm.get("rsi_label")' in src, True)
+    check("the regime and note are shown too", '"RSI context"' in src, True)
+    check("divergence has its own row", '"RSI divergence"' in src, True)
+
+    # End to end through compute().
+    rise = pd.Series([100.0 * (1.004 ** i) for i in range(260)],
+                     index=pd.bdate_range("2025-01-01", periods=260))
+    t = ta.compute(pd.DataFrame({"Close": rise, "High": rise, "Low": rise,
+                                 "Volume": [1e6] * 260}, index=rise.index))
+    check("compute() classifies the regime", t["rsi_regime"], "uptrend")
+    check("compute() attaches a label", bool(t["rsi_label"]), True)
+    check("and a note", bool(t["rsi_note"]), True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -1796,6 +1880,7 @@ if __name__ == "__main__":
     test_ownership_and_government_theme()
     test_dislocation()
     test_events()
+    test_rsi_reading()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")
