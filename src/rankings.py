@@ -177,3 +177,63 @@ def _count(values) -> Dict[str, int]:
     for v in values:
         out[v] = out.get(v, 0) + 1
     return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
+# ------------------------------------------------- the three buckets
+# Munger sorted every opportunity into Yes, No, or TOO TOUGH. The third bucket
+# is the distinctive one and the one screens normally omit: it is not a
+# rejection on the merits, it is a refusal to have an opinion. "We have three
+# baskets: in, out, and too tough... we have to have a special insight, or
+# we'll put it in the 'too tough' basket."
+#
+# The screen cannot judge whether YOU understand a business — that is the
+# circle-of-competence list you keep. What it can judge is whether the numbers
+# are legible enough for anyone to form a view: earnings that swing wildly,
+# a balance sheet that is mostly goodwill, losses in the record, or a feed too
+# shallow to see a cycle. Those go in the third basket rather than being failed,
+# because "I could not tell" and "this is bad" are different answers.
+TOO_TOUGH_TESTS = (
+    ("eps_cv_5y", "gte", 0.60,
+     "earnings swing too much year to year to project"),
+    ("goodwill_to_assets", "gte", 0.50,
+     "over half the balance sheet is what it paid for other companies"),
+    ("loss_years_in_10", "gte", 2,
+     "two or more loss-making years on the record"),
+    ("roic_cv_5y", "gte", 0.60,
+     "returns on capital are too erratic to call a rate"),
+)
+
+
+def munger_bucket(m: Dict[str, Any], in_circle: Optional[bool],
+                  cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Yes, No, or Too tough — Munger's own three baskets.
+
+    Order matters. OUT of the circle is decided first and on its own, because
+    a business you do not understand is not made understandable by having tidy
+    numbers. Only inside the circle does legibility get a vote, and the third
+    basket is reserved for names whose accounts cannot support a view — which
+    is a statement about the evidence, not a verdict on the company.
+    """
+    c = cfg or {}
+    if in_circle is False:
+        return {"bucket": "no", "label": "No",
+                "why": "outside the circle of competence declared in config"}
+    reasons = []
+    for key, op, thr, label in TOO_TOUGH_TESTS:
+        v = m.get(key)
+        if not _n(v):
+            continue
+        if (v >= thr) if op == "gte" else (v <= thr):
+            reasons.append(label)
+    hist = m.get("history_years") or 0
+    if hist and hist < c.get("min_history_years", 4):
+        reasons.append(f"only {hist} years of statements — too little to see a cycle")
+    if reasons:
+        return {"bucket": "too_tough", "label": "Too tough", "reasons": reasons,
+                "why": ("not rejected — set aside. " + "; ".join(reasons[:2])
+                        + ". Munger's third basket is for businesses he could "
+                          "not form a view on, which is a statement about the "
+                          "evidence rather than a verdict on the company")}
+    return {"bucket": "yes", "label": "Yes",
+            "why": ("inside the circle and legible enough to form a view — "
+                    "steady earnings, a balance sheet that is not mostly "
+                    "goodwill, and a clean record")}

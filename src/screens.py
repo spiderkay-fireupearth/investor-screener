@@ -532,6 +532,34 @@ def add_buffett_valuation(records: List[Any],
         m["buffett_b_label"] = tenets["label"]
         m["buffett_tenets_summary"] = tenets["summary"]
         labelled += bool(tenets["passed"])
+
+        # Munger's three baskets. Decided here rather than in metrics.py
+        # because the circle half comes from the tenets, which need the moat,
+        # which needs the whole universe to have been measured first.
+        bucket = _rank.munger_bucket(m, tenets["circle"].get("ok"),
+                                     cfg.get("business_tenets", {}))
+        m["munger_bucket"] = bucket["bucket"]
+        m["munger_bucket_label"] = bucket["label"]
+        m["munger_bucket_why"] = bucket["why"]
+
+        # Cannibalisation, completed. Retiring shares is only a virtue if the
+        # shares were retired BELOW intrinsic value; above it, a buyback moves
+        # money from the owners who stay to the ones who leave. The share-count
+        # half was computed in metrics.py; the price half needs the DCF, which
+        # has just run, so the two are joined here.
+        if m.get("cannibalisation") == 1:
+            mos = m.get("margin_of_safety")
+            if _is_num(mos):
+                below = mos > 0
+                m["cannibalisation"] = 2 if below else 0
+                m["cannibalisation_reading"] = (
+                    (m.get("cannibalisation_reading") or "")
+                    + (", and bought below the intrinsic value estimated here "
+                       "— the version of a buyback that concentrates value"
+                       if below else
+                       ", but bought ABOVE the intrinsic value estimated here "
+                       "— that moves money from the owners who stay to the "
+                       "ones who leave"))
     return {"risk_free_pct": rf, "equity_risk_premium": prem,
             "discount_rate": discount, "b_labelled": labelled,
             "names": len(records)}

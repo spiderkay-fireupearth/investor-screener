@@ -3930,6 +3930,175 @@ def test_buffett_and_munger_lists():
           "munger_inversion_score" in rn.DISPLAY_METRICS, True)
 
 
+def test_munger_full_framework():
+    """Every metric on Munger's own list, and the ones that were missing."""
+    from src import rankings as rk, buffett as bf
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    mun = th["munger"]["tests"]
+
+    # --- the screen, against his stated numbers -----------------------------
+    check("Munger runs 11 tests", len(mun), 11)
+    check("and needs 8 of them", th["munger"]["min_tests_passed"], 8)
+    check("ROIC is at his own 15%, not a softer 12",
+          mun["roic_level"]["threshold"], 0.15)
+    check("leverage is tested, so 'high ROIC WITHOUT leverage' is whole",
+          mun["low_leverage"]["metric"], "debt_to_equity")
+    check("and liquidity with it", mun["liquidity"]["metric"], "current_ratio")
+    check("pricing power is a scored test, not a comment",
+          mun["pricing_power"]["metric"], "pricing_power")
+    check("fair price is judged against intrinsic value",
+          mun["fair_price"]["metric"], "margin_of_safety")
+    check("and wasteful acquisition is watched",
+          mun["no_empire_building"]["metric"], "goodwill_growth_3y")
+
+    # --- owner earnings, recast the way he recast them ----------------------
+    ys = [mkyear(2025 - i, revenue=1000.0, net_income=200.0,
+                 depreciation_amortization=60.0, capex=50.0,
+                 stock_based_compensation=40.0, current_assets=400.0,
+                 current_liabilities=200.0, cash_and_equivalents=100.0,
+                 shares_diluted=100.0) for i in range(6)]
+    oe = bf.owner_earnings(ys)
+    check("option compensation is deducted", oe["sbc_deducted"], True)
+    check("at the amount reported", oe["stock_based_compensation"], 40.0)
+    # 200 + 60 − 50 maintenance − 0 working capital − 40 options = 170
+    check("and it lands in the number", oe["owner_earnings"], 170.0)
+    check("the caveat says the cash statement was wrong to add it back",
+          "true of the cash and false of the cost" in oe["caveat"], True)
+
+    no_sbc = [mkyear(2025 - i, revenue=1000.0, net_income=200.0,
+                     depreciation_amortization=60.0, capex=50.0,
+                     current_assets=400.0, current_liabilities=200.0,
+                     cash_and_equivalents=100.0, shares_diluted=100.0)
+              for i in range(6)]
+    oe2 = bf.owner_earnings(no_sbc)
+    check("where the feed has no option line it is not invented",
+          oe2["sbc_deducted"], False)
+    check("and the row says the number is unadjusted",
+          "NOT adjusted for it" in oe2["caveat"], True)
+    check("which makes owner earnings higher, as it should",
+          oe2["owner_earnings"] > oe["owner_earnings"], True)
+
+    # --- pricing power ------------------------------------------------------
+    def rec_with(gm_by_year, rev_by_year):
+        r = CompanyRecord(ticker="PP", market="US", currency="USD",
+                          sector="Consumer Defensive", industry="Beverages")
+        r.years = [mkyear(2025 - i, revenue=rev_by_year[i],
+                          gross_profit=rev_by_year[i] * gm_by_year[i],
+                          net_income=rev_by_year[i] * 0.12,
+                          eps_diluted=1.0, shares_diluted=100.0,
+                          total_equity=600.0, total_assets=1000.0,
+                          total_debt=200.0, cash_and_equivalents=100.0,
+                          current_assets=400.0, current_liabilities=200.0,
+                          net_ppe=300.0, cfo=150.0, capex=40.0,
+                          depreciation_amortization=40.0,
+                          operating_income=rev_by_year[i] * 0.18,
+                          pretax_income=rev_by_year[i] * 0.16)
+                   for i in range(6)]
+        r.price, r.market_cap = 20.0, 2000.0
+        return r
+
+    # Margin rising while revenue grows: the footprint of real pricing power.
+    strong = rec_with([0.60, 0.58, 0.56, 0.54, 0.52, 0.50],
+                      [1400, 1300, 1200, 1100, 1000, 900])
+    ms = mx.compute_metrics(strong)
+    check("a rising margin on rising revenue reads as pricing power",
+          ms["pricing_power"], 1)
+    check("and says what the pattern means",
+          "pricing power leaves behind" in ms["pricing_power_reading"], True)
+    # Revenue bought with discounts: the opposite pattern.
+    weak = rec_with([0.40, 0.44, 0.48, 0.52, 0.56, 0.60],
+                    [1400, 1300, 1200, 1100, 1000, 900])
+    mw = mx.compute_metrics(weak)
+    check("growth bought with discounts does not", mw["pricing_power"], 0)
+    check("and is named as such",
+          "bought with discounts" in mw["pricing_power_reading"], True)
+
+    # --- the three baskets ---------------------------------------------------
+    legible = {"eps_cv_5y": 0.12, "goodwill_to_assets": 0.05,
+               "loss_years_in_10": 0, "roic_cv_5y": 0.2, "history_years": 10}
+    check("out of the circle is basket two, decided on its own",
+          rk.munger_bucket(legible, False)["bucket"], "no")
+    check("in the circle and legible is basket one",
+          rk.munger_bucket(legible, True)["bucket"], "yes")
+    for key, val, why in (("eps_cv_5y", 0.9, "swing"),
+                          ("goodwill_to_assets", 0.7, "balance sheet"),
+                          ("loss_years_in_10", 3, "loss-making"),
+                          ("roic_cv_5y", 0.8, "erratic")):
+        b = rk.munger_bucket({**legible, key: val}, True)
+        check(f"{key} at {val} sends it to the third basket",
+              b["bucket"], "too_tough")
+        check("with the reason named", any(why in r for r in b["reasons"]), True)
+    tough = rk.munger_bucket({**legible, "eps_cv_5y": 0.9}, True)
+    check("and the third basket is framed as a refusal to have an opinion",
+          "not rejected — set aside" in tough["why"], True)
+    check("about the evidence, not about the company",
+          "statement about the evidence" in tough["why"], True)
+    check("a short feed is too tough rather than a failure",
+          rk.munger_bucket({**legible, "history_years": 2}, True)["bucket"],
+          "too_tough")
+
+    # --- cannibalisation: buybacks only count BELOW intrinsic value ---------
+    rec = CompanyRecord(ticker="CAN", market="US", currency="USD",
+                        sector="Consumer Defensive", industry="Beverages")
+    rec.years = [mkyear(2025 - i, revenue=1000.0, gross_profit=600.0,
+                        net_income=180.0, eps_diluted=1.8,
+                        shares_diluted=100.0 + i * 5,     # count falling
+                        total_equity=600.0, total_assets=1000.0,
+                        total_debt=150.0, cash_and_equivalents=150.0,
+                        current_assets=400.0, current_liabilities=200.0,
+                        net_ppe=300.0, cfo=220.0, capex=40.0,
+                        depreciation_amortization=50.0,
+                        stock_based_compensation=10.0,
+                        operating_income=250.0, pretax_income=230.0)
+                 for i in range(8)]
+    rec.price, rec.market_cap = 12.0, 1200.0
+    m = mx.compute_metrics(rec)
+    check("a falling share count is recognised", m["cannibalisation"], 1)
+    check("and quantified", "share count is down" in m["cannibalisation_reading"],
+          True)
+    out = sc.screen_universe([rec], {"CAN": m}, th,
+                             {"us_10y": 4.5, "_enabled": True}, cycle=None)
+    mm = out["results"]["CAN"]["metrics"]
+    check("after the DCF the buyback is judged against intrinsic value",
+          m["cannibalisation"] in (0, 2), True)
+    check("and the row says which side of value it was on",
+          ("below the intrinsic value" in m["cannibalisation_reading"]
+           or "ABOVE the intrinsic value" in m["cannibalisation_reading"]), True)
+    check("the basket is attached in the pipeline",
+          m["munger_bucket"] in ("yes", "no", "too_tough"), True)
+
+    # --- wasteful acquisition -------------------------------------------------
+    acq = CompanyRecord(ticker="ROLL", market="US", currency="USD",
+                        sector="Industrials", industry="Machinery")
+    acq.years = [mkyear(2025 - i, revenue=1000.0, net_income=100.0,
+                        eps_diluted=1.0, shares_diluted=100.0,
+                        goodwill=400.0 - i * 60, total_assets=1500.0,
+                        total_equity=700.0, total_debt=200.0,
+                        current_assets=400.0, current_liabilities=200.0,
+                        cash_and_equivalents=100.0, net_ppe=300.0,
+                        cfo=120.0, capex=40.0, depreciation_amortization=40.0,
+                        operating_income=140.0, pretax_income=130.0)
+                 for i in range(6)]
+    acq.price, acq.market_cap = 15.0, 1500.0
+    ma = mx.compute_metrics(acq)
+    check("a serial acquirer's goodwill growth is measured",
+          round(ma["goodwill_growth_3y"], 3), 0.12)
+    check("and trips the empire-building test",
+          ma["goodwill_growth_3y"] > mun["no_empire_building"]["threshold"], True)
+
+    # --- it all reaches the page ---------------------------------------------
+    for key in ("munger_bucket", "pricing_power", "goodwill_growth_3y",
+                "cannibalisation", "munger_inversion_score"):
+        check(f"{key} is persisted", key in rn.DISPLAY_METRICS, True)
+    html = rn.TEMPLATE
+    check("the drawer shows the basket", "Munger basket:" in html, True)
+    check("with the readings behind it", "r.mun_readings" in html, True)
+    rows = rn.build_payload({"CAN": out["results"]["CAN"]}, {"CAN": m}, out)
+    check("and the row carries it", bool(rows[0]["mun_bucket"]), True)
+    check("plus the sentences that explain it",
+          len(rows[0]["mun_readings"]) >= 2, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -3967,6 +4136,7 @@ if __name__ == "__main__":
     test_technical_charts()
     test_lynch_never_asks_for_six_years()
     test_buffett_and_munger_lists()
+    test_munger_full_framework()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

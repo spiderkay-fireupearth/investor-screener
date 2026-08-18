@@ -83,6 +83,9 @@ DISPLAY_METRICS = (
     "enterprise_value_greenblatt", "invested_capital_greenblatt",
     "excess_cash", "greenblatt_working_capital_floored",
     "munger_inversion_score", "munger_inversion_reading",
+    "munger_bucket", "munger_bucket_label", "munger_bucket_why",
+    "pricing_power", "pricing_power_reading", "gross_margin_slope_5y",
+    "goodwill_growth_3y", "cannibalisation", "cannibalisation_reading",
     # The value/growth axis. `style_evidence` is a list rather than a scalar —
     # it is what stops the badge being an assertion.
     "style", "style_label", "style_score", "style_why", "style_evidence",
@@ -297,6 +300,12 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             "cat_warn": m.get("lynch_peak_earnings_warning") or "",
             # Value or growth: the other axis, and the one that says what has
             # to go right for the price to work out.
+            "mun_bucket": m.get("munger_bucket"),
+            "mun_bucket_label": m.get("munger_bucket_label") or "",
+            "mun_bucket_why": m.get("munger_bucket_why") or "",
+            "mun_readings": [x for x in (m.get("munger_inversion_reading"),
+                                         m.get("pricing_power_reading"),
+                                         m.get("cannibalisation_reading")) if x],
             "sty": m.get("style"),
             "sty_score": m.get("style_score"),
             "sty_why": m.get("style_why") or "",
@@ -392,6 +401,12 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "Excess cash": _fmt_num(m.get("excess_cash"), money=True),
                 "Inversion score": _fmt_num(m.get("munger_inversion_score"),
                                             0, pct=True),
+                "Munger basket": m.get("munger_bucket_label") or "—",
+                "Pricing power": ("yes" if m.get("pricing_power") == 1
+                                  else ("no" if m.get("pricing_power") == 0
+                                        else "—")),
+                "Goodwill growth 3y": _fmt_num(m.get("goodwill_growth_3y"),
+                                               1, pct=True),
                 "Years CFO positive (5y)": _fmt_num(m.get("cfo_positive_share_5y"),
                                                     0, pct=True),
                 "Loss years in 5": _fmt_num(m.get("loss_years_in_5"), 0),
@@ -1139,6 +1154,16 @@ function detail(r){
       +'excluded rather than failed.</div>';
   if(r.cat_warn)
     h+='<div class="warn"><b>Cyclical warning.</b> '+esc(r.cat_warn)+'</div>';
+  // Munger's third basket is the one worth showing explicitly: "too tough" is
+  // not a rejection, it is a refusal to have an opinion, and a screen that
+  // collapsed it into "fail" would be losing his actual point.
+  if(r.mun_bucket)
+    h+='<div class="note" style="border-left-color:var(--tx3)"><b>Munger basket: '
+      +esc(r.mun_bucket_label)+'.</b> '+esc(r.mun_bucket_why)+'.'
+      +(r.mun_readings && r.mun_readings.length
+        ? '<div style="font-size:11.5px;color:var(--tx3);margin-top:6px">'
+          +r.mun_readings.map(esc).join(' &nbsp;&middot;&nbsp; ')+'</div>' : '')
+      +'</div>';
   // The B label, with the evidence that earned it — or the reason it did not.
   // A badge whose reasoning is hidden is an instruction, and this app does not
   // give instructions.

@@ -82,6 +82,8 @@ CASHFLOW_MAP: Dict[str, List[str]] = {
                                   "Depreciation Amortization Depletion",
                                   "Depreciation"],
     "dividends_paid": ["Cash Dividends Paid", "Common Stock Dividend Paid"],
+    "stock_based_compensation": ["Stock Based Compensation",
+                                 "Share Based Compensation"],
 }
 
 

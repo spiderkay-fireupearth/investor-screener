@@ -292,25 +292,56 @@ munger:
       format: pct
 
   label: Quality at a fair price
-  min_tests_passed: 5      # of 6
+  min_tests_passed: 8      # of 11
   tests:
+    # "Over the long term, it's hard for a stock to earn a much better return
+    # than the business which underlies it earns." 15% is his own number; the
+    # screen previously asked 12%, which is a different and easier question.
     roic_level:
       metric: roic_5y_avg
-      threshold: 0.12
+      threshold: 0.15
       operator: gte
     roic_persistence:
       metric: roic_cv_5y
       threshold: 0.30
       operator: lte
+    # And earned WITHOUT leverage: a high return on capital financed by debt is
+    # a bet, not a business. The old block tested neither leverage nor
+    # liquidity, which left "high ROIC without reliant leverage" half-tested.
+    low_leverage:
+      metric: debt_to_equity
+      threshold: 0.50
+      operator: lte
+    liquidity:
+      metric: current_ratio
+      threshold: 1.30
+      operator: gte
     operating_margin_trend:
       metric: operating_margin_slope_5y   # normalised slope, must not decline
       threshold: -0.01
+      operator: gte
+    # Pricing power in his own definition — raising prices without losing
+    # volume. Units are in no filing, so the readable proxy is a gross margin
+    # that holds or rises WHILE revenue grows.
+    pricing_power:
+      metric: pricing_power             # 1 = margin held and revenue grew
+      threshold: 1
       operator: gte
     valuation_sanity:
       metric: pe_ttm
       threshold: 25
       operator: lte
-    # Inversion: what would make this a bad business? Any red flag fails.
+    # "A great business at a fair price is superior to a fair business at a
+    # great price" — but fair still has to mean something, so the DCF's margin
+    # of safety is scored wherever one could be defended.
+    fair_price:
+      metric: margin_of_safety
+      threshold: 0.0
+      operator: gte
+      skip_if_missing: true
+      missing_note: >-
+        no defensible intrinsic value — owner earnings are negative or there is
+        no growth history to project from
     accrual_quality:
       metric: accruals_ratio       # (NI - CFO) / total assets
       threshold: 0.10
@@ -319,6 +350,14 @@ munger:
       metric: goodwill_to_assets
       threshold: 0.35
       operator: lte
+    # Wasteful acquisition, the management tell he watched for: a goodwill
+    # balance that keeps climbing is growth bought rather than earned.
+    no_empire_building:
+      metric: goodwill_growth_3y
+      threshold: 0.05              # goodwill up by <5% of assets over 3 years
+      operator: lte
+      skip_if_missing: true
+      missing_note: no goodwill history on file to measure acquisition appetite
 
 # ---------------------------------------------------------------------------
 # Walter (and Edwin) Schloss — assets first, and almost nothing else.

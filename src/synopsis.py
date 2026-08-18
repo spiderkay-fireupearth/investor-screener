@@ -52,6 +52,8 @@ SYNOPSIS_FIELDS = (
     "one_dollar_premise",
     "style", "style_label", "style_why", "style_score",
     "munger_inversion_score", "munger_inversion_reading",
+    "munger_bucket", "munger_bucket_label", "pricing_power",
+    "pricing_power_reading",
 )
 
 MAX_DESCRIPTION_CHARS = 260
@@ -301,6 +303,14 @@ def _category(m: Dict[str, Any]) -> List[str]:
         out.append(line + ", and the growth and valuation tests above were "
                           "scored on that category's bar rather than one "
                           "universal one.")
+    if _g(m, "munger_bucket") == "too_tough":
+        out.append("Munger would put this in the third basket — too tough. Not "
+                   "rejected on the merits: the accounts are not legible "
+                   "enough to form a view, which is a statement about the "
+                   "evidence rather than about the company.")
+    pp = _g(m, "pricing_power_reading")
+    if pp:
+        out.append("On pricing power, " + pp + ".")
     inv = _g(m, "munger_inversion_reading")
     if inv:
         out.append("On Munger's inversion — the discipline of asking how this "

@@ -880,6 +880,55 @@ def compute_metrics(rec: CompanyRecord,
     # die, so I'll never go there" — counted as the share of the obvious ways
     # to lose money that are ABSENT, with the number actually evaluated
     # reported beside it.
+    # --- Munger's remaining gaps -------------------------------------------
+    # Pricing power, in his own definition: raising prices without losing
+    # volume. Units are not in any filing, so the readable proxy is a gross
+    # margin that holds or rises WHILE revenue grows — a company buying growth
+    # with discounts shows the opposite pattern, and a company with real
+    # pricing power shows this one.
+    _gm_slope = _slope(gm_series[:5])
+    m["gross_margin_slope_5y"] = _gm_slope
+    _rev_g = m.get("revenue_cagr_5y")
+    if _n(_gm_slope) and _n(_rev_g):
+        m["pricing_power"] = int(_gm_slope >= -0.002 and _rev_g > 0.0)
+        m["pricing_power_reading"] = (
+            "gross margin has held or risen while revenue grew — the pattern a "
+            "business with pricing power leaves behind"
+            if m["pricing_power"] else
+            ("revenue grew while the gross margin fell — growth bought with "
+             "discounts rather than taken on terms"
+             if _rev_g > 0 else "revenue is not growing, so pricing power "
+                                "cannot be read from margin alone"))
+    else:
+        m["pricing_power"] = None
+        m["pricing_power_reading"] = None
+
+    # Wasteful M&A, the tell Munger watched management for. A goodwill balance
+    # that keeps climbing is a company buying growth rather than earning it.
+    if len(ys) >= 4 and _n(ys[0].goodwill) and _n(ys[3].goodwill) and _n(ys[0].total_assets):
+        m["goodwill_growth_3y"] = _safe_div(
+            ys[0].goodwill - ys[3].goodwill, ys[0].total_assets)
+    else:
+        m["goodwill_growth_3y"] = None
+
+    # Capital cannibalisation, with the condition that makes it a virtue rather
+    # than a habit: shares retired AND retired below intrinsic value. A buyback
+    # above intrinsic value transfers money from continuing owners to leavers,
+    # which is the opposite of the thing Munger admired.
+    _sc = m.get("share_count_change_5y")
+    m["cannibalisation"] = None
+    m["cannibalisation_reading"] = None
+    if _n(_sc):
+        retiring = _sc < 0
+        # The intrinsic-value test is applied later, once the DCF has run; the
+        # share-count half is knowable here and is recorded either way.
+        m["cannibalisation"] = int(retiring)
+        m["cannibalisation_reading"] = (
+            f"share count is down {abs(_sc):.1%} over five years"
+            if retiring else
+            f"share count is up {_sc:.1%} over five years — the opposite of "
+            "cannibalisation")
+
     _inv = _rank.munger_inversion(m)
     m["munger_inversion_detail"] = _inv
     m["munger_inversion_score"] = _inv.get("score")

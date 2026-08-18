@@ -142,6 +142,8 @@ TAGS: Dict[str, List[str]] = {
         "DepreciationAndAmortization",
     ],
     "dividends_paid": ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends"],
+    "stock_based_compensation": ["ShareBasedCompensation",
+                                 "AllocatedShareBasedCompensationExpense"],
     "shares_diluted": ["WeightedAverageNumberOfDilutedSharesOutstanding"],
     "shares_outstanding": ["CommonStockSharesOutstanding", "CommonStockSharesIssued"],
 }

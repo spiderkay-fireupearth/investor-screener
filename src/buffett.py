@@ -112,10 +112,21 @@ def owner_earnings(years: List[Any], n: int = 1) -> Dict[str, Any]:
         if _n(y.current_assets) and _n(prev.current_assets):
             dwc = cur_wc - prv_wc
 
-    oe = ni + da - maintenance - (dwc or 0.0)
+    # Option compensation. Every cash-flow statement adds this back as a
+    # non-cash charge, which is true of the CASH and false of the COST: the
+    # shareholder pays it in dilution rather than in cash, and counting it as a
+    # benefit is the single largest recasting Munger made before believing a
+    # set of accounts. Deducted where the feed reports it, and the fact that it
+    # was deducted travels with the number.
+    sbc = y.stock_based_compensation
+    sbc = abs(sbc) if _n(sbc) else None
+
+    oe = ni + da - maintenance - (dwc or 0.0) - (sbc or 0.0)
     return {
         "available": True,
         "owner_earnings": oe,
+        "stock_based_compensation": sbc,
+        "sbc_deducted": sbc is not None,
         "net_income": ni,
         "depreciation": da,
         "capex_total": capex,
@@ -128,7 +139,14 @@ def owner_earnings(years: List[Any], n: int = 1) -> Dict[str, Any]:
             "Maintenance capital expenditure is not disclosed by any filer. "
             "Buffett's own words on this line: it \"must be a guess — and one "
             f"sometimes very difficult to make\". Here it is the {method}, "
-            "taking the more conservative of two estimates."),
+            "taking the more conservative of two estimates."
+            + (" Option compensation is deducted: the cash-flow statement adds "
+               "it back as non-cash, which is true of the cash and false of "
+               "the cost."
+               if sbc is not None else
+               " The feed reports no option-compensation line for this filer, "
+               "so owner earnings here are NOT adjusted for it — on a company "
+               "that pays in shares this overstates them.")),
     }
 
 

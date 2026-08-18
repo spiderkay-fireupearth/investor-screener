@@ -74,6 +74,11 @@ class FundamentalYear:
     capex: Optional[float] = None                 # stored positive
     depreciation_amortization: Optional[float] = None
     dividends_paid: Optional[float] = None
+    # Munger recast reported statements before believing them, and option
+    # compensation is the largest single recasting: it is a real cost paid in
+    # shares, added back as "non-cash" by every cash-flow statement, and
+    # therefore counted twice as a benefit unless it is taken out again.
+    stock_based_compensation: Optional[float] = None
 
     # --- Share counts -----------------------------------------------------
     shares_diluted: Optional[float] = None
