@@ -186,6 +186,11 @@ class CompanyRecord:
     standard: str = "ifrs"
     quote_type: Optional[str] = None      # EQUITY | ETF | MUTUALFUND ...
     themes: List[str] = field(default_factory=list)
+    # Which list this name came in on — "S&P 500", "Nasdaq-100",
+    # "Nasdaq listed". Without it, extra coverage is added to a market
+    # and then becomes invisible: there is no way to answer "did the
+    # Nasdaq names actually arrive?" by looking at the page.
+    listing: Optional[str] = None
 
     years: List[FundamentalYear] = field(default_factory=list)   # newest first
 

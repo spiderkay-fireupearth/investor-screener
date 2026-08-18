@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import os
 import sys
 import time
@@ -201,10 +202,36 @@ NASDAQ_SYMBOL_FILE = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.t
 # enough to matter: GOOGL ends in L, which the convention reserves for
 # "miscellaneous", and it is Alphabet's ordinary class A stock. The security
 # name says what the instrument is in words, so that is what gets parsed.
+#
+# Two rules, both learned the hard way:
+#
+#   * Match WHOLE WORDS. As a bare substring, "unit" is inside "United" and
+#     inside "Community", which quietly dropped United Therapeutics, United
+#     Natural Foods, United Community Banks and Community Trust Bancorp — four
+#     ordinary Nasdaq common stocks — from every run.
+#   * Match only the INSTRUMENT DESCRIPTION. Nasdaq formats the field as
+#     "Company Name - What It Is", and the disqualifying words belong to the
+#     second half. "Preferred Bank - Common Stock" is a bank called Preferred,
+#     not a preferred share, and testing the whole string dropped it too.
 NON_COMMON_NAME_WORDS = (
-    "warrant", "rights", " right ", "unit", "preferred", "convertible",
-    "% series", "notes due", "debenture", "subordinated", "when issued",
+    "warrant", "warrants", "right", "rights", "unit", "units",
+    "preferred", "convertible", "notes", "debenture", "debentures",
+    "subordinated", "when issued", "depositary receipt",
 )
+_NON_COMMON_RE = re.compile(
+    r"\b(" + "|".join(w.replace(" ", r"\s+") for w in NON_COMMON_NAME_WORDS)
+    + r")\b", re.I)
+
+
+def _instrument_desc(name: str) -> str:
+    """The 'what it is' half of a Nasdaq security name.
+
+    "Apple Inc. - Common Stock" describes the instrument after the dash. Where
+    there is no dash the whole string is returned, and the word-boundary match
+    is then doing the work on its own.
+    """
+    parts = re.split(r"\s+-\s+", name or "", maxsplit=1)
+    return parts[1] if len(parts) > 1 else (name or "")
 # "Depositary" alone is NOT disqualifying: every foreign issuer on Nasdaq —
 # PDD, BIDU, JD, NTES, ASML — trades as American Depositary Shares, and they
 # are ordinary equity. What disqualifies is a depositary share representing a
@@ -259,10 +286,11 @@ def nasdaq_listed(cfg: Dict[str, Any]) -> List[str]:
         if cfg.get("normal_status_only", True) and status.upper() not in ("N", ""):
             dropped["status"] += 1
             continue
-        low = name.lower()
-        if any(w in low for w in NON_COMMON_NAME_WORDS):
+        desc = _instrument_desc(name)
+        if _NON_COMMON_RE.search(desc):
             dropped["suffix"] += 1
             continue
+        low = desc.lower()
         if "deposit" in low and any(x in low for x in DEPOSITARY_PREFERRED_MARKERS):
             dropped["suffix"] += 1
             continue
@@ -357,8 +385,18 @@ def merge_themes(universe_cfg: Dict, resolved: Dict[str, List[str]],
     return resolved
 
 
-def resolve_universe(universe_cfg: Dict, markets: List[str]) -> Dict[str, List[str]]:
+def resolve_universe(universe_cfg: Dict, markets: List[str],
+                     tags: Optional[Dict[str, str]] = None
+                     ) -> Dict[str, List[str]]:
+    """Resolve each market's ticker list, and record WHERE each name came from.
+
+    `tags` is filled in with ticker -> listing label ("S&P 500", "Nasdaq-100",
+    ...). Without it the extra coverage is invisible: a Nasdaq name unioned
+    into the US list is indistinguishable from an S&P 500 one on the page, so
+    a reader asking "did the Nasdaq names arrive?" has no way to answer.
+    """
     out: Dict[str, List[str]] = {}
+    tags = tags if tags is not None else {}
     for mkt in markets:
         m = universe_cfg["markets"].get(mkt)
         if not m:
@@ -369,6 +407,8 @@ def resolve_universe(universe_cfg: Dict, markets: List[str]) -> Dict[str, List[s
         if src == "dynamic":            # S&P 500 — its own two-source resolver
             names = [str(t).upper() for t in sp500_constituents(seed)
                      if t is not None and not isinstance(t, bool)]
+            for _t in names:
+                tags.setdefault(_t, "S&P 500")
             # Union any extra indices, deduplicated and order-preserving. Most
             # of the Nasdaq-100 is already in the S&P 500; only the difference
             # is added, so nothing is fetched or screened twice.
@@ -391,6 +431,8 @@ def resolve_universe(universe_cfg: Dict, markets: List[str]) -> Dict[str, List[s
                 added = [t for t in got if t.upper() not in seen]
                 seen.update(t.upper() for t in added)
                 names.extend(added)
+                for _t in added:
+                    tags.setdefault(_t.upper(), extra.get("name") or "index")
                 log.info("%s: %d constituents, %d new after dedupe against the S&P 500",
                          extra.get("name"), len(got), len(added))
             out[mkt] = names
@@ -409,6 +451,10 @@ def resolve_universe(universe_cfg: Dict, markets: List[str]) -> Dict[str, List[s
                 out[mkt] = seed
         else:
             out[mkt] = list(m.get("constituents", []))
+        # Every other market gets its own index name, so the label is present
+        # on every row rather than only on the US ones.
+        for _t in out.get(mkt, []):
+            tags.setdefault(str(_t).upper(), m.get("index_name") or mkt)
     return out
 
 
@@ -588,8 +634,10 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         except Exception as e:                       # noqa: BLE001
             log.warning("CPI history failed: %s", e)
 
-    tickers_by_market = merge_themes(universe_cfg, 
-                                     resolve_universe(universe_cfg, markets), markets)
+    listing_by_ticker: Dict[str, str] = {}
+    tickers_by_market = merge_themes(
+        universe_cfg,
+        resolve_universe(universe_cfg, markets, listing_by_ticker), markets)
 
     # Nasdaq coverage beyond the Nasdaq-100, deduplicated against everything
     # already resolved. Done here rather than in resolve_universe because the
@@ -606,6 +654,8 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
             added = [t for t in rank_by_liquidity(yahoo, cands, _nas)
                      if t.upper() not in have]
             tickers_by_market["US"].extend(added)
+            for _t in added:
+                listing_by_ticker[_t.upper()] = "Nasdaq listed"
             log.info("Nasdaq extra: %d names added — US universe is now %d",
                      len(added), len(tickers_by_market["US"]))
         except Exception as e:                    # noqa: BLE001
@@ -648,6 +698,7 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
                                    refresh_fundamentals=not skip_fundamentals)
                 if rec:
                     rec.themes = themes_by_ticker.get(t.upper(), [])
+                    rec.listing = listing_by_ticker.get(t.upper())
                     # Trust the config's ETF list over Yahoo's quoteType, which
                     # is occasionally absent; fall back to it when not listed.
                     if t.upper() in fund_tickers:

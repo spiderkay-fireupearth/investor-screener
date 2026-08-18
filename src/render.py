@@ -332,6 +332,7 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             "surfaced": bool(r.get("surfaced")),
             "has_report": ticker in report_tickers,
             "themes": r.get("themes") or [],
+            "listing": r.get("listing") or "",
             "is_fund": bool(r.get("is_fund")),
             "gates": r.get("gates_failed", []),
             "warnings": (list(r.get("warnings", []))
@@ -733,6 +734,7 @@ padding:8px 11px;margin-bottom:12px;font-size:12px;color:var(--warn)}
 .note{background:var(--panel);border-left:3px solid var(--acc);border-radius:0 8px 8px 0;
 padding:11px 15px;margin:14px 0;font-size:13px;color:var(--tx2)}
 .tagrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.tag.lst{border-color:var(--acc);color:var(--acc)}
 .tag{font-size:10.5px;padding:2px 8px;border-radius:20px;background:var(--panel2);
  color:var(--tx2);border:1px solid var(--line)}
 .ddbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
@@ -761,6 +763,7 @@ __GATE__
   <span class="fl">Must pass</span>
   __FWCHIPS__
   __THEMEROW__
+  __LISTINGROW__
   <span class="sep"></span>
   <button class="chip" id="techOnly">Technical pass</button>
   <button class="chip" id="disOnly" title="Every name down more than 30% over six months, whatever the reason">Fell &gt;30% (6m)</button>
@@ -808,7 +811,7 @@ const CATS = __CATS__;
 const STY = __STY__;
 const WF_URL = __WFURL__;
 const ISSUE_URL = __ISSUEURL__;
-let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="", fTheme="ALL";
+let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="", fTheme="ALL", fList="ALL";
 let fRfx=false;   // Soros stage DE/EF only
 let fDis=false;   // fell >30% in 6m
 let fDisQ=false;  // ...and the accounts do not explain it
@@ -837,6 +840,7 @@ function visible(){
     if(fSurf && !r.surfaced) return false;
     if(fMkt!=="ALL" && r.market!==fMkt) return false;
     if(fTheme!=="ALL" && !(r.themes||[]).includes(fTheme)) return false;
+    if(fList!=="ALL" && (r.listing||"")!==fList) return false;
     if(fTech && !r.tech_pass) return false;
     for(const f of fFw){ if(r.fw[f]!=="pass") return false; }
     return true;
@@ -1553,8 +1557,13 @@ function detail(r){
         <span class="ddhint">opens a pre-filled request &mdash; press <b>Create</b> and the report builds itself (~2 min)</span>`;
   }
   h+='</div>';
-  if(r.themes && r.themes.length)
-    h+='<div class="tagrow">'+r.themes.map(t=>`<span class="tag">${esc(t)}</span>`).join('')+'</div>';
+  // The listing sits with the theme tags: it is the same kind of fact about
+  // the row (how it got here), and it is the only place the page says whether
+  // a name arrived on the S&P 500 list or on the wider Nasdaq one.
+  const tagbits=[];
+  if(r.listing) tagbits.push(`<span class="tag lst">${esc(r.listing)}</span>`);
+  (r.themes||[]).forEach(t=>tagbits.push(`<span class="tag">${esc(t)}</span>`));
+  if(tagbits.length) h+='<div class="tagrow">'+tagbits.join('')+'</div>';
   // Lynch's category decides which bar this row was judged against, so it is
   // stated before the panels rather than buried inside one of them.
   // Value or growth, with the percentiles that produced it. The badge is one
@@ -1661,9 +1670,20 @@ function render(){
          the last run.<br><span style="font-size:12.5px">Either it isn't an index
          constituent, or the most recent refresh didn't reach it — check
          <code>config/universe.yml</code>.</span>`
-      : `No names match these filters.<br><span style="font-size:12.5px">Try turning off
-         <b>Surfaced only</b> to see every name in the universe with its per-test
-         results.</span>`;
+      : (fList!=="ALL"
+        // Naming the number is the point. "No names match" reads as "the
+        // Nasdaq coverage never arrived"; "62 arrived, none cleared a screen"
+        // is a different fact and the one that is actually true.
+        ? `<b>${DATA.filter(x=>(x.listing||"")===fList).length}</b> name${
+             DATA.filter(x=>(x.listing||"")===fList).length===1?'':'s'} came in on
+           the <b>${esc(fList)}</b> list this run, and none of them cleared a
+           screen under the filters you have set.<br>
+           <span style="font-size:12.5px">Turn off <b>Surfaced only</b> to see
+           them all with their per-test results — arriving in the universe and
+           passing a screen are different things.</span>`
+        : `No names match these filters.<br><span style="font-size:12.5px">Try turning off
+           <b>Surfaced only</b> to see every name in the universe with its per-test
+           results.</span>`);
   }
   rows.forEach((r,i)=>{
     const tr=document.createElement('tr'); tr.className='row';
@@ -1718,6 +1738,9 @@ document.querySelectorAll('[data-mkt]').forEach(b=>b.onclick=()=>{
 document.querySelectorAll('[data-theme]').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('[data-theme]').forEach(x=>x.classList.remove('on'));
   b.classList.add('on'); fTheme=b.dataset.theme; render();});
+document.querySelectorAll('[data-listing]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('[data-listing]').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); fList=b.dataset.listing; render();});
 document.querySelectorAll('[data-fw]').forEach(b=>b.onclick=()=>{
   const k=b.dataset.fw;
   if(fFw.has(k)){fFw.delete(k);b.classList.remove('on');}else{fFw.add(k);b.classList.add('on');}
@@ -2712,6 +2735,28 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                      + "".join(f'<button class="chip" data-theme="{e_attr(t)}">'
                                f'{e_attr(t)}</button>' for t in themes))
 
+    # Listing chips are built from what is ACTUALLY in the data, not from the
+    # config. A config-driven row would offer a "Nasdaq listed" button on a run
+    # where the directory fetch failed and nothing was added — a filter that
+    # returns zero rows and looks like a bug in the page rather than what it
+    # is: coverage that did not arrive. Counting the rows also answers the
+    # question directly, which is the whole reason this row exists.
+    listings: Dict[str, int] = {}
+    for r in rows:
+        lb = (r.get("listing") or "").strip()
+        if lb:
+            listings[lb] = listings.get(lb, 0) + 1
+    listing_row = ""
+    if len(listings) > 1:
+        listing_row = (
+            '<span class="sep"></span><span class="fl">Listing</span>'
+            '<button class="chip on" data-listing="ALL">All</button>'
+            + "".join(
+                f'<button class="chip" data-listing="{e_attr(k)}" '
+                f'title="{v} names came into this run on the {e_attr(k)} list">'
+                f'{e_attr(k)} <b>{v}</b></button>'
+                for k, v in sorted(listings.items(), key=lambda kv: -kv[1])))
+
     fw_chips = "".join(
         f'<button class="chip" data-fw="{k}">{lbl}</button>' for k, lbl in FRAMEWORKS)
     fw_head = "".join(f'<th class="c">{lbl[:4]}</th>' for _k, lbl in FRAMEWORKS)
@@ -2793,6 +2838,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
+            .replace("__LISTINGROW__", listing_row)
             .replace("__GATE__", debt_html + sen_html + mf_html + buf_html
                      + mun_html + cmd_html
                      + lyn_html + rfx_html + dis_html + cycle_html + gate)

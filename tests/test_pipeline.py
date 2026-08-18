@@ -3731,8 +3731,14 @@ def test_technical_charts():
           "the same tests as numbers" in html, True)
     check("a row with too little history explains why, in company terms",
           "too little price history to chart" in html, True)
+    # Scoped to the PRICE-CHART fallback, which is what this guard was always
+    # about: that message used to tell the reader to toggle "Surfaced only",
+    # a filter that cannot conjure a price series. The row-list empty state is
+    # a different message where that advice is correct and does help, so the
+    # check reads the chart's own text rather than the whole page.
+    _chart_msg = html.split("too little price history to chart")[1][:400]
     check("and no longer blames a filter that cannot help",
-          "Turn off <b>Surfaced only</b>" in html, False)
+          "Surfaced only" in _chart_msg, False)
     check("the chart slot is drawn before the data arrives, so nothing jumps",
           'class="pslot"' in html, True)
     check("series are fetched per market, once, and cached",
@@ -4227,6 +4233,17 @@ def test_nasdaq_coverage():
         "ADRCO|Foreign Co - American Depositary Shares|Q|N|N|100|N|N",
         "PFDDS|Some REIT - Depositary Shares Series E|Q|N|N|100|N|N",
         "GOOGL|Alphabet Inc. - Class A Common Stock|Q|N|N|100|N|N",
+        # The four real Nasdaq companies a bare "unit" substring silently
+        # deleted, plus the bank whose NAME is Preferred. Every one of these is
+        # ordinary common stock and every one was being dropped.
+        "UTHR|United Therapeutics Corporation - Common Stock|Q|N|N|100|N|N",
+        "UNFI|United Natural Foods, Inc. - Common Stock|Q|N|N|100|N|N",
+        "UCBI|United Community Banks, Inc. - Common Stock|Q|N|N|100|N|N",
+        "CTBI|Community Trust Bancorp, Inc. - Common Stock|Q|N|N|100|N|N",
+        "PFBC|Preferred Bank - Common Stock|Q|N|N|100|N|N",
+        "OPRT|Oportunity Holdings Inc. - Common Stock|Q|N|N|100|N|N",
+        "NOTEC|Noteworthy Systems Inc. - Common Stock|Q|N|N|100|N|N",
+        "RGHTC|Rightmove Data Corp - Common Stock|Q|N|N|100|N|N",
         "BRKAB|Some Co - Class B Common Stock|Q|N|N|100|N|N"
         "File Creation Time: 0818202609:30|||||||",
     ])
@@ -4248,6 +4265,29 @@ def test_nasdaq_coverage():
     # ordinary equity. Dropping on the word would have removed the foreign
     # listings this layer exists to reach.
     check("an American Depositary Share is kept", "ADRCO" in got, True)
+
+    # THE REGRESSION THAT MATTERS. "unit" as a bare substring lives inside
+    # "United" and inside "Community", and "preferred" inside the name of a
+    # bank called Preferred. The filter matched the whole security name as a
+    # substring, so four ordinary Nasdaq companies were deleted from every run
+    # and nothing said so — the count just came back smaller.
+    for sym, why in (("UTHR", "United Therapeutics"),
+                     ("UNFI", "United Natural Foods"),
+                     ("UCBI", "United Community Banks"),
+                     ("CTBI", "Community Trust Bancorp"),
+                     ("OPRT", "a name containing 'oportunity'"),
+                     ("NOTEC", "a name containing 'note'"),
+                     ("RGHTC", "a name containing 'right'"),
+                     ("PFBC", "a bank whose NAME is Preferred")):
+        check(f"{why} survives — it is ordinary common stock", sym in got, True)
+    check("the words are matched on whole words, not substrings",
+          bool(R._NON_COMMON_RE.search("United Therapeutics")), False)
+    check("and only against the instrument half of the name",
+          R._instrument_desc("Preferred Bank - Common Stock"), "Common Stock")
+    check("a name with no dash still gets checked",
+          R._instrument_desc("Some Co Warrants"), "Some Co Warrants")
+    check("so a genuine warrant is still caught",
+          bool(R._NON_COMMON_RE.search("Some Co Warrants")), True)
     check("but a depositary share over a PREFERRED series is not",
           "PFDDS" in got, False)
     # The fifth-letter convention is the traditional shortcut and it is wrong
@@ -4332,6 +4372,44 @@ def test_nasdaq_coverage():
           "Nasdaq extra coverage failed, continuing without it" in src, True)
     check("and reports the new universe size",
           "US universe is now" in src, True)
+
+    # --- can a reader actually SEE them? -------------------------------------
+    # Coverage that arrives with no label is coverage nobody can find. The
+    # Nasdaq names were being unioned into the US list and then became
+    # indistinguishable from S&P 500 rows, so "are the Nasdaq stocks there?"
+    # had no answer on the page. Every name now carries the list it came in on.
+    tags = {}
+    R.resolve_universe({"markets": {"XX": {"constituents": ["AAA", "BBB"],
+                                           "index_name": "Test Index"}}},
+                       ["XX"], tags)
+    check("resolve_universe records where each ticker came from",
+          tags.get("AAA"), "Test Index")
+    check("the run tags the extra Nasdaq names",
+          'listing_by_ticker[_t.upper()] = "Nasdaq listed"' in src, True)
+    check("and tags the S&P 500 ones", 'tags.setdefault(_t, "S&P 500")' in src, True)
+    check("the record carries it", "listing" in open("src/schema.py").read(), True)
+    check("the screen result carries it",
+          '"listing": getattr(rec, "listing", None),' in open("src/screens.py").read(), True)
+
+    rsrc = open("src/render.py").read()
+    check("the row payload carries it", '"listing": r.get("listing") or "",' in rsrc, True)
+    check("the drawer shows it as a tag", 'class="tag lst"' in rsrc, True)
+    check("and the filter bar can isolate one list", "data-listing=" in rsrc, True)
+    check("the filter predicate uses it",
+          'if(fList!=="ALL" && (r.listing||"")!==fList) return false;' in rsrc, True)
+    check("the chips are built from the ROWS, not the config, so a run where "
+          "the fetch failed cannot offer a button that matches nothing",
+          "for r in rows:" in rsrc and "listings[lb] = listings.get(lb, 0) + 1" in rsrc,
+          True)
+    check("and each chip states how many names it holds",
+          "names came into this run on the" in rsrc, True)
+    # "No names match these filters" reads as "the coverage never arrived".
+    # Naming the count separates the two facts, because they are different
+    # problems with different fixes.
+    check("an empty listing filter says how many DID arrive",
+          'DATA.filter(x=>(x.listing||"")===fList).length' in rsrc, True)
+    check("and distinguishes arriving from passing",
+          "arriving in the universe and" in rsrc, True)
 
 
 def test_candlestick_patterns():
