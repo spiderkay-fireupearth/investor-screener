@@ -169,6 +169,16 @@ def snapshot_site(out_dir: str = "out", data_dir: str = "data") -> bool:
     dest_dir = os.path.join(data_dir, "site")
     os.makedirs(dest_dir, exist_ok=True)
     shutil.copy2(src, os.path.join(dest_dir, "index.html"))
+    # The price charts live in sidecar files beside the page. A deep-dive
+    # deploy replaces the whole site root with its own out/, so a snapshot that
+    # saved only index.html would restore a page whose every price chart
+    # 404s — working yesterday, broken after the first deep dive, with nothing
+    # in the logs to say why.
+    series_src = os.path.join(out_dir, "series")
+    if os.path.isdir(series_src):
+        series_dest = os.path.join(dest_dir, "series")
+        shutil.rmtree(series_dest, ignore_errors=True)
+        shutil.copytree(series_src, series_dest)
     return True
 
 
@@ -180,11 +190,20 @@ def restore_site(data_dir: str = "data", out_dir: str = "out") -> bool:
     404 and the only symptom is a page that used to work.
     """
     dest = os.path.join(out_dir, "index.html")
-    if os.path.exists(dest):
-        return True
     src = os.path.join(data_dir, "site", "index.html")
-    if not os.path.exists(src):
-        return False
-    os.makedirs(out_dir, exist_ok=True)
-    shutil.copy2(src, dest)
+    have_page = os.path.exists(dest)
+    if not have_page:
+        if not os.path.exists(src):
+            return False
+        os.makedirs(out_dir, exist_ok=True)
+        shutil.copy2(src, dest)
+    # The series folder is restored WHETHER OR NOT the page needed restoring.
+    # A deep-dive deploy can leave a fresh index.html in place while the
+    # sidecar files it never wrote are simply absent, and the failure is
+    # invisible: the page loads, the table works, and only the price charts
+    # quietly 404.
+    series_src = os.path.join(data_dir, "site", "series")
+    series_dest = os.path.join(out_dir, "series")
+    if os.path.isdir(series_src) and not os.path.isdir(series_dest):
+        shutil.copytree(series_src, series_dest)
     return True

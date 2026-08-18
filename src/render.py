@@ -100,10 +100,10 @@ DISPLAY_METRICS = (
     "atr_pct", "max_drawdown_1y", "max_drawdown_5y",
 )
 
-# How many price series the published page may carry. Surfaced rows and rows
-# with a deep dive get one first; the rest fall back to the scalar charts,
-# which need no series at all. The cap is a payload budget, not an opinion.
-MAX_SPARKLINES = 180
+# Retained only so an older caller importing it does not break. The cap it
+# used to enforce is gone: price series are sidecar files now, so there is no
+# payload budget to ration and every row gets a chart.
+MAX_SPARKLINES = None
 
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
                  "HK": "HKEX", "TH": "SET", "ID": "IDX",
@@ -164,16 +164,14 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                   report_tickers: Optional[set] = None) -> List[Dict[str, Any]]:
     report_tickers = report_tickers or set()
     rows = []
-    # Which rows may carry a price series. Surfaced names and names with a deep
-    # dive are the ones anyone actually opens; everything else renders from
-    # scalars alone. Sorted so the choice is deterministic rather than
-    # dependent on dict ordering — a page whose payload changes shape between
-    # identical runs is a page nobody can diff.
-    _spark_candidates = sorted(
-        (t for t, r in results.items()
-         if r.get("surfaced") or t in report_tickers))
-    spark_allowed = set(_spark_candidates[:MAX_SPARKLINES])
-    spark_omitted = 0
+    # Price series are NOT embedded in this payload. They are written to
+    # out/series/<MARKET>.json and fetched by the drawer when a row is opened.
+    #
+    # The previous design carried them inline for a capped subset of rows, and
+    # it was wrong in the way that matters: the cap was invisible to the reader
+    # and the fallback text told them to change a filter that could not
+    # possibly help. Every row now gets a chart; the page stays small because
+    # the series live beside it rather than inside it.
     for ticker, r in results.items():
         # Prefer metrics persisted in the result. Rows merged in from the other
         # region's last run have no entry in the live metrics dict.
@@ -227,9 +225,6 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             }
 
         tech = r.get("technical", {})
-        spark = m.get("spark") if ticker in spark_allowed else None
-        if m.get("spark") and ticker not in spark_allowed:
-            spark_omitted += 1
         # A sentence-level read of the row, assembled from the same numbers the
         # panels below it show. Built here rather than at screen time so a row
         # merged in from another region's run gets one too — and so the wording
@@ -253,7 +248,9 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             "fw_detail": fw_detail,
             "n_passed": r.get("n_frameworks_passed", 0),
             "tech_pass": bool(r.get("technical_passed")),
-            "spark": spark,
+            # Whether a series EXISTS, so the drawer can tell "not fetched yet"
+            # from "this company has too little history to chart".
+            "has_series": bool(m.get("spark")),
             # The numbers the charts are drawn from, kept as raw values rather
             # than formatted strings: a chart cannot plot "12.5%".
             "tech_raw": {
@@ -413,11 +410,45 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             },
         })
     rows.sort(key=lambda x: (-x["n_passed"], -x["mcap_sort"]))
-    if spark_omitted:
-        log.info("Price series included for %d rows, omitted for %d — the "
-                 "omitted rows render the scalar charts only",
-                 len(spark_allowed), spark_omitted)
     return rows
+
+
+def write_series(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
+                 out_dir: str) -> Dict[str, int]:
+    """Price series as sidecar files, one per market.
+
+    Sharded by market rather than written as one file because the drawer knows
+    which market it needs: opening a Hong Kong row should not download the US
+    series as well. Written every run for every row that has one, so there is
+    no cap and no subset — the reason a chart is missing is now always "this
+    company has too little price history", never "the page ran out of budget".
+    """
+    dest = os.path.join(out_dir, "series")
+    os.makedirs(dest, exist_ok=True)
+    by_market: Dict[str, Dict[str, Any]] = {}
+    for ticker, r in results.items():
+        m = metrics.get(ticker) or r.get("metrics") or {}
+        sp = m.get("spark")
+        if not sp:
+            continue
+        by_market.setdefault(r.get("market") or "NA", {})[ticker] = sp
+    counts = {}
+    for mkt, payload in by_market.items():
+        path = os.path.join(dest, f"{mkt}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, separators=(",", ":"), default=str)
+        counts[mkt] = len(payload)
+    # A market that produced no series at all still gets an empty file, so the
+    # drawer's fetch returns {} rather than a 404 it has to interpret.
+    for mkt in {r.get("market") for r in results.values() if r.get("market")}:
+        path = os.path.join(dest, f"{mkt}.json")
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({}, f)
+            counts.setdefault(mkt, 0)
+    log.info("Wrote price series: %s",
+             ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none")
+    return counts
 
 
 TEMPLATE = """<!DOCTYPE html>
@@ -818,6 +849,49 @@ function fmtPx(v){
   return a>=1000?v.toFixed(0):(a>=10?v.toFixed(1):v.toFixed(2));
 }
 
+
+// ---- series loader -------------------------------------------------------
+// One fetch per market, cached for the session. The series live in
+// series/<MARKET>.json beside this page rather than inside it: embedding ~900
+// of them would put well over a megabyte of numbers into the HTML for charts
+// most visitors never open, and capping which rows got one — the previous
+// design — meant the reader could not tell a missing chart from a missing
+// budget.
+const SERIES_CACHE = {};
+function loadSeries(market){
+  if(!market) return Promise.resolve({});
+  if(SERIES_CACHE[market]) return SERIES_CACHE[market];
+  SERIES_CACHE[market] = fetch('series/' + encodeURIComponent(market) + '.json')
+    .then(r => r.ok ? r.json() : {})
+    .catch(() => ({}));
+  return SERIES_CACHE[market];
+}
+
+function fillPriceCharts(root){
+  (root || document).querySelectorAll('[data-series-for]').forEach(card => {
+    if(card.dataset.filled) return;
+    card.dataset.filled = '1';
+    const t = card.dataset.seriesFor, mkt = card.dataset.market;
+    const slot = card.querySelector('.pslot');
+    const head = card.querySelector('.phead');
+    loadSeries(mkt).then(all => {
+      const sp = all[t];
+      if(!sp){
+        slot.innerHTML = '<div class="cap">The price series for this row could '
+          + 'not be loaded. It is written by the refresh that covers '
+          + esc(mkt) + ' — if that market has not run since this feature was '
+          + 'added, the file will appear after its next refresh.</div>';
+        return;
+      }
+      const row = DATA.find(x => x.ticker === t) || {};
+      const chg = ((sp.last / sp.first - 1) * 100);
+      head.textContent = `${sp.years}y · ${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%`
+        + ` · ${row.currency || ''} ${sp.lo} – ${sp.hi}`;
+      slot.innerHTML = priceChart(sp, row.currency);
+    });
+  });
+}
+
 function priceChart(sp, ccy){
   if(!sp || !sp.px || sp.px.length < 8) return '';
   const px=sp.px, m50=sp.ma50||[], m200=sp.ma||[];
@@ -1051,20 +1125,22 @@ function testBars(tests){
 function technicalPanel(r){
   const t=r.tech_raw||{}, d=r.tech_detail||{};
   let cards='';
-  if(r.spark){
-    const chg=((r.spark.last/r.spark.first-1)*100);
-    cards+=`<div class="chart wide"><h5>Close, 50-day and 200-day averages
-      <span>${r.spark.years}y · ${chg>=0?'+':''}${chg.toFixed(1)}% · ${esc(r.currency||'')} ${r.spark.lo} – ${r.spark.hi}</span></h5>
-      ${priceChart(r.spark, r.currency)}
+  // The price chart is filled in asynchronously: its series lives in a sidecar
+  // file so the page itself stays small. The slot is drawn immediately so the
+  // layout does not jump when the data arrives.
+  if(r.has_series){
+    cards+=`<div class="chart wide" data-series-for="${esc(r.ticker)}"
+      data-market="${esc(r.market||'')}"><h5>Close, 50-day and 200-day averages
+      <span class="phead"></span></h5>
+      <div class="pslot"><div class="cap">loading price history&hellip;</div></div>
       <div class="lgd"><i><b style="background:var(--series-1)"></b>Close</i>
       <i><b style="background:var(--series-2)"></b>50-day</i>
       <i><b style="background:var(--series-3)"></b>200-day</i></div></div>`;
   } else {
-    cards+=`<div class="chart wide"><h5>Price</h5><div class="cap">No price series
-      on this row. The published page carries one for surfaced names and for
-      names with a deep dive; everything else renders from the numbers alone,
-      to keep the page loadable on a phone. Turn off <b>Surfaced only</b> and
-      this row still shows every chart below.</div></div>`;
+    cards+=`<div class="chart wide"><h5>Price</h5><div class="cap">This company
+      has too little price history to chart &mdash; the series needs at least
+      sixty trading days. Every other chart below is drawn from the numbers and
+      is unaffected.</div></div>`;
   }
   const rsi=svgRsi(t.rsi);
   if(rsi) cards+=`<div class="chart"><h5>RSI(14)<span>${esc(t.rsi_label||'')}</span></h5>
@@ -1273,7 +1349,11 @@ function render(){
     tr.innerHTML=cells;
     const dr=document.createElement('tr'); dr.className='detail'; dr.style.display='none';
     dr.innerHTML=`<td colspan="${5+FWS.length+2}">${detail(r)}</td>`;
-    tr.onclick=()=>{dr.style.display=dr.style.display==='none'?'table-row':'none';};
+    tr.onclick=()=>{
+      const opening = dr.style.display==='none';
+      dr.style.display = opening ? 'table-row' : 'none';
+      if(opening) fillPriceCharts(dr);
+    };
     tb.appendChild(tr); tb.appendChild(dr);
   });
 }
@@ -2327,6 +2407,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                      .strftime("%Y-%m-%d %H:%M UTC")))
 
     os.makedirs(out_dir, exist_ok=True)
+    write_series(results, metrics, out_dir)
     path = os.path.join(out_dir, "index.html")
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)

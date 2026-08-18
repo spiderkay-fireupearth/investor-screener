@@ -3599,38 +3599,64 @@ def test_technical_charts():
     # --- payload discipline --------------------------------------------------
     check("the series is in the display contract, so merged rows chart too",
           "spark" in rn.DISPLAY_METRICS, True)
-    check("and there is a stated cap on how many the page may carry",
-          rn.MAX_SPARKLINES > 0, True)
 
-    def mkres(t, surfaced):
-        return {"ticker": t, "name": t, "market": "US", "surfaced": surfaced,
+    # --- payload discipline: sidecar files, not an inline cap ---------------
+    # The page no longer embeds series at all. Embedding ~900 of them put a
+    # megabyte of numbers into the HTML for charts most visitors never open;
+    # capping WHICH rows got one was worse, because a missing chart then meant
+    # either "no history" or "ran out of budget" and the reader could not tell.
+    import tempfile, json as _json
+    def mkres(t, mkt, surfaced, has_spark=True):
+        return {"ticker": t, "name": t, "market": mkt, "surfaced": surfaced,
                 "frameworks": {}, "technical": {"n_passed": 4, "n_total": 6,
                                                 "tests": []},
-                "metrics": {"spark": sp, "rsi_14": 55.0}}
+                "metrics": {"spark": sp if has_spark else None, "rsi_14": 55.0}}
 
-    results = {f"S{i}": mkres(f"S{i}", True) for i in range(3)}
-    results.update({f"N{i}": mkres(f"N{i}", False) for i in range(4)})
+    results = {"S0": mkres("S0", "US", True), "N0": mkres("N0", "US", False),
+               "HK0": mkres("HK0", "HK", False),
+               "TINY": mkres("TINY", "US", True, has_spark=False)}
     rows = {r["ticker"]: r for r in rn.build_payload(results, {}, {})}
-    check("surfaced rows carry the price series",
-          all(rows[f"S{i}"]["spark"] for i in range(3)), True)
-    check("rows nobody is reviewing do not",
-          any(rows[f"N{i}"]["spark"] for i in range(4)), False)
-    check("but they still carry the numbers every other chart needs",
-          rows["N0"]["tech_raw"]["rsi"], 55.0)
+    check("no series is embedded in the row payload",
+          any("spark" in r for r in rows.values()), False)
+    check("a row that has one says so", rows["S0"]["has_series"], True)
+    check("including one nobody surfaced — every row gets a chart now",
+          rows["N0"]["has_series"], True)
+    check("and a company with too little history says it has none",
+          rows["TINY"]["has_series"], False)
 
-    # A row with a deep dive gets a series whether or not it surfaced.
-    rows2 = {r["ticker"]: r for r in
-             rn.build_payload(results, {}, {}, report_tickers={"N1"})}
-    check("a name with a deep dive gets one too", bool(rows2["N1"]["spark"]), True)
+    with tempfile.TemporaryDirectory() as td:
+        counts = rn.write_series(results, {}, td)
+        check("series are written per market, not in one lump",
+              sorted(counts), ["HK", "US"])
+        check("with every row that has one included", counts["US"], 2)
+        us = _json.load(open(os.path.join(td, "series", "US.json")))
+        check("the file is keyed by ticker", sorted(us), ["N0", "S0"])
+        check("and carries all three lines",
+              sorted(k for k in us["S0"] if k in ("px", "ma50", "ma")),
+              ["ma", "ma50", "px"])
+        check("a market with no series still gets a file, not a 404",
+              os.path.exists(os.path.join(td, "series", "HK.json")), True)
 
-    # The cap bounds the worst case rather than trusting the universe to be small.
-    many = {f"M{i}": mkres(f"M{i}", True) for i in range(rn.MAX_SPARKLINES + 25)}
-    capped = rn.build_payload(many, {}, {})
-    check("the cap is enforced",
-          sum(1 for r in capped if r["spark"]), rn.MAX_SPARKLINES)
-    check("and the choice is deterministic, not dict order",
-          [r["ticker"] for r in rn.build_payload(many, {}, {}) if r["spark"]],
-          [r["ticker"] for r in capped if r["spark"]])
+    # The sidecar files must survive a deep-dive deploy, which replaces the
+    # whole site root. Snapshot and restore both have to know about them or the
+    # page keeps working while every price chart quietly 404s.
+    from src import library as lib
+    with tempfile.TemporaryDirectory() as td:
+        out1, data1 = os.path.join(td, "out"), os.path.join(td, "data")
+        os.makedirs(os.path.join(out1, "series"), exist_ok=True)
+        open(os.path.join(out1, "index.html"), "w").write("<html></html>")
+        open(os.path.join(out1, "series", "US.json"), "w").write('{"A":1}')
+        check("the snapshot takes the series folder too",
+              lib.snapshot_site(out1, data1), True)
+        check("and stores it",
+              os.path.exists(os.path.join(data1, "site", "series", "US.json")),
+              True)
+        out2 = os.path.join(td, "out2")
+        os.makedirs(out2, exist_ok=True)
+        open(os.path.join(out2, "index.html"), "w").write("<html>fresh</html>")
+        lib.restore_site(data1, out2)
+        check("a deploy that wrote its own page still gets the series back",
+              os.path.exists(os.path.join(out2, "series", "US.json")), True)
 
     # --- raw values, not formatted strings ------------------------------------
     # A chart cannot plot "12.5%". This is the mistake that would have made the
@@ -3648,8 +3674,18 @@ def test_technical_charts():
     check("the drawer calls the chart panel", "technicalPanel(r)" in html, True)
     check("the numeric list survives underneath, collapsed",
           "the same tests as numbers" in html, True)
-    check("a row without a series explains why rather than showing a gap",
-          "No price series" in html, True)
+    check("a row with too little history explains why, in company terms",
+          "too little price history to chart" in html, True)
+    check("and no longer blames a filter that cannot help",
+          "Turn off <b>Surfaced only</b>" in html, False)
+    check("the chart slot is drawn before the data arrives, so nothing jumps",
+          'class="pslot"' in html, True)
+    check("series are fetched per market, once, and cached",
+          "const SERIES_CACHE" in html and "series/" in html, True)
+    check("and the fetch fires when a drawer opens",
+          "fillPriceCharts(dr)" in html, True)
+    check("a fetch that comes back empty says which refresh writes the file",
+          "if that market has not run since this feature was" in html, True)
     check("the threshold marker is the midpoint of every bar",
           "markAt=0.5" in html, True)
 
