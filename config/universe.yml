@@ -595,6 +595,38 @@ macro_series:
   # run converts it to a year-on-year rate before using it, because adding a
   # CPI level of 320 to a P/E of 22 would be arithmetic without meaning.
   us_cpi: CPIAUCSL
+  # Three-month VIX, for the term structure. Spot above three-month means the
+  # curve is backwardated, which is what a real panic looks like as distinct
+  # from ordinary nervousness — and a single VIX level cannot tell them apart.
+  vix_3m: VXVCLS
+
+
+# ---------------------------------------------------------------------------
+# Market psychology. Everything here is CONTRARIAN in application and none of
+# it is a timing signal on its own: sentiment describes positioning, never
+# value. Feeds that are absent report themselves absent rather than falling
+# back to a proxy.
+sentiment:
+  vix_calm: 15.0
+  vix_panic: 30.0
+  rsi_hot: 70.0
+  rsi_cold: 30.0
+  pcr_fear: 1.00
+  pcr_greed: 0.60
+  # Put/call ratio. There is no free, stable, machine-readable daily feed for
+  # this that does not change shape every few months, so it is OFF by default
+  # and the composite runs on the remaining six factors, saying so. Point this
+  # at a CSV whose last column is the daily total put/call ratio and it fills
+  # in; leave it empty and nothing breaks.
+  put_call_url: ""
+  # Commitments of Traders. Contract CODES, not names: the CFTC's market names
+  # are long and inconsistent, the codes are stable.
+  cot_contracts:
+    "E-mini S&P 500": "13874A"
+    "Gold": "088691"
+    "Copper": "085692"
+    "Crude oil (WTI)": "067651"
+  cot_weeks: 160
 
 
 # ---------------------------------------------------------------------------

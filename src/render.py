@@ -1000,6 +1000,166 @@ def _reflexive_legend(census: Dict[str, int]) -> str:
             '</div></details>')
 
 
+def _sentiment_panel(s: Dict[str, Any]) -> str:
+    """The six psychology gauges, each with its contrarian reading.
+
+    Built so a missing feed is visible rather than absorbed: an unavailable
+    gauge prints its reason in the same place a reading would have gone. The
+    alternative — quietly showing five gauges where there should be six — makes
+    a degraded panel look like a calm market.
+    """
+    if not s or s.get("error"):
+        if s and s.get("error"):
+            return ('<div class="gate"><b>Market psychology:</b> not computed '
+                    '— ' + e_attr(str(s["error"])) + '.</div>')
+        return ""
+    g = s.get("gauges", {})
+    fg = g.get("fear_greed", {})
+    vix = g.get("vix", {})
+    rsi = g.get("rsi", {})
+    pcr = g.get("put_call", {})
+    ad = g.get("advance_decline", {})
+    part = g.get("participation", {})
+    cot = g.get("cot", []) or []
+
+    crowd = s.get("crowd", "mixed")
+    cls = {"greedy": "hot", "fearful": "cool"}.get(crowd, "warm")
+    head = ""
+    if fg.get("available"):
+        head = (f'<span class="pill {cls}">Fear &amp; Greed '
+                f'{fg["score"]:.0f} &mdash; {e_attr(fg["label"])}</span>')
+
+    def _row(k, v):
+        return (f'<div class="drow"><span class="k">{k}</span>'
+                f'<span class="v">{v}</span></div>')
+
+    def _gauge(title, gg, rows):
+        if not gg.get("available"):
+            return (f'<div class="dcard"><h4>{title}</h4>'
+                    f'<div class="drow"><span class="k muted-ink">not available '
+                    f'&mdash; {e_attr(str(gg.get("reason", "no data")))}</span>'
+                    f'</div></div>')
+        return f'<div class="dcard"><h4>{title}</h4>{rows}</div>'
+
+    vix_rows = ""
+    if vix.get("available"):
+        vix_rows = _row("Level", f'{vix["level"]:.1f}')
+        if vix.get("percentile_1y") is not None:
+            vix_rows += _row("In its own year",
+                             f'{vix["percentile_1y"] * 100:.0f}th percentile')
+        if vix.get("term_structure") is not None:
+            vix_rows += _row("Spot ÷ 3-month", f'{vix["term_structure"]:.2f}')
+        vix_rows += (f'<div class="dnote">{e_attr(vix["reading"])}.'
+                     + (f' {e_attr(vix.get("term_reading", ""))}.'
+                        if vix.get("term_reading") else '') + '</div>')
+
+    rsi_rows = ""
+    if rsi.get("available"):
+        if rsi.get("index_rsi") is not None:
+            rsi_rows += _row("Index RSI(14)", f'{rsi["index_rsi"]:.0f}')
+        if rsi.get("universe_median_rsi") is not None:
+            rsi_rows += _row("Median stock RSI",
+                             f'{rsi["universe_median_rsi"]:.0f}')
+        rsi_rows += f'<div class="dnote">{e_attr(rsi["reading"])}.</div>'
+        if rsi.get("divergence"):
+            rsi_rows += f'<div class="dnote">{e_attr(rsi["divergence"])}.</div>'
+
+    pcr_rows = ""
+    if pcr.get("available"):
+        pcr_rows = _row("Put/call", f'{pcr["ratio"]:.2f}')
+        if pcr.get("percentile_1y") is not None:
+            pcr_rows += _row("In its own year",
+                             f'{pcr["percentile_1y"] * 100:.0f}th percentile')
+        pcr_rows += f'<div class="dnote">{e_attr(pcr["reading"])}.</div>'
+
+    ad_rows = ""
+    if ad.get("available"):
+        ad_rows = _row("Advancers / decliners",
+                       f'{ad["advancers"]} / {ad["decliners"]}')
+        ad_rows += _row("McClellan Oscillator",
+                        f'{ad["mcclellan_oscillator"]:+.0f}')
+        if ad.get("ad_change_20d") is not None:
+            ad_rows += _row("A/D line, 20 days", f'{ad["ad_change_20d"]:+.0f}')
+        ad_rows += f'<div class="dnote">{e_attr(ad["oscillator_state"])}.</div>'
+        if ad.get("divergence"):
+            ad_rows += f'<div class="dnote">{e_attr(ad["divergence"])}.</div>'
+        ad_rows += (f'<div class="dnote muted-ink">{e_attr(ad["caveat"])}</div>')
+
+    part_rows = ""
+    if part.get("available"):
+        if part.get("index_6m_return") is not None:
+            part_rows += _row("Index, 6 months",
+                              f'{part["index_6m_return"] * 100:+.1f}%')
+        part_rows += _row("Median stock, 6 months",
+                          f'{part["median_6m_return"] * 100:+.1f}%')
+        part_rows += _row("New highs / new lows",
+                          f'{part["new_highs"]} / {part["new_lows"]}')
+        part_rows += _row("Names up over 6 months",
+                          f'{part["pct_positive_6m"] * 100:.0f}%')
+        if part.get("reading"):
+            part_rows += f'<div class="dnote">{e_attr(part["reading"])}.</div>'
+
+    cot_rows = ""
+    for c in cot:
+        if c.get("available"):
+            cot_rows += _row(
+                e_attr(str(c.get("contract", ""))),
+                f'{c["spec_net_pct_oi"] * 100:+.1f}% of OI · '
+                f'percentile {c["percentile"] * 100:.0f}')
+        else:
+            cot_rows += (f'<div class="drow"><span class="k muted-ink">'
+                         f'{e_attr(str(c.get("contract", "")))} — '
+                         f'{e_attr(str(c.get("reason", "no data")))}</span></div>')
+    extremes = [c for c in cot if c.get("available")
+                and c.get("state") in ("crowded long", "crowded short")]
+    for c in extremes:
+        cot_rows += (f'<div class="dnote"><b>{e_attr(str(c["contract"]))}:</b> '
+                     f'{e_attr(c["reading"])}.</div>')
+    if cot and any(c.get("available") for c in cot):
+        dates = {c.get("report_date") for c in cot if c.get("available")}
+        cot_rows += ('<div class="dnote muted-ink">The COT report covers the '
+                     'preceding Tuesday and is published on Friday, so it is '
+                     'always several days old. Week of '
+                     + e_attr(", ".join(sorted(d for d in dates if d)))
+                     + '.</div>')
+
+    fg_rows = ""
+    if fg.get("available"):
+        for k, v in fg["subscores"].items():
+            fg_rows += _row(e_attr(fg["subscore_labels"].get(k, k)), f'{v:.0f}')
+        if fg.get("missing"):
+            fg_rows += ('<div class="dnote muted-ink">Not included: '
+                        + e_attr("; ".join(fg["missing"])) + '.</div>')
+        fg_rows += f'<div class="dnote muted-ink">{e_attr(fg["caveat"])}</div>'
+
+    body = (
+        '<div class="dgrid">'
+        + _gauge("Fear &amp; Greed (our replication)", fg, fg_rows)
+        + _gauge("Volatility &amp; fear (VIX)", vix, vix_rows)
+        + _gauge("Momentum (RSI)", rsi, rsi_rows)
+        + _gauge("Options hedging (put/call)", pcr, pcr_rows)
+        + _gauge("Participation breadth (A/D, McClellan)", ad, ad_rows)
+        + _gauge("Whose rally is it?", part, part_rows)
+        + ('<div class="dcard"><h4>Institutional positioning (COT)</h4>'
+           + (cot_rows or '<div class="drow"><span class="k muted-ink">no COT '
+                          'contracts configured</span></div>') + '</div>')
+        + '</div>'
+        + f'<div class="dnote"><b>The crowd looks {e_attr(crowd)}.</b> '
+        + e_attr(s.get("action", "")) + '.</div>'
+        + (f'<div class="dnote">{e_attr(s["cycle_note"])}</div>'
+           if s.get("cycle_note") else '')
+        + f'<div class="dnote muted-ink">{e_attr(s.get("caveat", ""))}</div>')
+
+    return ('<details class="dalio"><summary>'
+            '<span class="stg">Market psychology</span>'
+            + head
+            + f'<span class="muted-ink">{s.get("gauges_available", 0)} of 6 '
+              'gauges reporting — every one of them contrarian, none of them a '
+              'timing signal</span>'
+            '<span class="muted-ink" style="margin-left:auto">details &#9662;</span>'
+            '</summary><div class="body">' + body + '</div></details>')
+
+
 def _buffett_indicator_line(bi: Dict[str, Any]) -> str:
     """Buffett's market-level gauge, or an honest account of why there isn't one."""
     if not bi:
@@ -1421,6 +1581,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     cmd_html = _commodity_panel(screened.get("commodity_board") or {})
     rfx_html = _reflexive_legend(screened.get("reflexive_census") or {})
     dis_html = _dislocation_panel(screened.get("dislocation_summary") or {})
+    sen_html = _sentiment_panel(screened.get("sentiment") or {})
     lyn_html = _lynch_panel(screened.get("lynch_census") or {},
                             screened.get("value_regime") or {},
                             screened.get("rule_of_20") or {},
@@ -1444,8 +1605,8 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
-            .replace("__GATE__", debt_html + cmd_html + lyn_html + rfx_html
-                     + dis_html + cycle_html + gate)
+            .replace("__GATE__", debt_html + sen_html + cmd_html + lyn_html
+                     + rfx_html + dis_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
             .replace("__TS__", datetime.now(timezone.utc)

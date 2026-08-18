@@ -42,6 +42,8 @@ from . import reflexivity as rfx
 from . import dislocation as dis
 from . import events as evt
 from . import buffett as bf
+from . import sentiment as sen
+from .providers.cftc import CftcProvider
 
 log = logging.getLogger("screener")
 
@@ -267,6 +269,41 @@ def resolve_universe(universe_cfg: Dict, markets: List[str]) -> Dict[str, List[s
         else:
             out[mkt] = list(m.get("constituents", []))
     return out
+
+
+def fetch_put_call(url: str):
+    """Daily put/call ratio from a configured CSV, or nothing at all.
+
+    Deliberately unforgiving: it takes the last numeric column of each row and
+    refuses anything outside a plausible 0.2–3.0 band. A put/call ratio is a
+    small number with a narrow range, so a parse that lands outside it has read
+    the wrong column — and a wrong column here would feed the composite a
+    number that looks like sentiment and is not.
+    """
+    try:
+        r = requests.get(url, timeout=30)
+        if r.status_code != 200:
+            log.warning("put/call source -> HTTP %s", r.status_code)
+            return None, []
+        vals = []
+        for line in r.text.splitlines():
+            parts = [p.strip() for p in line.replace("\t", ",").split(",")]
+            for p in reversed(parts):
+                try:
+                    v = float(p)
+                except (TypeError, ValueError):
+                    continue
+                if 0.2 <= v <= 3.0:
+                    vals.append(v)
+                break
+        if not vals:
+            log.warning("put/call source parsed to nothing usable — the "
+                        "composite will run without it")
+            return None, []
+        return vals[0], vals[:260]
+    except Exception as e:                           # noqa: BLE001
+        log.warning("put/call fetch failed: %s", e)
+    return None, []
 
 
 def refresh_fx(yahoo: YahooProvider, store: Store, fx_pairs: Dict[str, Optional[str]]):
@@ -575,6 +612,79 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     screened = sc.screen_universe(records, metrics_by_ticker, thresholds, macro,
                                   cycle=cycle_state)
     screened["buffett_indicator"] = buf_ind
+
+    # ---- market psychology --------------------------------------------------
+    # Six gauges of what the crowd is doing, all contrarian in application. Any
+    # that cannot be computed says so; none is substituted with a proxy.
+    try:
+        scfg = universe_cfg.get("sentiment", {}) or {}
+        vix_series = (vix_df["Close"].astype(float)
+                      if vix_df is not None and len(vix_df) else None)
+        vix3m_hist = fred.history("VXVCLS", limit=400) if fred.enabled else []
+        vix3m = (pd.Series([v for _d, v in reversed(vix3m_hist)])
+                 if vix3m_hist else None)
+        sen_vix = sen.vix_state(vix_series, vix3m, scfg) if vix_series is not None \
+            else {"available": False, "reason": "no VIX price history"}
+
+        idx_close = (primary_idx["Close"].astype(float)
+                     if primary_idx is not None and len(primary_idx) else None)
+        idx_rsi = ta._last(ta.rsi(idx_close, 14)) if idx_close is not None else None
+        sen_rsi = sen.rsi_state(
+            idx_rsi, [m.get("rsi_14") for m in metrics_by_ticker.values()], scfg)
+
+        ad = sen.advance_decline(frames)
+        part = sen.participation(frames, idx_close)
+
+        # Put/call: off unless a source is configured, and the composite says so.
+        pcr_val, pcr_hist = None, []
+        if scfg.get("put_call_url"):
+            pcr_val, pcr_hist = fetch_put_call(scfg["put_call_url"])
+        sen_pcr = sen.put_call_state(pcr_val, pcr_hist, scfg)
+
+        hy_hist = ([v for _d, v in fred.history("BAMLH0A0HYM2", limit=300)]
+                   if fred.enabled else [])
+        bond_20d = None
+        tnx = store.load_prices("^TNX")
+        if tnx is not None and len(tnx) > 21:
+            tc = tnx["Close"].astype(float)
+            # Falling yields = rising bond prices; the sign is inverted on purpose.
+            bond_20d = -float(tc.iloc[-1] / tc.iloc[-21] - 1)
+        stock_20d = (float(idx_close.iloc[-1] / idx_close.iloc[-21] - 1)
+                     if idx_close is not None and len(idx_close) > 21 else None)
+        fg = sen.fear_greed(
+            index_close=idx_close,
+            high_low_ratio=part.get("high_low_ratio"),
+            mcclellan=ad.get("mcclellan_oscillator"),
+            pcr=pcr_val, hy_spread=_hy, hy_history=hy_hist,
+            vix_level=sen_vix.get("level"), vix_ma50=sen_vix.get("ma50"),
+            stock_20d=stock_20d, bond_20d=bond_20d)
+
+        cot_rows = []
+        try:
+            cftc = CftcProvider()
+            for label, code in (scfg.get("cot_contracts") or {}).items():
+                st = sen.cot_state(
+                    cftc.history(str(code), scfg.get("cot_weeks", 160)), label)
+                cot_rows.append(st)
+                if st.get("available"):
+                    log.info("COT %s: %s (%.0fth percentile, week of %s)",
+                             label, st["state"], st["percentile"] * 100,
+                             st["report_date"])
+                else:
+                    log.warning("COT %s unavailable: %s", label, st.get("reason"))
+        except Exception as e:                       # noqa: BLE001
+            log.warning("COT feed failed: %s", e)
+
+        screened["sentiment"] = sen.build(
+            sen_vix, sen_rsi, sen_pcr, fg, cot_rows, ad, part,
+            cycle_state.get("mode") if cycle_state else None)
+        log.info("Sentiment: crowd=%s, fear&greed=%s on %s of 7 factors",
+                 screened["sentiment"]["crowd"],
+                 f"{fg['score']:.0f}" if fg.get("available") else "n/a",
+                 fg.get("inputs_used", 0))
+    except Exception as e:                           # noqa: BLE001
+        log.warning("sentiment panel failed: %s", e)
+        screened["sentiment"] = {"error": str(e)}
     screened["debt_cycle"] = debt_state
 
     # Rogers: "Why not just stop after that analysis and buy or sell the

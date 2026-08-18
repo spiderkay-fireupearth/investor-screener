@@ -2967,6 +2967,242 @@ def test_schloss_five_year_window():
         check(f"{k} is persisted", k in stored, True)
 
 
+def test_sentiment_gauges():
+    """Six psychology gauges, all contrarian, none of them substituted."""
+    from src import sentiment as sen
+    scfg = yaml.safe_load(open("config/universe.yml")).get("sentiment", {})
+
+    # --- VIX ----------------------------------------------------------------
+    calm = pd.Series(np.full(300, 13.0) + np.random.default_rng(1).normal(0, .3, 300))
+    v = sen.vix_state(calm, cfg=scfg)
+    check("a low VIX reads as complacency", v["state"], "complacency")
+    check("and is framed as a place to take profit", "profit" in v["reading"], True)
+    panicky = pd.Series(list(np.full(280, 14.0)) + list(np.linspace(15, 42, 20)))
+    p = sen.vix_state(panicky, cfg=scfg)
+    check("a spike reads as panic", p["state"], "panic")
+    check("and is framed as where buying has paid", "buying" in p["reading"], True)
+    check("with the caution that it is never the first day",
+          "first day" in p["reading"], True)
+    check("the level is placed in its own year",
+          0.9 <= p["percentile_1y"] <= 1.0, True)
+
+    # Term structure: spot above three-month is the panic tell.
+    back = sen.vix_state(panicky, pd.Series(np.full(300, 22.0)), scfg)
+    check("backwardation is detected", back["term_structure"] > 1.0, True)
+    check("and named as what a real panic looks like",
+          "BACKWARDATED" in back["term_reading"], True)
+    contango = sen.vix_state(calm, pd.Series(np.full(300, 18.0)), scfg)
+    check("the normal shape is not called a panic",
+          "not about this week" in contango["term_reading"], True)
+    check("no history means no reading",
+          sen.vix_state(pd.Series(dtype=float))["available"], False)
+
+    # --- RSI ----------------------------------------------------------------
+    r = sen.rsi_state(74.0, [72.0, 71.0, 75.0], scfg)
+    check("RSI above 70 is euphoria", r["state"], "euphoric")
+    check("RSI below 30 is capitulation",
+          sen.rsi_state(24.0, [26.0], scfg)["state"], "capitulating")
+    # The pair is the point: a hot index over a lukewarm median is a NARROW
+    # market, not a euphoric one, and the gauge has to say which.
+    narrow = sen.rsi_state(72.0, [50.0, 51.0, 49.0], scfg)
+    check("an index far above its median stock is flagged",
+          bool(narrow["divergence"]), True)
+    check("and read as narrowness, not mood",
+          "carried by a few large names" in narrow["divergence"], True)
+    check("with no RSI at all there is no reading",
+          sen.rsi_state(None, [])["available"], False)
+
+    # --- put/call ------------------------------------------------------------
+    check("a high put/call is contrarian bullish",
+          sen.put_call_state(1.25, cfg=scfg)["state"], "fearful")
+    check("stated as the worry already being paid for",
+          "already paid for" in sen.put_call_state(1.25, cfg=scfg)["reading"], True)
+    check("a low one is greed", sen.put_call_state(0.5, cfg=scfg)["state"], "greedy")
+    off = sen.put_call_state(None, cfg=scfg)
+    check("with no feed it reports itself off", off["available"], False)
+    check("and names the setting that turns it on",
+          "put_call_url" in off["reason"], True)
+
+    # --- breadth: A/D line and McClellan -------------------------------------
+    rng = np.random.default_rng(7)
+    idx = pd.date_range("2024-01-01", periods=300, freq="B")
+
+    def mkframes(n, drift, vol=0.01):
+        out = {}
+        for i in range(n):
+            steps = rng.normal(drift, vol, len(idx))
+            c = pd.Series(100 * np.exp(np.cumsum(steps)), index=idx)
+            out[f"T{i}"] = pd.DataFrame({"Close": c, "Volume": 1e6})
+        return out
+
+    # What the McClellan Oscillator actually measures is the RATE OF CHANGE of
+    # breadth — a fast average of net advances minus a slow one. A market where
+    # the same wide majority advances every single day reads near ZERO, because
+    # nothing is changing. So the fixtures below are turns, not trends: that is
+    # the only shape the indicator has an opinion about.
+    def turning(n, early, late, split=200):
+        out = {}
+        for i in range(n):
+            steps = np.concatenate([
+                rng.normal(early, 0.002, split),
+                rng.normal(late, 0.002, len(idx) - split)])
+            out[f"T{i}"] = pd.DataFrame(
+                {"Close": pd.Series(100 * np.exp(np.cumsum(steps)), index=idx),
+                 "Volume": 1e6})
+        return out
+
+    broad = mkframes(40, 0.004, vol=0.002)
+    ad = sen.advance_decline(broad)
+    check("the A/D line computes", ad["available"], True)
+    check("on a stated number of names", ad["names"], 40)
+    check("a uniformly advancing market reads near zero, as it should",
+          abs(ad["mcclellan_oscillator"]) < 25, True)
+    check("and the caveat explains that this is a rate of change",
+          "RATE OF CHANGE" in ad["caveat"], True)
+    check("and that it is not the NYSE figure", "not NYSE-wide" in ad["caveat"], True)
+
+    up_turn = sen.advance_decline(turning(40, -0.004, 0.004))
+    check("a market turning up gives a positive oscillator",
+          up_turn["mcclellan_oscillator"] > 0, True)
+    check("and is read as thrust", "positive" in up_turn["oscillator_state"], True)
+    down_turn = sen.advance_decline(turning(40, 0.004, -0.004))
+    check("a market rolling over gives a negative one",
+          down_turn["mcclellan_oscillator"] < 0, True)
+    check("read as distribution under the surface",
+          "distribution" in down_turn["oscillator_state"], True)
+    check("too few names means no gauge, not a guess",
+          sen.advance_decline(mkframes(3, 0.001))["available"], False)
+
+    # --- participation: the deceptive-rally test -----------------------------
+    # An index up 20% over six months while the median constituent is down is
+    # exactly the "few mega-caps" case the user asked to catch.
+    flat = mkframes(30, 0.0)
+    up_index = pd.Series(100 * np.exp(np.linspace(0, 0.20, 300)), index=idx)
+    part = sen.participation(flat, up_index)
+    check("participation computes", part["available"], True)
+    check("the gap between index and median stock is measured",
+          part["breadth_gap"] > 0.05, True)
+    check("and named as deceptive strength",
+          "deceptive strength" in part["reading"], True)
+    together = sen.participation(mkframes(30, 0.0015), up_index)
+    check("a broad rally is not accused of narrowness",
+          "broadly consistent" in together["reading"], True)
+
+    # --- COT ------------------------------------------------------------------
+    def cotrow(d, ncl, ncs, oi=100000.0):
+        return {"report_date_as_yyyy_mm_dd": d, "open_interest_all": oi,
+                "noncomm_positions_long_all": ncl,
+                "noncomm_positions_short_all": ncs,
+                "comm_positions_long_all": ncs, "comm_positions_short_all": ncl}
+
+    rows = [cotrow(f"2025-{(i % 12) + 1:02d}-0{(i % 8) + 1}", 20000 + i * 10,
+                   20000) for i in range(100)]
+    rows.insert(0, cotrow("2026-08-11", 60000, 10000))
+    c = sen.cot_state(rows, "E-mini S&P 500")
+    check("COT positioning computes", c["available"], True)
+    check("normalised against open interest, not stated raw",
+          round(c["spec_net_pct_oi"], 2), 0.50)
+    check("an extreme is placed in its own history", c["percentile"] >= 0.9, True)
+    check("and called crowded", c["state"], "crowded long")
+    check("with the reason a crowd matters",
+          "nobody left to buy" in c["reading"], True)
+    check("the report date travels with it", c["report_date"], "2026-08-11")
+    short = sen.cot_state([cotrow("2026-08-11", 5000, 40000)]
+                          + [cotrow(f"2025-0{i+1}-01", 30000, 10000)
+                             for i in range(9)], "Gold")
+    check("the other extreme reads as crowded short", short["state"], "crowded short")
+    check("no rows means no reading, not a zero",
+          sen.cot_state([], "Copper")["available"], False)
+
+    # --- Fear & Greed ---------------------------------------------------------
+    fg = sen.fear_greed(index_close=up_index, high_low_ratio=0.9,
+                        mcclellan=70.0, pcr=0.55, hy_spread=3.0,
+                        vix_level=12.0, vix_ma50=16.0,
+                        stock_20d=0.05, bond_20d=-0.01)
+    check("the composite computes", fg["available"], True)
+    check("on all seven factors", fg["inputs_used"], 7)
+    check("and reads as greed", fg["score"] >= 55, True)
+    check("every sub-score is published", len(fg["subscores"]), 7)
+    check("and it is labelled a replication, not CNN's number",
+          "replication" in fg["caveat"], True)
+
+    fearful = sen.fear_greed(
+        index_close=pd.Series(100 * np.exp(np.linspace(0, -0.20, 300))),
+        high_low_ratio=0.05, mcclellan=-70.0, pcr=1.4, hy_spread=9.0,
+        vix_level=38.0, vix_ma50=20.0, stock_20d=-0.09, bond_20d=0.02)
+    check("the mirror case reads as fear", fearful["score"] <= 25, True)
+    check("and is labelled extreme", fearful["label"], "extreme fear")
+
+    # THE FAILURE MODE THIS GUARDS. Missing factors must be EXCLUDED, never
+    # scored 50 — otherwise a composite drifts to neutral as its feeds die and
+    # a broken gauge looks like a calm market.
+    partial = sen.fear_greed(high_low_ratio=0.95, mcclellan=75.0)
+    check("a partial composite says how many inputs it had",
+          partial["inputs_used"], 2)
+    check("and lists what was left out", len(partial["missing"]), 5)
+    check("missing factors do not drag it toward neutral",
+          partial["score"] > 80, True)
+    check("with nothing at all it refuses",
+          sen.fear_greed()["available"], False)
+
+    # --- assembly -------------------------------------------------------------
+    s = sen.build(sen.vix_state(calm, cfg=scfg), r,
+                  sen.put_call_state(0.5, cfg=scfg), fg, [c], ad, part,
+                  cycle_mode="defensive")
+    check("the crowd verdict is greedy here", s["crowd"], "greedy")
+    check("and the action is to take profit, not to sell everything",
+          "take profit" in s["action"], True)
+    check("agreement with the Marks gauge is stated",
+          "agrees with the Marks cycle gauge" in s["cycle_note"], True)
+    dis = sen.build(sen.vix_state(calm, cfg=scfg), r,
+                    sen.put_call_state(0.5, cfg=scfg), fg, [c], ad, part,
+                    cycle_mode="opportunistic")
+    check("and so is disagreement", "DISAGREES" in dis["cycle_note"], True)
+    check("with the point that the disagreement is the information",
+          "the disagreement is the information" in dis["cycle_note"], True)
+    check("sentiment is labelled as positioning, not value",
+          "POSITIONING, not value" in s["caveat"], True)
+
+    fearful_all = sen.build(p, sen.rsi_state(22.0, [25.0], scfg),
+                            sen.put_call_state(1.4, cfg=scfg), fearful, [],
+                            ad, part)
+    check("the fearful case flips the verdict", fearful_all["crowd"], "fearful")
+    check("and is not turned into an instruction to buy",
+          "caveat that fear also persists" in fearful_all["action"], True)
+
+    # --- it reaches the page ---------------------------------------------------
+    html = rn._sentiment_panel(s)
+    check("the panel renders", "Market psychology" in html, True)
+    check("with the composite in the header", "Fear &amp; Greed" in html, True)
+    check("the McClellan reading", "McClellan Oscillator" in html, True)
+    check("the COT block", "Institutional positioning" in html, True)
+    check("and the staleness of the COT report",
+          "published on Friday" in html, True)
+    check("an unavailable gauge shows its reason rather than a blank",
+          "not available" in rn._sentiment_panel(
+              sen.build(sen.vix_state(calm, cfg=scfg), r,
+                        sen.put_call_state(None, cfg=scfg), fg, [], ad, part)),
+          True)
+    check("the panel is empty rather than wrong when nothing ran",
+          rn._sentiment_panel({}), "")
+
+    # Config and provider plumbing.
+    uni = yaml.safe_load(open("config/universe.yml"))
+    check("the three-month VIX series is configured",
+          uni["macro_series"]["vix_3m"], "VXVCLS")
+    check("COT contracts are keyed by code, not by name",
+          all(str(v).isalnum() for v in uni["sentiment"]["cot_contracts"].values()),
+          True)
+    check("the put/call source is off by default",
+          uni["sentiment"]["put_call_url"], "")
+    from src.providers.cftc import CftcProvider, COT_URL
+    check("the CFTC endpoint needs no API key", "api_key" not in COT_URL, True)
+    check("and the provider looks up by contract code",
+          "cftc_contract_market_code" in
+          CftcProvider.history.__doc__ + str(CftcProvider.history.__code__.co_consts),
+          True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -2998,6 +3234,7 @@ if __name__ == "__main__":
     test_buffett_indicator()
     test_lynch_five_year_window()
     test_schloss_five_year_window()
+    test_sentiment_gauges()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")
