@@ -97,6 +97,8 @@ DISPLAY_METRICS = (
     # published page for rows nobody is reviewing (see build_payload), because
     # 900 series is a megabyte of JSON on a phone.
     "spark", "return_1m", "macd_histogram", "vol20_over_vol50",
+    "candle_action", "candle_why", "candle_trend", "candle_stop",
+    "candle_bullish", "candle_bearish", "candle_signals", "candle_caveat",
     "atr_pct", "max_drawdown_1y", "max_drawdown_5y",
 )
 
@@ -267,6 +269,16 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "macd": m.get("macd_histogram"),
                 "vol": m.get("vol20_over_vol50"),
                 "rs": m.get("rs_vs_market_index_6m"),
+            },
+            "candles": {
+                "action": m.get("candle_action"),
+                "why": m.get("candle_why"),
+                "trend": m.get("candle_trend"),
+                "stop": m.get("candle_stop"),
+                "bullish": m.get("candle_bullish"),
+                "bearish": m.get("candle_bearish"),
+                "signals": m.get("candle_signals") or [],
+                "caveat": m.get("candle_caveat"),
             },
             "tech_detail": {
                 "summary": f"{tech.get('n_passed', 0)}/{tech.get('n_total', 0)} tests",
@@ -632,6 +644,37 @@ tr.detail>td{background:var(--panel);padding:0;border-bottom:2px solid var(--lin
 .kmet div{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:7px 9px}
 .kmet .kl{font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em}
 .kmet .kv{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.cand{display:flex;flex-direction:column;gap:7px}
+.cand .sig{display:grid;grid-template-columns:82px 1fr auto;gap:9px;align-items:start;
+font-size:11.5px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.cand .sig:last-child{border-bottom:none;padding-bottom:0}
+.cand .sig .d{color:var(--tx3);font-variant-numeric:tabular-nums}
+.cand .sig .nm{font-weight:600}
+.cand .sig .rl{color:var(--tx3);font-size:10.5px;line-height:1.45}
+.cand .sig .rep{font-size:9.5px;color:var(--tx3);border:1px solid var(--line);
+border-radius:4px;padding:0 4px;margin-left:4px;white-space:nowrap}
+.cand .st{font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:4px;
+white-space:nowrap;letter-spacing:.03em;text-transform:uppercase}
+.st.confirmed{background:rgba(63,191,127,.16);color:var(--ok);border:1px solid rgba(63,191,127,.4)}
+.st.unconfirmed{background:rgba(201,162,39,.16);color:var(--warn);border:1px solid rgba(201,162,39,.4)}
+.st.failed{background:var(--panel);color:var(--tx3);border:1px solid var(--line)}
+/* The neutral state. Escaped because the class is literally "n/a" — an
+   indecision candle has no direction, so "confirmed" is the wrong question
+   rather than an unanswered one, and the chip should not look like a pending
+   one. */
+.st.n\/a{background:var(--panel);color:var(--tx3);border:1px dashed var(--line)}
+.verdict{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px}
+.verdict .big{font-size:15px;font-weight:700}
+.verdict .big.buy{color:var(--ok)} .verdict .big.sell{color:var(--bad)}
+.verdict .big.wait,.verdict .big.watch{color:var(--warn)}
+/* The trend as of the LATEST bar — the answer to "what is it doing now",
+   which the action alone does not give: a sell signal in an uptrend and one
+   in a downtrend are different trades. */
+.verdict .tchip{font-size:9.5px;font-weight:700;letter-spacing:.03em;
+text-transform:uppercase;padding:1px 6px;border-radius:4px;
+border:1px solid var(--line);color:var(--tx3);background:var(--panel)}
+.verdict .tchip.t-up{color:var(--ok);border-color:rgba(63,191,127,.4)}
+.verdict .tchip.t-down{color:var(--bad);border-color:rgba(214,88,72,.4)}
 .pchart{position:relative}
 .pchart svg{width:100%;height:auto;display:block}
 .pchart .hit{cursor:crosshair}
@@ -1145,6 +1188,51 @@ function testBars(tests){
   }).join('')+'</div>';
 }
 
+
+// "after a ${trend}trend" reads correctly for "down" and wrongly for
+// everything else — "a uptrend", "a flattrend". The phrasing is written out.
+function trendPhrase(t){
+  if(t==='down') return 'after a downtrend';
+  if(t==='up') return 'after an uptrend';
+  if(t==='flat') return 'after a flat stretch';
+  return 'with no clear prior trend';
+}
+
+function candleCard(r){
+  const c=r.candles||{};
+  if(!c.action && !(c.signals||[]).length)
+    return `<div class="chart wide"><h5>Candlestick patterns</h5>
+      <div class="cap">${esc(c.why||'not computed for this row')}</div></div>`;
+  const cls=(c.action||'').indexOf('buy')>=0?'buy'
+    :((c.action||'').indexOf('sell')>=0?'sell':'wait');
+  const sigs=(c.signals||[]).map(s=>`<div class="sig">
+      <span class="d">${esc(s.date||'')}</span>
+      <span><span class="nm">${esc(s.name)}</span>${
+        s.repeats>1?`<span class="rep">&times;${s.repeats} sessions</span>`:''}
+        <span class="muted-ink">&middot; ${esc(s.direction)},
+        ${trendPhrase(s.trend_before)}</span>
+        <div class="rl">${esc(s.rule||'')}. ${esc(s.state_note||'')}${
+          s.stop!==null&&s.stop!==undefined
+            ? ' &middot; stop-loss at '+Number(s.stop).toFixed(2) : ''}${
+          s.gap_sensitive
+            ? ' &middot; <b>gap-based</b>: prices here are split and dividend '
+              +'adjusted, which moves gaps, so treat this one with extra care' : ''}</div>
+      </span>
+      <span class="st ${esc(s.state)}">${esc(s.state)}</span></div>`).join('');
+  return `<div class="chart wide"><h5>Candlestick patterns
+      <span>${c.bullish||0} bullish &middot; ${c.bearish||0} bearish confirmed</span></h5>
+    <div class="verdict"><span class="big ${cls}">${esc((c.action||'').toUpperCase())}</span>
+      ${c.trend?`<span class="tchip t-${esc(c.trend)}">trend: ${esc(c.trend)}</span>`:''}
+      <span class="muted-ink">${esc(c.why||'')}</span></div>
+    ${c.stop!==null&&c.stop!==undefined
+      ? `<div class="cap" style="margin:0 0 8px">Invalidation level from the most
+         recent pattern: <b>${Number(c.stop).toFixed(2)}</b> &mdash; the book puts
+         the stop at the low of a bullish pattern and the high of a bearish one,
+         so a close through it is the signal saying it was wrong.</div>` : ''}
+    <div class="cand">${sigs||'<div class="cap">no patterns in the recent window</div>'}</div>
+    <div class="cap">${esc(c.caveat||'')}</div></div>`;
+}
+
 function technicalPanel(r){
   const t=r.tech_raw||{}, d=r.tech_detail||{};
   let cards='';
@@ -1185,6 +1273,7 @@ function technicalPanel(r){
     trend.push('MACD histogram '+(t.macd>=0?'positive':'negative'));
   if(t.vol!==null&&t.vol!==undefined)
     trend.push('volume at '+t.vol.toFixed(2)+'× its own baseline');
+  cards+=candleCard(r);
   cards+=`<div class="chart wide"><h5>Tests against their thresholds
     <span>${esc(d.summary||'')}</span></h5>${testBars(d.tests||[])}
     ${trend.length?`<div class="cap">${esc(trend.join(' · '))}.</div>`:''}</div>`;

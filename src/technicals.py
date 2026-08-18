@@ -232,6 +232,37 @@ def compute(df: pd.DataFrame,
     out["pct_above_5y_low"] = (price - low5) / low5 if low5 else None
     out["years_of_price_history"] = round(n / 252, 1)
     out["spark"] = sparkline(df)
+    # Candlestick patterns. Kept COMPACT on purpose: the full scan can find
+    # dozens of signals over sixty sessions, and the row only needs the live
+    # ones plus the verdict. The rest stays in the scan and is recomputed on
+    # demand rather than persisted for 900 companies.
+    try:
+        from . import candles as _cd
+        _scan = _cd.detect(df)
+        _sum = _cd.summarise(_scan)
+        if _sum.get("available"):
+            out["candle_action"] = _sum["action"]
+            out["candle_why"] = _sum["why"]
+            out["candle_trend"] = _sum["trend"]
+            out["candle_stop"] = _sum.get("stop")
+            out["candle_bullish"] = _sum["confirmed_bullish"]
+            out["candle_bearish"] = _sum["confirmed_bearish"]
+            out["candle_signals"] = [
+                {k: v for k, v in s.items()
+                 if k in ("name", "direction", "date", "state", "stop",
+                          "bars_ago", "rule", "why", "state_note",
+                          "trend_before", "gap_sensitive", "entry",
+                          "repeats")}
+                for s in _sum["live"]]
+            out["candle_caveat"] = _sum["caveat"]
+        else:
+            out["candle_action"] = None
+            out["candle_why"] = _sum.get("reason") or _scan.get("reason")
+            out["candle_signals"] = []
+    except Exception as e:                        # noqa: BLE001
+        out["candle_action"] = None
+        out["candle_why"] = f"pattern scan failed: {e}"
+        out["candle_signals"] = []
     # The price five years ago, for Buffett's one-dollar test: what the market
     # capitalisation was then is half of "did a dollar retained become a dollar
     # of value?" and nothing else on the page carries it.

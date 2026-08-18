@@ -4334,6 +4334,247 @@ def test_nasdaq_coverage():
           "US universe is now" in src, True)
 
 
+def test_candlestick_patterns():
+    """The book's patterns, with the three things implementations usually drop."""
+    from src import candles as cd
+
+    def frame(rows):
+        idx = pd.date_range("2025-01-01", periods=len(rows), freq="B")
+        return pd.DataFrame(rows, columns=["Open", "High", "Low", "Close"],
+                            index=idx)
+
+    def run_down(n=20, start=100.0, rate=0.985):
+        rows, p = [], start
+        for _ in range(n):
+            p *= rate
+            rows.append([p * 1.005, p * 1.01, p * 0.99, p])
+        return rows, p
+
+    def run_up(n=20, start=100.0, rate=1.015):
+        rows, p = [], start
+        for _ in range(n):
+            p *= rate
+            rows.append([p * 0.995, p * 1.01, p * 0.99, p])
+        return rows, p
+
+    def find(rows, name):
+        sc = cd.detect(frame(rows))
+        if not sc.get("available"):
+            return None
+        return next((s for s in sc["signals"] if s["name"] == name), None)
+
+    # --- single-candle reversals -------------------------------------------
+    rows, p = run_down()
+    rows.append([p * 0.995, p * 1.0, p * 0.955, p * 1.0])       # hammer
+    rows.append([p * 1.0, p * 1.03, p * 0.999, p * 1.025])      # confirms
+    h = find(rows, "Hammer")
+    check("a hammer after a downtrend is found", bool(h), True)
+    check("with the trend context recorded", h["trend_before"], "down")
+    check("the stop is the hammer's low, as the book specifies",
+          round(h["stop"], 4), round(p * 0.955, 4))
+    check("and the next bullish session confirms it", h["state"], "confirmed")
+
+    # THE TEST THAT MATTERS. The same shape in an UPTREND is not a hammer
+    # signal — it is a hanging man, which means the opposite. An implementation
+    # that skips trend context reports a buy here.
+    rows, p = run_up()
+    rows.append([p * 0.995, p * 1.0, p * 0.955, p * 1.0])       # same shape
+    rows.append([p * 1.0, p * 1.005, p * 0.96, p * 0.97])       # bearish next
+    check("the same candle in an uptrend is NOT a hammer",
+          find(rows, "Hammer"), None)
+    hm = find(rows, "Hanging Man")
+    check("it is a hanging man", bool(hm), True)
+    check("which is bearish", hm["direction"], "bearish")
+    check("with the stop at its HIGH, not its low",
+          round(hm["stop"], 4), round(p * 1.0, 4))
+
+    rows, p = run_up()
+    rows.append([p * 1.0, p * 1.05, p * 0.998, p * 1.005])      # shooting star
+    rows.append([p * 1.0, p * 1.005, p * 0.96, p * 0.97])
+    ss = find(rows, "Shooting Star")
+    check("a shooting star after an uptrend is found", bool(ss), True)
+    check("and confirmed by the next bearish session", ss["state"], "confirmed")
+
+    rows, p = run_down()
+    rows.append([p * 0.995, p * 1.05, p * 0.99, p * 1.0])       # inverted hammer
+    rows.append([p * 1.0, p * 1.04, p * 0.999, p * 1.03])
+    check("an inverted hammer after a downtrend is found",
+          bool(find(rows, "Inverted Hammer")), True)
+
+    # --- two-candle reversals -----------------------------------------------
+    rows, p = run_down()
+    rows.append([p * 1.01, p * 1.015, p * 0.985, p * 0.99])      # bearish
+    rows.append([p * 0.985, p * 1.03, p * 0.98, p * 1.02])       # engulfs it
+    rows.append([p * 1.02, p * 1.05, p * 1.015, p * 1.04])       # confirms
+    be = find(rows, "Bullish Engulfing")
+    check("bullish engulfing is found", bool(be), True)
+    check("it takes two candles", be["bars"], 2)
+    check("and is confirmed", be["state"], "confirmed")
+
+    rows, p = run_up()
+    rows.append([p * 0.99, p * 1.015, p * 0.985, p * 1.01])      # bullish
+    rows.append([p * 1.02, p * 1.025, p * 0.97, p * 0.98])       # engulfs it
+    rows.append([p * 0.98, p * 0.985, p * 0.95, p * 0.96])       # confirms
+    check("bearish engulfing is found",
+          bool(find(rows, "Bearish Engulfing")), True)
+
+    # Dark cloud cover: the book requires a gap UP and a close more than 50%
+    # down the previous body.
+    rows, p = run_up()
+    rows.append([p * 0.98, p * 1.005, p * 0.975, p * 1.00])      # bullish body
+    top = p * 1.005
+    rows.append([top * 1.01, top * 1.015, p * 0.985, p * 0.988])  # gap up, closes low
+    rows.append([p * 0.988, p * 0.99, p * 0.95, p * 0.96])
+    dc = find(rows, "Dark Cloud Cover")
+    check("dark cloud cover is found", bool(dc), True)
+    check("and is marked gap-sensitive", dc["gap_sensitive"], False)
+
+    # --- three-candle reversals ---------------------------------------------
+    rows, p = run_down()
+    rows.append([p * 1.005, p * 1.01, p * 0.995, p * 0.998])     # short bearish
+    rows.append([p * 0.99, p * 1.03, p * 0.985, p * 1.02])       # engulfing
+    rows.append([p * 1.02, p * 1.06, p * 1.015, p * 1.05])       # third, higher
+    tou = find(rows, "Three Outside Up")
+    check("three outside up is found", bool(tou), True)
+    check("it takes three candles", tou["bars"], 3)
+
+    rows, p = run_down()
+    rows.append([p * 1.03, p * 1.035, p * 0.97, p * 0.975])      # long bearish
+    rows.append([p * 0.99, p * 1.01, p * 0.985, p * 1.005])      # harami inside
+    rows.append([p * 1.005, p * 1.06, p * 1.0, p * 1.05])        # closes above open
+    check("three inside up is found", bool(find(rows, "Three Inside Up")), True)
+
+    # --- continuation, and the pattern that looks bullish and is not ---------
+    rows, p = run_down()
+    rows.append([p * 1.03, p * 1.035, p * 0.97, p * 0.975])      # long bearish
+    low = p * 0.97
+    rows.append([low * 0.99, p * 0.978, low * 0.985, p * 0.975])  # gaps down, closes at prior close
+    on = find(rows, "On-Neck")
+    check("on-neck is found", bool(on), True)
+    check("and is BEARISH despite its green second candle",
+          on["direction"], "bearish")
+    check("named as a continuation, not a reversal",
+          "continuation pattern, not a reversal" in on["why"], True)
+    check("and flagged as gap-based", on["gap_sensitive"], True)
+
+    rows, p = run_up()
+    rows.append([p * 0.99, p * 1.0, p * 0.985, p * 0.998])
+    hi = p * 1.0
+    rows.append([hi * 1.02, hi * 1.05, hi * 1.01, hi * 1.04])    # gaps up
+    rw = find(rows, "Rising Window")
+    check("a rising window is found", bool(rw), True)
+    check("with the gap as its invalidation level",
+          round(rw["stop"], 4), round(hi, 4))
+
+    # --- indecision ----------------------------------------------------------
+    rows, p = run_up()
+    rows.append([p * 1.0, p * 1.06, p * 0.94, p * 1.002])        # high wave
+    hw = find(rows, "High Wave")
+    check("a high wave is found", bool(hw), True)
+    check("it is neutral, not a direction", hw["direction"], "neutral")
+    check("and has nothing to confirm", hw["state"], "n/a")
+
+    # --- confirmation: the rule almost every implementation drops ------------
+    rows, p = run_down()
+    rows.append([p * 0.995, p * 1.0, p * 0.955, p * 1.0])        # hammer, LAST bar
+    last = find(rows, "Hammer")
+    check("a pattern on the most recent bar cannot be confirmed",
+          last["state"], "unconfirmed")
+    check("because the confirming session has not traded yet",
+          "has not traded yet" in last["state_note"], True)
+    check("so no entry price is offered", last["entry"], None)
+
+    rows.append([p * 1.0, p * 1.005, p * 0.95, p * 0.96])        # next day FALLS
+    failed = find(rows, "Hammer")
+    check("a pattern the next session contradicts is marked failed",
+          failed["state"], "failed")
+    check("and says the entry condition was never met",
+          "never met" in failed["state_note"], True)
+
+    # --- the verdict ---------------------------------------------------------
+    rows, p = run_down()
+    rows.append([p * 0.995, p * 1.0, p * 0.955, p * 1.0])
+    rows.append([p * 1.0, p * 1.03, p * 0.999, p * 1.025])
+    sc = cd.detect(frame(rows))
+    v = cd.summarise(sc)
+    check("the verdict is a buy signal", v["action"], "buy signal")
+    check("naming the pattern and the date", "Hammer" in v["why"], True)
+    check("it carries an invalidation level", v["stop"] is not None, True)
+    check("and states that this is timing, not valuation",
+          "never as the reason to own it" in v["caveat"], True)
+
+    # Only CONFIRMED signals vote. An unconfirmed one is a watch, not a buy.
+    rows, p = run_down()
+    rows.append([p * 0.995, p * 1.0, p * 0.955, p * 1.0])
+    v2 = cd.summarise(cd.detect(frame(rows)))
+    check("an unconfirmed pattern reads as watch, not buy", v2["action"], "watch")
+
+    # The trend reported is TODAY'S, not the one that preceded the last pattern
+    # found anywhere in the sixty-bar window. A hammer forty sessions ago was
+    # preceded by a downtrend; saying "down" now would describe a market that
+    # has since moved on.
+    rows, p = run_down()                       # falls, then recovers hard
+    for _ in range(30):
+        p *= 1.02
+        rows.append([p * 0.995, p * 1.01, p * 0.99, p])
+    sc3 = cd.detect(frame(rows))
+    check("the trend is measured at the latest bar", sc3["trend_now"], "up")
+    check("even though the last pattern found was in the fall",
+          cd.summarise(sc3)["trend"], "up")
+
+    # A choppy stock printing the same indecision candle day after day is ONE
+    # piece of evidence repeated, not six. Six identical rows would also push a
+    # real directional signal off the list.
+    rows, p = run_up(30)
+    for _ in range(6):                         # six high waves in a row
+        rows.append([p * 1.0, p * 1.06, p * 0.94, p * 1.002])
+    live = cd.summarise(cd.detect(frame(rows)))["live"]
+    names = [s["name"] for s in live]
+    check("repeated identical patterns collapse to one row",
+          names.count("High Wave"), 1)
+    hw = next(s for s in live if s["name"] == "High Wave")
+    check("but the repeat count is kept, because it is real information",
+          hw["repeats"] >= 5, True)
+    check("and the page shows the repeat count", 'class="rep"' in rn.TEMPLATE, True)
+    check("repeats reach the row payload",
+          "repeats" in str(ta.compute(frame(rows)).get("candle_signals")), True)
+    check("the neutral chip has its own style, escaped for the slash",
+          ".st.n\\/a{" in rn.TEMPLATE, True)
+    # The user asked for trend AND a buy/sell call. The action alone is not the
+    # trend: a sell signal in an uptrend and one in a downtrend are different
+    # trades, so the card has to show both.
+    check("the card shows the trend beside the verdict",
+          'class="tchip t-' in rn.TEMPLATE, True)
+    check("and the trend phrasing reads as English, not 'a uptrend'",
+          "function trendPhrase(" in rn.TEMPLATE and "after an uptrend" in rn.TEMPLATE,
+          True)
+
+    # Too little history refuses rather than guessing.
+    short = cd.detect(frame([[10, 11, 9, 10]] * 8))
+    check("a short series produces no scan", short["available"], False)
+    check("and says how many bars it needed",
+          "needs at least" in short["reason"], True)
+    check("summarise passes the refusal through",
+          cd.summarise(short)["available"], False)
+
+    # --- it reaches the page --------------------------------------------------
+    check("the scan runs inside technicals",
+          "candle_action" in ta.compute(
+              frame(run_down(60)[0] + [[70, 71, 66, 70.5], [70.5, 73, 70, 72.5]])
+          ), True)
+    for key in ("candle_action", "candle_signals", "candle_stop"):
+        check(f"{key} is persisted", key in rn.DISPLAY_METRICS, True)
+    html = rn.TEMPLATE
+    check("the drawer has a candlestick card", "function candleCard(" in html, True)
+    check("wired into the technical panel", "cards+=candleCard(r)" in html, True)
+    check("the verdict is shown large", 'class="big ' in html, True)
+    check("each signal shows its confirmation state", 'class="st ' in html, True)
+    check("the stop is explained as an invalidation level",
+          "Invalidation level" in html, True)
+    check("and gap patterns warn about adjusted prices",
+          "split and dividend" in html, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -4370,6 +4611,7 @@ if __name__ == "__main__":
     test_greenblatt_magic_formula()
     test_value_growth_style()
     test_technical_charts()
+    test_candlestick_patterns()
     test_lynch_never_asks_for_six_years()
     test_buffett_and_munger_lists()
     test_munger_full_framework()
