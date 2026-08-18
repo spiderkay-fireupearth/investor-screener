@@ -3555,6 +3555,98 @@ def test_value_growth_style():
     check("and a merged row still carries the badge", bool(rows[0]["sty"]), True)
 
 
+def test_technical_charts():
+    """The technical panel is drawn, and the price series is paid for on purpose."""
+    idx = pd.date_range("2023-01-01", periods=620, freq="B")
+    rng = np.random.default_rng(5)
+    close = pd.Series(30 * np.exp(np.cumsum(rng.normal(0.0008, 0.01, len(idx)))),
+                      index=idx)
+    df = pd.DataFrame({"Open": close, "High": close * 1.01, "Low": close * .99,
+                       "Close": close, "Volume": np.full(len(idx), 1e6)})
+
+    sp = ta.sparkline(df)
+    check("a price series is produced", sp is not None, True)
+    check("downsampled, not 500 daily bars", sp["points"] <= ta.SPARK_POINTS, True)
+    check("and enough points left to draw a shape", sp["points"] >= 40, True)
+    check("over about two years", 1.8 <= sp["years"] <= 2.1, True)
+    check("normalised to 100 at the start", sp["px"][0], 100.0)
+    check("and rounded to one decimal",
+          all(round(v, 1) == v for v in sp["px"]), True)
+    check("the real prices ride alongside for the axis labels",
+          sp["lo"] < sp["hi"], True)
+    check("the 200-day line has the same number of points",
+          len(sp["ma"]), len(sp["px"]))
+    # The moving average must be sampled from the DAILY series, never
+    # recomputed from the sampled points — a 200-day mean of 80 weekly samples
+    # is a different and wrong line.
+    daily_ma = float(close.rolling(200).mean().iloc[-1])
+    check("and is the true 200-day average, not a mean of the samples",
+          abs(sp["ma"][-1] - daily_ma / sp["first"] * 100.0) < 0.2, True)
+    check("a short history yields no chart rather than a misleading one",
+          ta.sparkline(df.iloc[-30:]), None)
+    check("and neither does an empty frame",
+          ta.sparkline(pd.DataFrame()), None)
+
+    # --- payload discipline --------------------------------------------------
+    check("the series is in the display contract, so merged rows chart too",
+          "spark" in rn.DISPLAY_METRICS, True)
+    check("and there is a stated cap on how many the page may carry",
+          rn.MAX_SPARKLINES > 0, True)
+
+    def mkres(t, surfaced):
+        return {"ticker": t, "name": t, "market": "US", "surfaced": surfaced,
+                "frameworks": {}, "technical": {"n_passed": 4, "n_total": 6,
+                                                "tests": []},
+                "metrics": {"spark": sp, "rsi_14": 55.0}}
+
+    results = {f"S{i}": mkres(f"S{i}", True) for i in range(3)}
+    results.update({f"N{i}": mkres(f"N{i}", False) for i in range(4)})
+    rows = {r["ticker"]: r for r in rn.build_payload(results, {}, {})}
+    check("surfaced rows carry the price series",
+          all(rows[f"S{i}"]["spark"] for i in range(3)), True)
+    check("rows nobody is reviewing do not",
+          any(rows[f"N{i}"]["spark"] for i in range(4)), False)
+    check("but they still carry the numbers every other chart needs",
+          rows["N0"]["tech_raw"]["rsi"], 55.0)
+
+    # A row with a deep dive gets a series whether or not it surfaced.
+    rows2 = {r["ticker"]: r for r in
+             rn.build_payload(results, {}, {}, report_tickers={"N1"})}
+    check("a name with a deep dive gets one too", bool(rows2["N1"]["spark"]), True)
+
+    # The cap bounds the worst case rather than trusting the universe to be small.
+    many = {f"M{i}": mkres(f"M{i}", True) for i in range(rn.MAX_SPARKLINES + 25)}
+    capped = rn.build_payload(many, {}, {})
+    check("the cap is enforced",
+          sum(1 for r in capped if r["spark"]), rn.MAX_SPARKLINES)
+    check("and the choice is deterministic, not dict order",
+          [r["ticker"] for r in rn.build_payload(many, {}, {}) if r["spark"]],
+          [r["ticker"] for r in capped if r["spark"]])
+
+    # --- raw values, not formatted strings ------------------------------------
+    # A chart cannot plot "12.5%". This is the mistake that would have made the
+    # whole panel silently blank.
+    raw = rows["S0"]["tech_raw"]
+    check("the chart inputs are numbers", isinstance(raw["rsi"], float), True)
+    check("not the formatted strings the metric grid uses",
+          isinstance(rows["S0"]["key_metrics"]["RSI(14)"], str), True)
+
+    # --- it reaches the page ---------------------------------------------------
+    html = rn.TEMPLATE
+    for fn in ("svgLine", "svgRsi", "svgRange", "svgReturns", "testBars",
+               "technicalPanel"):
+        check(f"{fn} is defined in the page", f"function {fn}(" in html, True)
+    check("the drawer calls the chart panel", "technicalPanel(r)" in html, True)
+    check("the numeric list survives underneath, collapsed",
+          "the same tests as numbers" in html, True)
+    check("a row without a series explains why rather than showing a gap",
+          "No price series" in html, True)
+    check("the threshold marker is the midpoint of every bar",
+          "markAt=0.5" in html, True)
+    check("and the price chart has a fixed height, not a third of the screen",
+          ".chart.wide>svg{height:" in html, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -3589,6 +3681,7 @@ if __name__ == "__main__":
     test_sentiment_gauges()
     test_greenblatt_magic_formula()
     test_value_growth_style()
+    test_technical_charts()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

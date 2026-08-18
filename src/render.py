@@ -9,11 +9,14 @@ problem, not an investment insight, and this is how you tell the difference.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from . import synopsis as syn
+
+log = logging.getLogger(__name__)
 
 FRAMEWORKS = [
     ("buffett", "Buffett"), ("munger", "Munger"), ("schloss", "Schloss"),
@@ -85,7 +88,18 @@ DISPLAY_METRICS = (
     "style_sector_tilt", "style_value_side", "style_growth_side",
     "book_to_price", "revenue_cagr_5y", "revenue_growth_1y",
     "eps_cagr_lynch", "eps_cagr_lynch_years", "peg_ratio_lynch",
+    # The price series behind the technical chart. Persisted like any other
+    # display field so a merged row draws a chart too — but PRUNED from the
+    # published page for rows nobody is reviewing (see build_payload), because
+    # 900 series is a megabyte of JSON on a phone.
+    "spark", "return_1m", "macd_histogram", "vol20_over_vol50",
+    "atr_pct", "max_drawdown_1y", "max_drawdown_5y",
 )
+
+# How many price series the published page may carry. Surfaced rows and rows
+# with a deep dive get one first; the rest fall back to the scalar charts,
+# which need no series at all. The cap is a payload budget, not an opinion.
+MAX_SPARKLINES = 250
 
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
                  "HK": "HKEX", "TH": "SET", "ID": "IDX",
@@ -146,6 +160,16 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                   report_tickers: Optional[set] = None) -> List[Dict[str, Any]]:
     report_tickers = report_tickers or set()
     rows = []
+    # Which rows may carry a price series. Surfaced names and names with a deep
+    # dive are the ones anyone actually opens; everything else renders from
+    # scalars alone. Sorted so the choice is deterministic rather than
+    # dependent on dict ordering — a page whose payload changes shape between
+    # identical runs is a page nobody can diff.
+    _spark_candidates = sorted(
+        (t for t, r in results.items()
+         if r.get("surfaced") or t in report_tickers))
+    spark_allowed = set(_spark_candidates[:MAX_SPARKLINES])
+    spark_omitted = 0
     for ticker, r in results.items():
         # Prefer metrics persisted in the result. Rows merged in from the other
         # region's last run have no entry in the live metrics dict.
@@ -199,6 +223,9 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             }
 
         tech = r.get("technical", {})
+        spark = m.get("spark") if ticker in spark_allowed else None
+        if m.get("spark") and ticker not in spark_allowed:
+            spark_omitted += 1
         # A sentence-level read of the row, assembled from the same numbers the
         # panels below it show. Built here rather than at screen time so a row
         # merged in from another region's run gets one too — and so the wording
@@ -222,6 +249,24 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             "fw_detail": fw_detail,
             "n_passed": r.get("n_frameworks_passed", 0),
             "tech_pass": bool(r.get("technical_passed")),
+            "spark": spark,
+            # The numbers the charts are drawn from, kept as raw values rather
+            # than formatted strings: a chart cannot plot "12.5%".
+            "tech_raw": {
+                "rsi": m.get("rsi_14"),
+                "rsi_label": m.get("rsi_label"),
+                "below_52w_high": m.get("pct_below_52w_high"),
+                "above_5y_low": m.get("pct_above_5y_low"),
+                "in_10y_range": m.get("price_in_10y_range"),
+                "r1": m.get("return_1m"), "r3": m.get("return_3m"),
+                "r6": m.get("return_6m"), "r12": m.get("return_12m"),
+                "worst_month": m.get("worst_month_in_6m"),
+                "above_sma200": m.get("price_above_sma200"),
+                "golden_cross": m.get("sma50_above_sma200"),
+                "macd": m.get("macd_histogram"),
+                "vol": m.get("vol20_over_vol50"),
+                "rs": m.get("rs_vs_market_index_6m"),
+            },
             "tech_detail": {
                 "summary": f"{tech.get('n_passed', 0)}/{tech.get('n_total', 0)} tests",
                 "tests": _test_rows(tech),
@@ -350,6 +395,10 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             },
         })
     rows.sort(key=lambda x: (-x["n_passed"], -x["mcap_sort"]))
+    if spark_omitted:
+        log.info("Price series included for %d rows, omitted for %d — the "
+                 "omitted rows render the scalar charts only",
+                 len(spark_allowed), spark_omitted)
     return rows
 
 
@@ -513,6 +562,34 @@ tr.detail>td{background:var(--panel);padding:0;border-bottom:2px solid var(--lin
 .kmet div{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:7px 9px}
 .kmet .kl{font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em}
 .kmet .kv{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.chartgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+gap:12px;margin-bottom:14px;align-items:start}
+.chart{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:11px 12px}
+.chart h5{margin:0 0 8px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+color:var(--tx3);font-weight:600;display:flex;justify-content:space-between;gap:8px}
+.chart h5 span{text-transform:none;letter-spacing:0;color:var(--tx2);font-weight:500;
+font-variant-numeric:tabular-nums}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.chart .cap{font-size:10.5px;color:var(--tx3);margin-top:7px;line-height:1.5}
+.chart.wide{grid-column:1 / -1}
+/* The price strip uses preserveAspectRatio="none" on a 260x68 viewBox. Without
+   an explicit height it inflates to a third of the viewport width, and a
+   two-year chart does not need 340 pixels of vertical space to be read. */
+.chart.wide>svg{height:150px}
+.tstrip{display:flex;flex-direction:column;gap:5px}
+.tbar{display:grid;grid-template-columns:150px 1fr 96px;gap:10px;align-items:center;font-size:11.5px}
+.tbar .tl{color:var(--tx2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tbar .tt{text-align:right;font-variant-numeric:tabular-nums;color:var(--tx3)}
+.tbar .track{position:relative;height:9px;background:var(--panel);border:1px solid var(--line);
+border-radius:5px;overflow:hidden}
+.tbar .fill{position:absolute;top:0;bottom:0;border-radius:4px}
+.tbar .fill.ok{background:rgba(63,191,127,.55)}
+.tbar .fill.no{background:rgba(226,88,94,.45)}
+.tbar .fill.na{background:var(--line)}
+.tbar .mark{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--tx3)}
+.chart .lgd{font-size:10px;color:var(--tx3);display:flex;gap:10px;margin-top:6px;flex-wrap:wrap}
+.chart .lgd i{font-style:normal;display:inline-flex;align-items:center;gap:4px}
+.chart .lgd b{display:inline-block;width:14px;height:2px;border-radius:2px}
 .syn{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--acc);
 border-radius:0 9px 9px 0;padding:12px 15px;margin-bottom:13px;font-size:13px;line-height:1.62}
 .syn .what{color:var(--tx2);margin-bottom:8px}
@@ -685,6 +762,183 @@ function stats(rows){
   document.getElementById('statbar').innerHTML=h;
 }
 
+// ---- technical timing, drawn rather than listed -------------------------
+// Everything below renders from values the row already carries. The price
+// series is present only for rows worth opening (see MAX_SPARKLINES in
+// render.py); every other chart here needs nothing but scalars, so a row
+// without a series still gets a readable panel rather than an empty box.
+function svgLine(spark){
+  if(!spark || !spark.px || spark.px.length < 8) return '';
+  const px=spark.px, ma=spark.ma||[];
+  const vals=px.concat(ma.filter(v=>v!==null&&v!==undefined));
+  const lo=Math.min.apply(null,vals), hi=Math.max.apply(null,vals);
+  const W=260,H=68,pad=2, rng=(hi-lo)||1;
+  const X=i=>pad+i*(W-2*pad)/(px.length-1);
+  const Y=v=>pad+(hi-v)*(H-2*pad)/rng;
+  const path=px.map((v,i)=>(i?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)).join(' ');
+  // The 200-day average is drawn as separate segments: a gap in the data must
+  // read as a gap, not as a straight line joining across it.
+  let mpath='', pen=false;
+  ma.forEach((v,i)=>{ if(v===null||v===undefined){pen=false;return;}
+    mpath+=(pen?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)+' '; pen=true; });
+  const up=px[px.length-1]>=px[0];
+  const col=up?'var(--ok)':'var(--bad)';
+  const area=path+` L ${X(px.length-1).toFixed(1)} ${H-pad} L ${X(0).toFixed(1)} ${H-pad} Z`;
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+    aria-label="price over ${spark.years} years">
+    <path d="${area}" fill="${col}" opacity=".10"/>
+    ${mpath?`<path d="${mpath.trim()}" fill="none" stroke="var(--tx3)" stroke-width="1"
+      stroke-dasharray="3 2" opacity=".85"/>`:''}
+    <path d="${path}" fill="none" stroke="${col}" stroke-width="1.6"
+      stroke-linejoin="round"/>
+    <circle cx="${X(px.length-1).toFixed(1)}" cy="${Y(px[px.length-1]).toFixed(1)}"
+      r="2.2" fill="${col}"/></svg>`;
+}
+
+function svgRsi(rsi){
+  if(rsi===null||rsi===undefined) return '';
+  const W=260,H=40,x=v=>4+v*(W-8)/100;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="RSI ${rsi.toFixed(0)}">
+    <rect x="${x(0)}" y="10" width="${x(30)-x(0)}" height="12" rx="3"
+      fill="var(--ok)" opacity=".22"/>
+    <rect x="${x(30)}" y="10" width="${x(70)-x(30)}" height="12" rx="3"
+      fill="var(--line)"/>
+    <rect x="${x(70)}" y="10" width="${x(100)-x(70)}" height="12" rx="3"
+      fill="var(--bad)" opacity=".22"/>
+    <line x1="${x(rsi)}" y1="5" x2="${x(rsi)}" y2="27" stroke="var(--tx)"
+      stroke-width="2"/>
+    <text x="${x(0)}" y="36" font-size="8" fill="var(--tx3)">0 oversold</text>
+    <text x="${x(100)}" y="36" font-size="8" fill="var(--tx3)"
+      text-anchor="end">overbought 100</text>
+    <text x="${x(rsi)}" y="7" font-size="9" fill="var(--tx)" text-anchor="middle"
+      >${rsi.toFixed(0)}</text></svg>`;
+}
+
+function svgRange(t){
+  // Where the price sits inside two windows. Drawn as one bar each rather than
+  // a number, because "38% below the high" and "62% above the low" are the same
+  // fact stated twice and a bar makes that obvious.
+  const rows=[];
+  if(t.below_52w_high!==null&&t.below_52w_high!==undefined)
+    rows.push(['52-week', 1-Math.max(0,Math.min(1,t.below_52w_high)),
+               (t.below_52w_high*100).toFixed(0)+'% below high']);
+  if(t.in_10y_range!==null&&t.in_10y_range!==undefined)
+    rows.push(['10-year', Math.max(0,Math.min(1,t.in_10y_range)),
+               (t.in_10y_range*100).toFixed(0)+'% up its decade range']);
+  if(!rows.length) return '';
+  const W=260,H=rows.length*26+6;
+  let out=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="price position">`;
+  rows.forEach((r,i)=>{
+    const y=i*26+4;
+    out+=`<text x="0" y="${y+8}" font-size="9" fill="var(--tx3)">${esc(r[0])}</text>
+      <rect x="52" y="${y+1}" width="${W-52}" height="9" rx="4" fill="var(--panel)"
+        stroke="var(--line)"/>
+      <rect x="52" y="${y+1}" width="${((W-52)*r[1]).toFixed(1)}" height="9" rx="4"
+        fill="var(--acc)" opacity=".55"/>
+      <text x="52" y="${y+21}" font-size="9" fill="var(--tx3)">${esc(r[2])}</text>`;
+  });
+  return out+'</svg>';
+}
+
+function svgReturns(t){
+  const bars=[['1m',t.r1],['3m',t.r3],['6m',t.r6],['12m',t.r12]]
+    .filter(b=>b[1]!==null&&b[1]!==undefined);
+  if(!bars.length) return '';
+  const W=260,H=76,mid=H/2-6;
+  const max=Math.max(0.05,...bars.map(b=>Math.abs(b[1])));
+  const bw=(W-10)/bars.length;
+  let out=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="returns">
+    <line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="var(--line)"/>`;
+  bars.forEach((b,i)=>{
+    const h=Math.abs(b[1])/max*(mid-8), x=5+i*bw+bw*0.18, w=bw*0.64;
+    const up=b[1]>=0;
+    out+=`<rect x="${x.toFixed(1)}" y="${(up?mid-h:mid).toFixed(1)}"
+        width="${w.toFixed(1)}" height="${Math.max(1,h).toFixed(1)}" rx="2"
+        fill="${up?'var(--ok)':'var(--bad)'}" opacity=".75"/>
+      <text x="${(x+w/2).toFixed(1)}" y="${(up?mid-h-3:mid+h+9).toFixed(1)}"
+        font-size="8.5" text-anchor="middle" fill="var(--tx2)"
+        >${(b[1]*100).toFixed(0)}%</text>
+      <text x="${(x+w/2).toFixed(1)}" y="${H-2}" font-size="8.5"
+        text-anchor="middle" fill="var(--tx3)">${b[0]}</text>`;
+  });
+  return out+'</svg>';
+}
+
+function testBars(tests){
+  // Each test as a bar against its own threshold, so "how far past the line"
+  // is visible at a glance instead of having to be read out of two columns of
+  // numbers. Binary tests (above the 200-day average, golden cross) have no
+  // meaningful distance, so they render as a full or empty bar.
+  if(!tests || !tests.length) return '';
+  return '<div class="tstrip">'+tests.map(t=>{
+    const v=parseFloat(String(t.value).replace(/,/g,''));
+    const th=parseFloat(String(t.threshold).replace(/[^0-9.\\-]/g,''));
+    const cls=t.state==='pass'?'ok':(t.state==='fail'?'no':'na');
+    // One geometry for every test: the marker is ALWAYS the threshold, sitting
+    // at the midpoint, and the bar shows how far past it the value is. Twice
+    // the threshold fills the track. A glance down the column then reads as
+    // "how far over or under the line", which is the only question a bar chart
+    // of mixed units can honestly answer.
+    let pctFill, markAt=null;
+    if(isFinite(v)&&isFinite(th)&&th!==0){
+      pctFill=Math.max(0.03,Math.min(1,(Math.abs(v)/Math.abs(th))/2));
+      markAt=0.5;
+    } else if(isFinite(v)&&th===0){
+      // A zero threshold has no ratio. The sign IS the test, so the bar leans
+      // one way or the other from the middle and says so.
+      pctFill=v>=0?0.75:0.25; markAt=0.5;
+    } else { pctFill=t.state==='pass'?0.75:0.25; }
+    if(t.state==='na') pctFill=0.06;
+    return `<div class="tbar"><span class="tl" title="${esc(t.name)}">${esc(t.name)}</span>
+      <span class="track"><span class="fill ${cls}" style="left:0;width:${(pctFill*100).toFixed(1)}%"></span>
+      ${markAt!==null?`<span class="mark" style="left:${(markAt*100).toFixed(1)}%"></span>`:''}</span>
+      <span class="tt">${esc(t.value)} / ${esc(t.threshold)}</span></div>`;
+  }).join('')+'</div>';
+}
+
+function technicalPanel(r){
+  const t=r.tech_raw||{}, d=r.tech_detail||{};
+  let cards='';
+  if(r.spark){
+    const chg=((r.spark.last/r.spark.first-1)*100);
+    cards+=`<div class="chart wide"><h5>Price, ${r.spark.years} years
+      <span>${chg>=0?'+':''}${chg.toFixed(1)}% · ${esc(r.currency||'')} ${r.spark.lo} – ${r.spark.hi}</span></h5>
+      ${svgLine(r.spark)}
+      <div class="lgd"><i><b style="background:var(--tx3)"></b>200-day average</i>
+      <i><b style="background:${chg>=0?'var(--ok)':'var(--bad)'}"></b>price</i></div></div>`;
+  } else {
+    cards+=`<div class="chart wide"><h5>Price</h5><div class="cap">No price series
+      on this row. The published page carries one for surfaced names and for
+      names with a deep dive; everything else renders from the numbers alone,
+      to keep the page loadable on a phone. Turn off <b>Surfaced only</b> and
+      this row still shows every chart below.</div></div>`;
+  }
+  const rsi=svgRsi(t.rsi);
+  if(rsi) cards+=`<div class="chart"><h5>RSI(14)<span>${esc(t.rsi_label||'')}</span></h5>
+    ${rsi}<div class="cap">Bands are the app&rsquo;s own thresholds, not the
+    textbook 30/70 — this is a value screen, so it wants weakness that is
+    recovering rather than strength that is stretched.</div></div>`;
+  const rg=svgRange(t);
+  if(rg) cards+=`<div class="chart"><h5>Where the price sits</h5>${rg}</div>`;
+  const rets=svgReturns(t);
+  if(rets) cards+=`<div class="chart"><h5>Returns
+    <span>${t.rs!==null&&t.rs!==undefined?((t.rs>=0?'+':'')+(t.rs*100).toFixed(0)+'% vs index, 6m'):''}</span></h5>
+    ${rets}</div>`;
+  const trend=[];
+  if(t.above_sma200!==null&&t.above_sma200!==undefined)
+    trend.push(t.above_sma200?'above the 200-day average':'below the 200-day average');
+  if(t.golden_cross!==null&&t.golden_cross!==undefined)
+    trend.push(t.golden_cross?'50-day above the 200-day':'50-day below the 200-day');
+  if(t.macd!==null&&t.macd!==undefined)
+    trend.push('MACD histogram '+(t.macd>=0?'positive':'negative'));
+  if(t.vol!==null&&t.vol!==undefined)
+    trend.push('volume at '+t.vol.toFixed(2)+'× its own baseline');
+  cards+=`<div class="chart wide"><h5>Tests against their thresholds
+    <span>${esc(d.summary||'')}</span></h5>${testBars(d.tests||[])}
+    ${trend.length?`<div class="cap">${esc(trend.join(' · '))}.</div>`:''}</div>`;
+  return `<div class="chartgrid">${cards}</div>`;
+}
+
 function testList(tests){
   if(!tests.length) return '<div class="trow"><span class="tn">no tests evaluated</span></div>';
   return tests.map(t=>`<div class="trow"><span class="tn">${esc(t.name)}${t.alt?' *':''}</span>
@@ -788,12 +1042,19 @@ function detail(r){
     if(d.note) h+=`<div style="font-size:11px;color:var(--warn);margin-bottom:5px">${esc(d.note)}</div>`;
     h+=testList(d.tests)+'</div>';
   }
+  h+='</div>';
+  // Technical timing, as charts rather than a column of numbers. The numeric
+  // list is kept underneath in a collapsed block: the charts are for reviewing
+  // at a glance, the list is for checking a specific figure, and neither
+  // replaces the other.
   const t=r.tech_detail;
-  h+=`<div class="dcard"><h4>Technical timing
+  h+=`<div class="dcard" style="margin-top:14px"><h4>Technical timing
       <span class="badge ${r.tech_pass?'pass':'fail'}">${r.tech_pass?'pass':'fail'}</span></h4>
-      <div style="font-size:11px;color:var(--tx3);margin-bottom:5px">${esc(t.summary)}</div>
-      ${testList(t.tests)}</div>`;
-  return h+'</div></div>';
+      ${technicalPanel(r)}
+      <details><summary style="cursor:pointer;font-size:11.5px;color:var(--tx3)">
+      the same tests as numbers</summary>
+      <div style="margin-top:6px">${testList(t.tests)}</div></details></div>`;
+  return h+'</div>';
 }
 
 function render(){

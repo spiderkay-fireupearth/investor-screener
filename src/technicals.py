@@ -67,6 +67,59 @@ def obv(df: pd.DataFrame) -> pd.Series:
     return (direction * df["Volume"].fillna(0.0)).cumsum()
 
 
+SPARK_POINTS = 80
+SPARK_YEARS = 2
+
+
+def sparkline(df: pd.DataFrame, points: int = SPARK_POINTS,
+              years: int = SPARK_YEARS) -> Optional[Dict[str, Any]]:
+    """A compact price series for the chart, and the 200-day average beside it.
+
+    Three decisions here are about PAYLOAD, not about analysis, and they are
+    worth stating because they are the difference between a page that loads on
+    a phone and one that does not:
+
+      * Sampled to ~80 points over two years, not 500 daily bars. At the size
+        this renders — a strip a few centimetres wide — the extra resolution is
+        invisible and costs six times the bytes.
+      * Normalised to 100 at the start and rounded to one decimal. The chart is
+        about SHAPE; the axis labels carry the real prices.
+      * The 200-day average is sampled from the DAILY series at the same dates,
+        not recomputed from the sampled points. A 200-day mean of 80 weekly
+        samples would be a different and wrong line.
+
+    Returns None where there is not enough history to draw anything honest.
+    """
+    if df is None or "Close" not in df or len(df) < 60:
+        return None
+    close = df["Close"].astype(float).dropna()
+    if len(close) < 60:
+        return None
+    window = close.iloc[-(years * 252):]
+    sma200 = close.rolling(200).mean().iloc[-(years * 252):]
+    # Ceiling, not floor: a floored step overshoots the cap (504 bars // 80 is
+    # a step of 6, which yields 84 points, not 80). The cap is a payload
+    # budget, so it has to be one.
+    step = max(1, -(-len(window) // points))
+    idx = list(range(len(window) - 1, -1, -step))[::-1]
+    base = float(window.iloc[idx[0]])
+    if not base:
+        return None
+    px = [round(float(window.iloc[i]) / base * 100.0, 1) for i in idx]
+    ma = []
+    for i in idx:
+        v = sma200.iloc[i] if i < len(sma200) else None
+        ma.append(round(float(v) / base * 100.0, 1)
+                  if v is not None and v == v else None)
+    return {
+        "px": px, "ma": ma,
+        "first": round(base, 4), "last": round(float(window.iloc[-1]), 4),
+        "lo": round(float(window.min()), 4), "hi": round(float(window.max()), 4),
+        "points": len(px),
+        "years": round(len(window) / 252.0, 1),
+    }
+
+
 def compute(df: pd.DataFrame,
             index_df: Optional[pd.DataFrame] = None,
             fx_to_usd: Optional[float] = None) -> Dict[str, Any]:
@@ -160,6 +213,7 @@ def compute(df: pd.DataFrame,
     out["low_5y"] = low5
     out["pct_above_5y_low"] = (price - low5) / low5 if low5 else None
     out["years_of_price_history"] = round(n / 252, 1)
+    out["spark"] = sparkline(df)
     # The price five years ago, for Buffett's one-dollar test: what the market
     # capitalisation was then is half of "did a dollar retained become a dollar
     # of value?" and nothing else on the page carries it.
