@@ -67,13 +67,13 @@ def obv(df: pd.DataFrame) -> pd.Series:
     return (direction * df["Volume"].fillna(0.0)).cumsum()
 
 
-SPARK_POINTS = 80
+SPARK_POINTS = 100
 SPARK_YEARS = 2
 
 
 def sparkline(df: pd.DataFrame, points: int = SPARK_POINTS,
               years: int = SPARK_YEARS) -> Optional[Dict[str, Any]]:
-    """A compact price series for the chart, and the 200-day average beside it.
+    """A compact price series with its 50- and 200-day averages.
 
     Three decisions here are about PAYLOAD, not about analysis, and they are
     worth stating because they are the difference between a page that loads on
@@ -96,23 +96,41 @@ def sparkline(df: pd.DataFrame, points: int = SPARK_POINTS,
     if len(close) < 60:
         return None
     window = close.iloc[-(years * 252):]
+    sma50 = close.rolling(50).mean().iloc[-(years * 252):]
     sma200 = close.rolling(200).mean().iloc[-(years * 252):]
-    # Ceiling, not floor: a floored step overshoots the cap (504 bars // 80 is
-    # a step of 6, which yields 84 points, not 80). The cap is a payload
+    # Ceiling, not floor: a floored step overshoots the cap (504 bars // 100 is
+    # a step of 5, which yields 101 points, not 100). The cap is a payload
     # budget, so it has to be one.
     step = max(1, -(-len(window) // points))
     idx = list(range(len(window) - 1, -1, -step))[::-1]
     base = float(window.iloc[idx[0]])
     if not base:
         return None
+
+    def _norm(series):
+        out = []
+        for i in idx:
+            v = series.iloc[i] if i < len(series) else None
+            out.append(round(float(v) / base * 100.0, 1)
+                       if v is not None and v == v else None)
+        return out
+
     px = [round(float(window.iloc[i]) / base * 100.0, 1) for i in idx]
-    ma = []
+    dates = []
     for i in idx:
-        v = sma200.iloc[i] if i < len(sma200) else None
-        ma.append(round(float(v) / base * 100.0, 1)
-                  if v is not None and v == v else None)
+        try:
+            dates.append(str(window.index[i])[:10])
+        except Exception:                             # noqa: BLE001
+            dates.append("")
     return {
-        "px": px, "ma": ma,
+        "px": px, "ma50": _norm(sma50), "ma": _norm(sma200),
+        # Only three date labels are kept, not one hundred. The axis shows
+        # three ticks, and a hover tooltip reads its date from these plus the
+        # index — carrying every date would double the series payload to
+        # populate a label the chart never draws.
+        "d0": dates[0] if dates else "",
+        "dmid": dates[len(dates) // 2] if dates else "",
+        "d1": dates[-1] if dates else "",
         "first": round(base, 4), "last": round(float(window.iloc[-1]), 4),
         "lo": round(float(window.min()), 4), "hi": round(float(window.max()), 4),
         "points": len(px),

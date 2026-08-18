@@ -99,7 +99,7 @@ DISPLAY_METRICS = (
 # How many price series the published page may carry. Surfaced rows and rows
 # with a deep dive get one first; the rest fall back to the scalar charts,
 # which need no series at all. The cap is a payload budget, not an opinion.
-MAX_SPARKLINES = 250
+MAX_SPARKLINES = 180
 
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
                  "HK": "HKEX", "TH": "SET", "ID": "IDX",
@@ -408,9 +408,16 @@ TEMPLATE = """<!DOCTYPE html>
 <title>Value + Technical Screener</title>
 <style>
 :root{--bg:#0f1115;--panel:#171a21;--panel2:#1e222b;--line:#2b303b;--tx:#e6e8ec;
---tx2:#a3aab8;--tx3:#6f7789;--acc:#5b9dff;--ok:#3fbf7f;--bad:#e2585e;--warn:#c9a227;}
+--tx2:#a3aab8;--tx3:#6f7789;--acc:#5b9dff;--ok:#3fbf7f;--bad:#e2585e;--warn:#c9a227;
+/* Chart series. Three named identities in fixed order, from a palette
+   validated for colour-vision deficiency against BOTH surfaces — the dark
+   steps are chosen for the dark background, not derived from the light ones
+   by inversion. The same three hues the deep-dive report uses, so the two
+   views of one stock never need re-learning. */
+--series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;}
 @media(prefers-color-scheme:light){:root{--bg:#f7f8fa;--panel:#fff;--panel2:#f0f2f6;
---line:#dfe3ea;--tx:#12151b;--tx2:#4d5567;--tx3:#798193;--acc:#1f6feb;--warn:#8a6d10;}}
+--line:#dfe3ea;--tx:#12151b;--tx2:#4d5567;--tx3:#798193;--acc:#1f6feb;--warn:#8a6d10;
+--series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 ui-sans-serif,
 -apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
@@ -562,6 +569,16 @@ tr.detail>td{background:var(--panel);padding:0;border-bottom:2px solid var(--lin
 .kmet div{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:7px 9px}
 .kmet .kl{font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em}
 .kmet .kv{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.pchart{position:relative}
+.pchart svg{width:100%;height:auto;display:block}
+.pchart .hit{cursor:crosshair}
+.ptip{position:absolute;top:6px;pointer-events:none;background:var(--panel);
+border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:11.5px;
+line-height:1.5;box-shadow:0 4px 14px rgba(0,0,0,.22);white-space:nowrap;z-index:3}
+.ptip b{display:block;font-variant-numeric:tabular-nums;margin-bottom:2px}
+.ptip span{display:flex;align-items:center;gap:5px;color:var(--tx2);
+font-variant-numeric:tabular-nums}
+.ptip i{width:8px;height:8px;border-radius:2px;display:inline-block;flex:none}
 .chartgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
 gap:12px;margin-bottom:14px;align-items:start}
 .chart{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:11px 12px}
@@ -767,33 +784,150 @@ function stats(rows){
 // series is present only for rows worth opening (see MAX_SPARKLINES in
 // render.py); every other chart here needs nothing but scalars, so a row
 // without a series still gets a readable panel rather than an empty box.
-function svgLine(spark){
-  if(!spark || !spark.px || spark.px.length < 8) return '';
-  const px=spark.px, ma=spark.ma||[];
-  const vals=px.concat(ma.filter(v=>v!==null&&v!==undefined));
-  const lo=Math.min.apply(null,vals), hi=Math.max.apply(null,vals);
-  const W=260,H=68,pad=2, rng=(hi-lo)||1;
-  const X=i=>pad+i*(W-2*pad)/(px.length-1);
-  const Y=v=>pad+(hi-v)*(H-2*pad)/rng;
-  const path=px.map((v,i)=>(i?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)).join(' ');
-  // The 200-day average is drawn as separate segments: a gap in the data must
-  // read as a gap, not as a straight line joining across it.
-  let mpath='', pen=false;
-  ma.forEach((v,i)=>{ if(v===null||v===undefined){pen=false;return;}
-    mpath+=(pen?'L':'M')+X(i).toFixed(1)+' '+Y(v).toFixed(1)+' '; pen=true; });
-  const up=px[px.length-1]>=px[0];
-  const col=up?'var(--ok)':'var(--bad)';
-  const area=path+` L ${X(px.length-1).toFixed(1)} ${H-pad} L ${X(0).toFixed(1)} ${H-pad} Z`;
-  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
-    aria-label="price over ${spark.years} years">
-    <path d="${area}" fill="${col}" opacity=".10"/>
-    ${mpath?`<path d="${mpath.trim()}" fill="none" stroke="var(--tx3)" stroke-width="1"
-      stroke-dasharray="3 2" opacity=".85"/>`:''}
-    <path d="${path}" fill="none" stroke="${col}" stroke-width="1.6"
-      stroke-linejoin="round"/>
-    <circle cx="${X(px.length-1).toFixed(1)}" cy="${Y(px[px.length-1]).toFixed(1)}"
-      r="2.2" fill="${col}"/></svg>`;
+// ---- the price chart -----------------------------------------------------
+// Close with its 50- and 200-day averages: the same three series, the same
+// three hues and the same direct labelling as the deep-dive report, so moving
+// between the two never means re-learning a chart.
+//
+// Colour is assigned by IDENTITY — three named series, in fixed order, from a
+// palette validated for colour-vision deficiency in both light and dark mode.
+// It is never assigned by rank, so filtering the table cannot repaint a line.
+// Aqua sits under 3:1 contrast on the light surface, so all three lines carry
+// visible end labels: identity is never colour alone here.
+function isNum(v){ return typeof v==='number' && isFinite(v); }
+function fmtPx(v){
+  const a=Math.abs(v);
+  return a>=1000?v.toFixed(0):(a>=10?v.toFixed(1):v.toFixed(2));
 }
+
+function priceChart(sp, ccy){
+  if(!sp || !sp.px || sp.px.length < 8) return '';
+  const px=sp.px, m50=sp.ma50||[], m200=sp.ma||[];
+  const all=px.concat(m50.filter(isNum)).concat(m200.filter(isNum));
+  let lo=Math.min.apply(null,all), hi=Math.max.apply(null,all);
+  const span=(hi-lo)||1; lo-=span*0.06; hi+=span*0.06;
+  const W=880,H=300,padL=8,padR=78,padT=14,padB=26;
+  const pw=W-padL-padR, ph=H-padT-padB;
+  const X=i=>padL+i*pw/Math.max(px.length-1,1);
+  const Y=v=>padT+ph-(v-lo)/(hi-lo)*ph;
+  // The series are normalised to 100 at the left edge; the axis has to speak
+  // in money, so every label converts back through the first real close.
+  const real=v=>v/100*sp.first;
+
+  let grid='';
+  for(let k=0;k<5;k++){
+    const v=lo+(hi-lo)*k/4, y=Y(v);
+    grid+=`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(padL+pw).toFixed(1)}"
+      y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+      <text x="${(padL+pw+6).toFixed(1)}" y="${(y+3.5).toFixed(1)}" font-size="10.5"
+        fill="var(--tx3)">${fmtPx(real(v))}</text>`;
+  }
+
+  function path(vals){
+    let d='', pen=false;
+    vals.forEach((v,i)=>{ if(!isNum(v)){pen=false;return;}
+      d+=(pen?'L':'M')+X(i).toFixed(1)+','+Y(v).toFixed(1)+' '; pen=true; });
+    return d.trim();
+  }
+  function endOf(vals){
+    for(let i=vals.length-1;i>=0;i--)
+      if(isNum(vals[i])) return {x:X(i), y:Y(vals[i])};
+    return null;
+  }
+
+  const SER=[[px,1,'Close'],[m50,2,'50-day'],[m200,3,'200-day']];
+  let lines='', labels='';
+  // Drawn slowest-first so the close, which is the thing being read, is never
+  // buried under a moving average.
+  [[m200,3,'200-day'],[m50,2,'50-day'],[px,1,'Close']].forEach(s=>{
+    lines+=`<path d="${path(s[0])}" fill="none" stroke="var(--series-${s[1]})"
+      stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  });
+  SER.forEach(s=>{
+    const e=endOf(s[0]); if(!e) return;
+    labels+=`<circle cx="${e.x.toFixed(1)}" cy="${e.y.toFixed(1)}" r="4"
+        fill="var(--series-${s[1]})" stroke="var(--panel2)" stroke-width="2"/>
+      <text x="${(e.x-7).toFixed(1)}" y="${(e.y-9).toFixed(1)}" font-size="11"
+        font-weight="600" text-anchor="end"
+        fill="var(--series-${s[1]})">${s[2]}</text>`;
+  });
+
+  let xlab='';
+  [[0,sp.d0,'start'],[Math.floor((px.length-1)/2),sp.dmid,'middle'],
+   [px.length-1,sp.d1,'end']].forEach(t=>{
+    if(!t[1]) return;
+    xlab+=`<text x="${X(t[0]).toFixed(1)}" y="${H-7}" font-size="10.5"
+      fill="var(--tx3)" text-anchor="${t[2]}">${esc(t[1].slice(0,7))}</text>`;
+  });
+
+  // The hover layer. A line chart without one makes the reader guess at values
+  // between the three axis labels, which is exactly the guess the chart exists
+  // to remove.
+  const data=JSON.stringify({px:px,m50:m50,m200:m200,first:sp.first,
+    d0:sp.d0,d1:sp.d1,ccy:ccy||''});
+  return `<div class="pchart"><svg viewBox="0 0 ${W} ${H}" role="img"
+    data-series='${data.replace(/'/g,"&#39;")}'
+    aria-label="Close with 50-day and 200-day moving averages over ${sp.years} years">
+    ${grid}${lines}${labels}${xlab}
+    <g class="cross" style="display:none">
+      <line y1="${padT}" y2="${padT+ph}" stroke="var(--tx3)" stroke-width="1"
+        stroke-dasharray="3 3"/>
+      <circle r="3.5" fill="var(--series-1)" stroke="var(--panel2)" stroke-width="2"/>
+    </g>
+    <rect class="hit" x="${padL}" y="${padT}" width="${pw}" height="${ph}"
+      fill="transparent"/>
+  </svg><div class="ptip" style="display:none"></div></div>`;
+}
+
+// One delegated listener rather than one per chart: drawers are built and
+// discarded as rows are opened, and per-chart handlers would leak with them.
+document.addEventListener('mousemove', function(ev){
+  const svg=ev.target.closest ? ev.target.closest('.pchart svg') : null;
+  document.querySelectorAll('.pchart').forEach(w=>{
+    if(svg && w.contains(svg)) return;
+    const c=w.querySelector('.cross'), t=w.querySelector('.ptip');
+    if(c) c.style.display='none';
+    if(t) t.style.display='none';
+  });
+  if(!svg) return;
+  const wrap=svg.parentElement;
+  let d; try{ d=JSON.parse(svg.getAttribute('data-series')); }catch(e){ return; }
+  const box=svg.getBoundingClientRect();
+  const padL=8,padR=78,padT=14,padB=26,W=880,H=300;
+  const pw=W-padL-padR, ph=H-padT-padB;
+  const sx=(ev.clientX-box.left)/box.width*W;
+  let i=Math.round((sx-padL)/pw*(d.px.length-1));
+  i=Math.max(0,Math.min(d.px.length-1,i));
+  const all=d.px.concat(d.m50.filter(isNum)).concat(d.m200.filter(isNum));
+  let lo=Math.min.apply(null,all), hi=Math.max.apply(null,all);
+  const span=(hi-lo)||1; lo-=span*0.06; hi+=span*0.06;
+  const X=k=>padL+k*pw/Math.max(d.px.length-1,1);
+  const Y=v=>padT+ph-(v-lo)/(hi-lo)*ph;
+  const g=svg.querySelector('.cross');
+  g.style.display='';
+  g.querySelector('line').setAttribute('x1',X(i).toFixed(1));
+  g.querySelector('line').setAttribute('x2',X(i).toFixed(1));
+  g.querySelector('circle').setAttribute('cx',X(i).toFixed(1));
+  g.querySelector('circle').setAttribute('cy',Y(d.px[i]).toFixed(1));
+  const real=v=>isNum(v)?fmtPx(v/100*d.first):'—';
+  // The date is interpolated between the two endpoints rather than stored per
+  // point: 100 date strings would cost more than the price series itself, and
+  // the sampling is even, so the interpolation is exact to the sampling step.
+  let when='';
+  if(d.d0 && d.d1){
+    const a=Date.parse(d.d0), b=Date.parse(d.d1);
+    if(!isNaN(a)&&!isNaN(b))
+      when=new Date(a+(b-a)*i/Math.max(d.px.length-1,1))
+        .toISOString().slice(0,10)+' · ';
+  }
+  const tip=wrap.querySelector('.ptip');
+  tip.innerHTML=`<b>${when}${esc(d.ccy)} ${real(d.px[i])}</b>`
+    +`<span><i style="background:var(--series-2)"></i>50-day ${real(d.m50[i])}</span>`
+    +`<span><i style="background:var(--series-3)"></i>200-day ${real(d.m200[i])}</span>`;
+  tip.style.display='';
+  const leftPct=X(i)/W*100;
+  tip.style.left=Math.max(0,Math.min(72,leftPct))+'%';
+});
 
 function svgRsi(rsi){
   if(rsi===null||rsi===undefined) return '';
@@ -901,11 +1035,12 @@ function technicalPanel(r){
   let cards='';
   if(r.spark){
     const chg=((r.spark.last/r.spark.first-1)*100);
-    cards+=`<div class="chart wide"><h5>Price, ${r.spark.years} years
-      <span>${chg>=0?'+':''}${chg.toFixed(1)}% · ${esc(r.currency||'')} ${r.spark.lo} – ${r.spark.hi}</span></h5>
-      ${svgLine(r.spark)}
-      <div class="lgd"><i><b style="background:var(--tx3)"></b>200-day average</i>
-      <i><b style="background:${chg>=0?'var(--ok)':'var(--bad)'}"></b>price</i></div></div>`;
+    cards+=`<div class="chart wide"><h5>Close, 50-day and 200-day averages
+      <span>${r.spark.years}y · ${chg>=0?'+':''}${chg.toFixed(1)}% · ${esc(r.currency||'')} ${r.spark.lo} – ${r.spark.hi}</span></h5>
+      ${priceChart(r.spark, r.currency)}
+      <div class="lgd"><i><b style="background:var(--series-1)"></b>Close</i>
+      <i><b style="background:var(--series-2)"></b>50-day</i>
+      <i><b style="background:var(--series-3)"></b>200-day</i></div></div>`;
   } else {
     cards+=`<div class="chart wide"><h5>Price</h5><div class="cap">No price series
       on this row. The published page carries one for surfaced names and for

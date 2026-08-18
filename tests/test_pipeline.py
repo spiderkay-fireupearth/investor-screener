@@ -3576,12 +3576,21 @@ def test_technical_charts():
           sp["lo"] < sp["hi"], True)
     check("the 200-day line has the same number of points",
           len(sp["ma"]), len(sp["px"]))
+    check("and so does the 50-day", len(sp["ma50"]), len(sp["px"]))
+    check("three date labels ride along for the axis",
+          all(len(sp[k]) == 10 for k in ("d0", "dmid", "d1")), True)
+    check("in order", sp["d0"] < sp["dmid"] < sp["d1"], True)
     # The moving average must be sampled from the DAILY series, never
     # recomputed from the sampled points — a 200-day mean of 80 weekly samples
     # is a different and wrong line.
     daily_ma = float(close.rolling(200).mean().iloc[-1])
     check("and is the true 200-day average, not a mean of the samples",
           abs(sp["ma"][-1] - daily_ma / sp["first"] * 100.0) < 0.2, True)
+    daily_50 = float(close.rolling(50).mean().iloc[-1])
+    check("the 50-day likewise",
+          abs(sp["ma50"][-1] - daily_50 / sp["first"] * 100.0) < 0.2, True)
+    check("and the two averages are genuinely different lines",
+          sp["ma50"][-1] != sp["ma"][-1], True)
     check("a short history yields no chart rather than a misleading one",
           ta.sparkline(df.iloc[-30:]), None)
     check("and neither does an empty frame",
@@ -3633,7 +3642,7 @@ def test_technical_charts():
 
     # --- it reaches the page ---------------------------------------------------
     html = rn.TEMPLATE
-    for fn in ("svgLine", "svgRsi", "svgRange", "svgReturns", "testBars",
+    for fn in ("priceChart", "svgRsi", "svgRange", "svgReturns", "testBars",
                "technicalPanel"):
         check(f"{fn} is defined in the page", f"function {fn}(" in html, True)
     check("the drawer calls the chart panel", "technicalPanel(r)" in html, True)
@@ -3643,6 +3652,32 @@ def test_technical_charts():
           "No price series" in html, True)
     check("the threshold marker is the midpoint of every bar",
           "markAt=0.5" in html, True)
+
+    # --- the price chart ---------------------------------------------------
+    check("the chart draws all three series",
+          all(f"'{n}'" in html for n in ("Close", "50-day", "200-day")), True)
+    # Colour is assigned by identity, in fixed order, from a palette validated
+    # for colour-vision deficiency against BOTH surfaces. The dark steps are
+    # chosen for the dark background, not flipped from the light ones.
+    for hexv in ("#2a78d6", "#eb6834", "#1baf7a"):
+        check(f"light-mode series colour {hexv} is defined", hexv in html, True)
+    for hexv in ("#3987e5", "#d95926", "#199e70"):
+        check(f"dark-mode series colour {hexv} is defined", hexv in html, True)
+    check("series are referenced by role, never by raw hex in the chart body",
+          "var(--series-1)" in html, True)
+    check("the same three hues the deep-dive report uses, so the two agree",
+          all(h in open("src/deepdive_render.py").read()
+              for h in ("#2a78d6", "#eb6834", "#1baf7a")), True)
+    check("every line is direct-labelled, so identity is never colour alone",
+          'text-anchor="end"' in html, True)
+    check("and a legend is present as well", 'class="lgd"' in html, True)
+    check("the y axis speaks in money, not in the normalised index",
+          "const real=v=>v/100*sp.first" in html, True)
+    check("the x axis carries dates", "sp.d0" in html, True)
+    check("a hover crosshair ships by default", 'class="cross"' in html, True)
+    check("with a tooltip", 'class="ptip"' in html, True)
+    check("and one delegated listener rather than one per drawer",
+          "document.addEventListener('mousemove'" in html, True)
     check("and the price chart has a fixed height, not a third of the screen",
           ".chart.wide>svg{height:" in html, True)
 
