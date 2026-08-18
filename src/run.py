@@ -253,6 +253,7 @@ def nasdaq_listed(cfg: Dict[str, Any]) -> List[str]:
                     "coverage this run")
         return []
     cats = {str(c).upper() for c in (cfg.get("market_categories") or ["Q"])}
+    forced = {str(x).upper() for x in (cfg.get("always_include") or [])}
     out, seen_header, dropped = [], False, {"cat": 0, "etf": 0, "test": 0,
                                             "suffix": 0, "status": 0}
     for line in text.splitlines():
@@ -277,7 +278,11 @@ def nasdaq_listed(cfg: Dict[str, Any]) -> List[str]:
         if cfg.get("exclude_etfs", True) and etf.upper() == "Y":
             dropped["etf"] += 1
             continue
-        if cats and cat.upper() not in cats:
+        # A name on always_include skips the TIER test — that list exists to
+        # reach a specific company, and which Nasdaq tier it happens to sit on
+        # is not something the reader should have to know. The structural
+        # tests below still apply: this can admit a company, never a warrant.
+        if cats and cat.upper() not in cats and sym.upper() not in forced:
             dropped["cat"] += 1
             continue
         # Financial status: N is normal. D (deficient), E (delinquent),
@@ -302,6 +307,14 @@ def nasdaq_listed(cfg: Dict[str, Any]) -> List[str]:
              "%d wrong tier, %d ETFs, %d test issues, %d non-common, "
              "%d exchange-flagged)", len(out), dropped["cat"], dropped["etf"],
              dropped["test"], dropped["suffix"], dropped["status"])
+    # Name the ones that were asked for and are simply not there. Silence here
+    # would read as "it was included", which is the failure this list exists
+    # to prevent.
+    missing = sorted(forced - set(out))
+    if missing:
+        log.warning("always_include: %s not found in the Nasdaq directory, or "
+                    "dropped as a non-common security — check the spelling and "
+                    "that the company is Nasdaq-listed", ", ".join(missing))
     return out
 
 
@@ -338,10 +351,47 @@ def rank_by_liquidity(yahoo: YahooProvider, symbols: List[str],
         return []
     scored.sort(key=lambda x: -x[1])
     kept = [s for s, _v in scored[:want]]
+
+    # Names held on purpose, admitted regardless of where they ranked. A
+    # turnover cut answers "what is worth screening in general" and cannot
+    # know what someone actually owns. Only names that are really in the
+    # directory and really priced get in, so this widens the list without
+    # inventing anything.
+    keep_set = set(kept)
+    forced = []
+    for sym in (cfg.get("always_include") or []):
+        u = str(sym).upper()
+        if u in keep_set:
+            continue
+        if u in {s for s, _v in scored}:
+            forced.append(u)                      # ranked, just below the cap
+        elif u in (frames or {}):
+            forced.append(u)                      # priced, below the floor too
+        else:
+            log.warning("always_include: %s is not in the Nasdaq directory "
+                        "(or had no price history) — not added", u)
+    kept.extend(forced)
+    if forced:
+        log.info("always_include: %d name(s) admitted past the ranking: %s",
+                 len(forced), ", ".join(forced))
+
+    # What the cap threw away, said out loud. Silently discarding several
+    # hundred qualifying companies is how a screener ends up not holding a
+    # stock the user owns while looking complete.
+    dropped = max(0, len(scored) - want)
+    if dropped:
+        log.warning("Nasdaq cap: %d candidates cleared the USD %s floor but "
+                    "max_names is %d, so %d were DROPPED. The smallest name "
+                    "kept trades USD %s a day; the largest dropped trades "
+                    "USD %s. Raise max_names in config/universe.yml to widen.",
+                    len(scored), f"{floor:,.0f}", want, dropped,
+                    f"{scored[want - 1][1]:,.0f}",
+                    f"{scored[want][1]:,.0f}")
     log.info("Nasdaq liquidity pass: %d of %d priced, %d above the floor, "
              "%d kept (smallest kept trades USD %s a day)",
              len(frames or {}), len(symbols), len(scored), len(kept),
              f"{scored[min(len(scored), want) - 1][1]:,.0f}")
+    rank_by_liquidity.last_dropped = dropped      # for the page footnote
     return kept
 
 
@@ -643,6 +693,7 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     # already resolved. Done here rather than in resolve_universe because the
     # liquidity ranking needs the price provider, and ranking is what keeps
     # this from being an alphabetical slice of a four-thousand-name file.
+    nasdaq_dropped = 0
     _nas = ((universe_cfg.get("markets", {}).get("US") or {})
             .get("nasdaq_listed") or {})
     if _nas.get("enabled") and "US" in tickers_by_market:
@@ -656,6 +707,7 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
             tickers_by_market["US"].extend(added)
             for _t in added:
                 listing_by_ticker[_t.upper()] = "Nasdaq listed"
+            nasdaq_dropped = getattr(rank_by_liquidity, "last_dropped", 0)
             log.info("Nasdaq extra: %d names added — US universe is now %d",
                      len(added), len(tickers_by_market["US"]))
         except Exception as e:                    # noqa: BLE001
@@ -835,6 +887,9 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     screened = sc.screen_universe(records, metrics_by_ticker, thresholds, macro,
                                   cycle=cycle_state)
     screened["buffett_indicator"] = buf_ind
+    # Carried to the page so the cap's effect is visible to a reader, not only
+    # to whoever opens the Actions log.
+    screened["nasdaq_dropped"] = nasdaq_dropped
 
     # ---- market psychology --------------------------------------------------
     # Six gauges of what the crowd is doing, all contrarian in application. Any

@@ -801,7 +801,7 @@ Prices: Yahoo Finance, split and dividend adjusted, computed on each market's ow
 Macro: FRED. Not investment advice — a screen is a starting point for research, not a conclusion.<br>
 Price series written this run: __SERIES__. Each row's chart is fetched from
 <code>series/&lt;market&gt;.json</code> when you open it — a market shows charts only after its own
-refresh has run.</div>
+refresh has run.__NASNOTE__</div>
 </div>
 
 <script>
@@ -2802,6 +2802,21 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     coverage = e_attr(" · ".join(_lparts)) if _lparts else e_attr(
         " · ".join(MARKET_LABELS.get(m, m) for m in markets_present))
 
+    # What the Nasdaq cap discarded, on the page and not only in the run log.
+    # A screener that quietly drops several hundred qualifying companies looks
+    # identical to one that covers everything, right up until someone searches
+    # for a stock they own and finds nothing.
+    _drop = (screened.get("nasdaq_dropped") or 0)
+    nas_note = ""
+    if _drop:
+        nas_note = (
+            f"<br>Nasdaq coverage is capped: <b>{_drop}</b> further Nasdaq "
+            "companies cleared the turnover floor this run and were NOT "
+            "screened, because <code>max_names</code> in "
+            "<code>config/universe.yml</code> keeps only the most traded. "
+            "Raise it to widen, or add a specific ticker to "
+            "<code>always_include</code> to admit it regardless of rank.")
+
     fw_chips = "".join(
         f'<button class="chip" data-fw="{k}">{lbl}</button>' for k, lbl in FRAMEWORKS)
     fw_head = "".join(f'<th class="c">{lbl[:4]}</th>' for _k, lbl in FRAMEWORKS)
@@ -2893,6 +2908,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__SERIES__", ", ".join(
                 f"{MARKET_LABELS.get(k, k)} {v}"
                 for k, v in sorted(series_counts.items())) or "none written")
+            .replace("__NASNOTE__", nas_note)
             .replace("__TS__", datetime.now(timezone.utc)
                      .strftime("%Y-%m-%d %H:%M UTC")))
 

@@ -4214,8 +4214,12 @@ def test_nasdaq_coverage():
     check("it reads Nasdaq's own symbol directory",
           "nasdaqtrader.com" in cfg["url"], True)
     check("starting at the Global Select tier",
-          cfg["market_categories"], ["Q"])
-    check("with a cap on how many names it may add", cfg["max_names"], 150)
+          cfg["market_categories"][0], "Q")
+    check("with a cap on how many names it may add", cfg["max_names"], 500)
+    check("covering Global Select AND Global Market, so mid-caps are reachable",
+          cfg["market_categories"], ["Q", "G"])
+    check("and a way to admit a specific holding regardless of its rank",
+          "CRSP" in (cfg.get("always_include") or []), True)
     check("and a turnover floor beneath it",
           cfg["min_median_turnover_usd"] > 0, True)
 
@@ -4371,6 +4375,66 @@ def test_nasdaq_coverage():
           "if t.upper() not in have]" in src, True)
     check("and again after ranking, so nothing can slip through twice",
           src.count("if t.upper() not in have") >= 2, True)
+    # --- the cap, and the holding it hid ------------------------------------
+    # A turnover ranking answers "what is worth screening in general". It
+    # cannot know what someone actually owns, and CRSP — a real Nasdaq company
+    # trading tens of millions a day — sat just below the old 150-name cut and
+    # was therefore missing from search entirely.
+    class RankYahoo:
+        def prices_batch(self, syms, period="6mo"):
+            out = {}
+            for i, sm in enumerate(syms):
+                # Descending turnover, so rank is predictable: AAA busiest.
+                px = 100.0
+                vol = 1e6 * (len(syms) - i)
+                out[sm] = pd.DataFrame({
+                    "Close": [px] * 60, "Volume": [vol] * 60},
+                    index=pd.date_range("2025-01-01", periods=60, freq="B"))
+            return out
+    syms = [f"S{i:03d}" for i in range(10)]
+    small = {"max_names": 3, "min_median_turnover_usd": 1.0}
+    kept = R.rank_by_liquidity(RankYahoo(), syms, small)
+    check("the cap keeps the most traded names", kept, ["S000", "S001", "S002"])
+    check("and records how many it threw away",
+          getattr(R.rank_by_liquidity, "last_dropped", 0), 7)
+
+    forced = R.rank_by_liquidity(RankYahoo(), syms,
+                                 {**small, "always_include": ["S008"]})
+    check("a name on always_include is admitted past the ranking",
+          "S008" in forced, True)
+    check("without displacing the ranked names",
+          forced[:3], ["S000", "S001", "S002"])
+    check("and a name that is not in the directory at all is refused, "
+          "not invented",
+          "NOPE" in R.rank_by_liquidity(RankYahoo(), syms,
+                                        {**small, "always_include": ["NOPE"]}),
+          False)
+
+    # always_include also has to clear the TIER filter, or the feature only
+    # works for names that were nearly included anyway.
+    tier_fixture = "\n".join([
+        "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares",
+        "GMKT|Global Market Co - Common Stock|G|N|N|100|N|N",
+        "GMWT|Global Market Co - Warrants|G|N|N|100|N|N",
+    ])
+    with _mock.patch.object(R, "_http_get", return_value=tier_fixture):
+        only_q = R.nasdaq_listed({"market_categories": ["Q"]})
+        with_forced = R.nasdaq_listed({"market_categories": ["Q"],
+                                       "always_include": ["GMKT", "GMWT"]})
+    check("a lower-tier name is normally excluded", "GMKT" in only_q, False)
+    check("but always_include reaches across the tier filter",
+          "GMKT" in with_forced, True)
+    check("while still refusing to admit a warrant — this list can add a "
+          "company, never an instrument that is not one",
+          "GMWT" in with_forced, False)
+
+    check("the run carries the dropped count to the page",
+          'screened["nasdaq_dropped"] = nasdaq_dropped' in src, True)
+    rsrc0 = open("src/render.py").read()
+    check("and the page says so in the footer, not only the run log",
+          "further Nasdaq" in rsrc0 and "__NASNOTE__" in rsrc0, True)
+    check("naming the knob that widens it", "max_names" in rsrc0, True)
+
     check("the Nasdaq layer never aborts the run",
           "Nasdaq extra coverage failed, continuing without it" in src, True)
     check("and reports the new universe size",

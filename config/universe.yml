@@ -81,11 +81,24 @@ markets:
     nasdaq_listed:
       enabled: true
       url: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
-      market_categories: ["Q"]
+      # Q = Global Select (top tier), G = Global Market. Global Market holds a
+      # great many legitimate mid-caps, and restricting to Q alone made them
+      # unreachable no matter how high max_names went. S (Capital Market) is
+      # still excluded — that tier is genuinely small and speculative.
+      market_categories: ["Q", "G"]
       exclude_etfs: true
       normal_status_only: true
-      max_names: 150
+      # The dial that trades coverage against run time. At ~1.5s per name a US
+      # run of ~1,040 names lands near 26 minutes against a 60-minute limit.
+      max_names: 500
       min_median_turnover_usd: 20000000
+      # Names that bypass the liquidity ranking entirely. The ranking answers
+      # "what is worth screening in general"; this answers "what do I actually
+      # hold", which no turnover cut can know. They must still exist in the
+      # directory and pass the structural filters — this admits a real company
+      # that ranked below the cap, it does not invent one.
+      always_include:
+        - CRSP
     seed_fallback:
       - AAPL
       - MSFT
