@@ -1623,7 +1623,15 @@ def test_dislocation():
 
     # Renderer.
     pan = rn._dislocation_panel(summ)
-    check("panel names the counts", "1 of 2" in pan, True)
+    # The header must lead with how many FELL, not only how many survived the
+    # fundamentals gate — otherwise the shortlist has no denominator and the
+    # question "which stocks dropped 30%?" has no answer anywhere on the page.
+    check("panel leads with the number that fell", "2 names" in pan, True)
+    check("and names the qualifying subset",
+          "1 the accounts do not explain" in pan, True)
+    check("panel says where to find them", "Where to find them" in pan, True)
+    check("and explains the two badge colours",
+          "blue" in pan and "grey" in pan, True)
     check("panel leads with the stale-accounts warning",
           "filings are stale and the market is right" in pan, True)
     check("panel says it cannot identify a cause",
@@ -1638,9 +1646,18 @@ def test_dislocation():
     check("no fallers renders nothing",
           rn._dislocation_panel({"fell_30pct": 0, "fundamentals_intact": 0}), "")
     t = rn.TEMPLATE
-    check("a dislocation badge exists", 'class="dis"' in t, True)
-    check("a Dislocation filter chip exists", "disOnly" in t, True)
-    check("and the filter is wired", "fDis && !r.dis" in t, True)
+    check("a dislocation badge exists", 'class="dis${' in t, True)
+    check("the badge shows the actual 6m return, not a fixed label",
+          "esc(r.dis_6m" in t, True)
+    check("it renders for EVERY faller, not only the qualifying ones",
+          "r.dis_fell\n      ?" in t or "r.dis_fell" in t, True)
+    check("explained falls get their own style", ".dis.expl{" in t, True)
+    check("a 'fell >30%' chip exists", "Fell &gt;30% (6m)" in t, True)
+    check("and a second chip narrows to the unexplained", "disQual" in t, True)
+    check("the wide filter is wired to dis_fell", "fDis && !r.dis_fell" in t, True)
+    check("the narrow filter is wired to dis", "fDisQ && !r.dis" in t, True)
+    check("the 6-month return is in the metrics drawer",
+          '"Return 6m"' in open("src/render.py").read(), True)
 
     # The technical input the shape test depends on.
     idx = pd.bdate_range("2025-01-01", periods=140)

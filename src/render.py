@@ -129,7 +129,15 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                          or (r.get("reflexive") or {}).get("note") or ""),
             "rfx_late": bool((r.get("reflexive") or {}).get("late")),
             "rfx_evidence": "; ".join((r.get("reflexive") or {}).get("evidence") or []),
+            # Two separate facts. `dis_fell` is "dropped more than 30% in six
+            # months" — the thing actually asked for. `dis` is the narrower
+            # "and the accounts do not explain it". Showing only the second
+            # made the first invisible, which is the wrong way round: you
+            # cannot judge a shortlist without seeing what it was drawn from.
+            "dis_fell": bool(r.get("dislocation")),
             "dis": bool((r.get("dislocation") or {}).get("qualifies")),
+            "dis_6m": _fmt_num((r.get("dislocation") or {}).get("return_6m"),
+                               1, pct=True),
             "dis_note": _dis_tip(r.get("dislocation")),
             "surfaced": bool(r.get("surfaced")),
             "has_report": ticker in report_tickers,
@@ -147,6 +155,10 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "FCF yield": _fmt_num(m.get("fcf_yield"), 1, pct=True),
                 "PEG": _fmt_num(m.get("peg_ratio")),
                 "EPS CAGR 5y": _fmt_num(m.get("eps_cagr_5y"), 1, pct=True),
+                "Return 3m": _fmt_num(m.get("return_3m"), 1, pct=True),
+                "Return 6m": _fmt_num(m.get("return_6m"), 1, pct=True),
+                "Return 12m": _fmt_num(m.get("return_12m"), 1, pct=True),
+                "Worst month in 6m": _fmt_num(m.get("worst_month_in_6m"), 1, pct=True),
                 "RSI(14)": _fmt_num(m.get("rsi_14"), 1),
                 "vs 200d MA": "above" if m.get("price_above_sma200") else "below",
                 "RS 6m vs index": _fmt_num(m.get("rs_vs_market_index_6m"), 1, pct=True),
@@ -189,6 +201,7 @@ letter-spacing:.04em}
 .dis{font-size:9.5px;font-weight:700;margin-left:4px;padding:1px 5px;
 border-radius:4px;background:rgba(91,157,255,.16);color:var(--acc);
 border:1px solid rgba(91,157,255,.45);cursor:help;letter-spacing:.03em}
+.dis.expl{background:var(--panel2);color:var(--tx3);border-color:var(--line)}
 .rfx.late{background:rgba(226,88,94,.16);color:var(--bad);border-color:rgba(226,88,94,.45)}
 .dalio{background:var(--panel);border:1px solid var(--line);border-radius:10px;
 margin:14px 0;padding:0;overflow:hidden}
@@ -333,7 +346,8 @@ __GATE__
   __THEMEROW__
   <span class="sep"></span>
   <button class="chip" id="techOnly">Technical pass</button>
-  <button class="chip" id="disOnly" title="Down more than 30% in six months while the last published accounts are still intact">Dislocation</button>
+  <button class="chip" id="disOnly" title="Every name down more than 30% over six months, whatever the reason">Fell &gt;30% (6m)</button>
+  <button class="chip" id="disQual" title="Of those, the ones whose last published accounts do NOT explain the fall">&hellip; accounts intact</button>
   <button class="chip" id="rfxOnly" title="Soros stage DE or EF — price rising through an earnings setback, or expectations run far ahead of reality">Reflexive risk</button>
   <button class="chip on" id="surfOnly">Surfaced only</button>
   <span class="sep"></span>
@@ -371,7 +385,8 @@ const WF_URL = __WFURL__;
 const ISSUE_URL = __ISSUEURL__;
 let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="", fTheme="ALL";
 let fRfx=false;   // Soros stage DE/EF only
-let fDis=false;   // hard fall, accounts intact
+let fDis=false;   // fell >30% in 6m
+let fDisQ=false;  // ...and the accounts do not explain it
 
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 
@@ -386,7 +401,8 @@ function visible(){
       return r.ticker.toLowerCase().includes(q) || r.name.toLowerCase().includes(q);
     }
     if(fRfx && !r.rfx_late) return false;
-    if(fDis && !r.dis) return false;
+    if(fDis && !r.dis_fell) return false;
+    if(fDisQ && !r.dis) return false;
     if(fSurf && !r.surfaced) return false;
     if(fMkt!=="ALL" && r.market!==fMkt) return false;
     if(fTheme!=="ALL" && !(r.themes||[]).includes(fTheme)) return false;
@@ -520,7 +536,12 @@ function render(){
     // one framework's column.
     const rx = r.rfx && r.rfx!=='EQ'
       ? `<span class="rfx${r.rfx_late?' late':''}" title="${esc(r.rfx_label||'')} — ${esc(r.rfx_note||'')}${r.rfx_evidence?' ['+esc(r.rfx_evidence)+']':''}">${esc(r.rfx)}</span>` : '';
-    const dl = r.dis ? `<span class="dis" title="${esc(r.dis_note||'')}">&#8595;30</span>` : '';
+    // Every name that fell gets the badge; the colour says whether the
+    // accounts explain the fall. Hiding the unexplained ones made the
+    // qualifying list impossible to put in context.
+    const dl = r.dis_fell
+      ? `<span class="dis${r.dis?'':' expl'}" title="${esc(r.dis_note||'')}">&#8595;${esc(r.dis_6m||'30')}</span>`
+      : '';
     let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${rx}${dl}</td><td class="nm" title="${esc(r.name)}">${esc(r.name)}</td>
       <td><span class="mk">${esc(r.market_label)}</span></td>
       <td class="num">${esc(r.price)}</td><td class="num">${esc(r.mcap_usd)}</td>`;
@@ -553,6 +574,8 @@ document.getElementById('rfxOnly').onclick=function(){
   fRfx=!fRfx; this.classList.toggle('on',fRfx); render();};
 document.getElementById('disOnly').onclick=function(){
   fDis=!fDis; this.classList.toggle('on',fDis); render();};
+document.getElementById('disQual').onclick=function(){
+  fDisQ=!fDisQ; this.classList.toggle('on',fDisQ); render();};
 document.getElementById('surfOnly').onclick=function(){
   fSurf=!fSurf; this.classList.toggle('on',fSurf); render();};
 document.getElementById('q').oninput=e=>{fQ=e.target.value; render();};
@@ -630,12 +653,22 @@ def _dislocation_panel(summary: Dict[str, Any]) -> str:
         for c in _d.CAUSES)
     return (
         '<details class="dalio"><summary>'
-        f'<span class="stg">Dislocation &middot; {hits} of {fell} hard falls '
-        f'the accounts do not explain</span>'
-        '<span class="muted-ink">down more than '
-        f'{thr:.0%} in six months, last statements still intact</span>'
+        f'<span class="stg">Fell &gt;{thr:.0%} in 6m &middot; {fell} names, '
+        f'{hits} the accounts do not explain</span>'
+        '<span class="muted-ink">filter with the two chips above &mdash; '
+        'every faller carries a &#8595; badge showing its six-month return'
+        '</span>'
         '<span class="muted-ink" style="margin-left:auto">details &#9662;</span>'
         '</summary><div class="body">'
+        f'<div class="dnote"><b>Where to find them.</b> Every name down more '
+        f'than {thr:.0%} over six months carries a <b>&#8595;</b> badge next to '
+        'its ticker showing the actual figure. A <b>blue</b> badge means the '
+        'last published accounts do NOT explain the fall; a <b>grey</b> one '
+        'means they do &mdash; revenue, cash flow or the balance sheet '
+        'deteriorated too, so the market had a reason. Use <b>Fell &gt;30% '
+        '(6m)</b> to see them all and <b>&hellip; accounts intact</b> to '
+        'narrow to the unexplained. The six-month return is also in every '
+        'name\'s metrics drawer.</div>'
         '<div class="dnote"><b>Read this first.</b> The commonest reason a '
         'stock falls 30% while its filings look healthy is not panic &mdash; '
         'it is that the filings are stale and the market is right. Annual '
