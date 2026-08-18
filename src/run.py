@@ -176,6 +176,147 @@ def wikipedia_constituents(url: str, suffix: str = "",
     return []
 
 
+
+# ---------------------------------------------------------------------------
+# Nasdaq-listed coverage beyond the Nasdaq-100.
+#
+# Nasdaq publishes its own symbol directory as a pipe-delimited text file, free
+# and without a key. It carries every Nasdaq-listed security — roughly four
+# thousand — which is far more than this pipeline can fetch fundamentals for,
+# so two filters do the narrowing and both are honest about what they drop:
+#
+#   1. STRUCTURAL, from the file itself: test issues, ETFs, and the fifth-letter
+#      suffixes that mark warrants, rights, units and preferred shares. These
+#      are not companies and screening them would be noise.
+#   2. LIQUIDITY, from prices we have to fetch anyway. The file carries no
+#      market cap, so the alternative to ranking on turnover is an alphabetical
+#      cut — which would give a universe of names beginning with A. Median
+#      dollar turnover needs only the batch price download and is a better
+#      proxy for "worth screening" than size alone.
+# ---------------------------------------------------------------------------
+NASDAQ_SYMBOL_FILE = "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
+
+# What a security IS, read from its name rather than from its ticker. The
+# fifth-letter convention is the traditional shortcut and it is wrong often
+# enough to matter: GOOGL ends in L, which the convention reserves for
+# "miscellaneous", and it is Alphabet's ordinary class A stock. The security
+# name says what the instrument is in words, so that is what gets parsed.
+NON_COMMON_NAME_WORDS = (
+    "warrant", "rights", " right ", "unit", "preferred", "convertible",
+    "% series", "notes due", "debenture", "subordinated", "when issued",
+)
+# "Depositary" alone is NOT disqualifying: every foreign issuer on Nasdaq —
+# PDD, BIDU, JD, NTES, ASML — trades as American Depositary Shares, and they
+# are ordinary equity. What disqualifies is a depositary share representing a
+# PREFERRED series, which the name marks with a series letter or a coupon.
+# Dropping on the word alone would have removed the foreign listings this whole
+# layer exists to reach.
+DEPOSITARY_PREFERRED_MARKERS = ("series", "%", "pfd")
+# Kept as a narrow backstop for the three suffixes that are unambiguous even
+# when the name is terse. A and B are share CLASSES and are never dropped.
+NON_COMMON_SUFFIXES = set("WRU")
+
+
+def nasdaq_listed(cfg: Dict[str, Any]) -> List[str]:
+    """Candidate Nasdaq common stocks from the official symbol directory."""
+    url = cfg.get("url") or NASDAQ_SYMBOL_FILE
+    text = _http_get(url)
+    if not text:
+        log.warning("Nasdaq symbol directory fetch failed — no extra Nasdaq "
+                    "coverage this run")
+        return []
+    cats = {str(c).upper() for c in (cfg.get("market_categories") or ["Q"])}
+    out, seen_header, dropped = [], False, {"cat": 0, "etf": 0, "test": 0,
+                                            "suffix": 0, "status": 0}
+    for line in text.splitlines():
+        parts = line.split("|")
+        if len(parts) < 7:
+            continue
+        if not seen_header:
+            seen_header = True          # first row is the column header
+            continue
+        if parts[0].startswith("File Creation Time"):
+            continue
+        sym, name, cat, test, status, _lot = (parts[0].strip(), parts[1],
+                                              parts[2].strip(), parts[3].strip(),
+                                              parts[4].strip(), parts[5])
+        etf = parts[6].strip() if len(parts) > 6 else "N"
+        if not sym or not sym.isalpha():
+            dropped["suffix"] += 1
+            continue
+        if test.upper() == "Y":
+            dropped["test"] += 1
+            continue
+        if cfg.get("exclude_etfs", True) and etf.upper() == "Y":
+            dropped["etf"] += 1
+            continue
+        if cats and cat.upper() not in cats:
+            dropped["cat"] += 1
+            continue
+        # Financial status: N is normal. D (deficient), E (delinquent),
+        # Q (bankrupt) and G/H/J/K are companies already in trouble with the
+        # exchange, which is a different screen from this one.
+        if cfg.get("normal_status_only", True) and status.upper() not in ("N", ""):
+            dropped["status"] += 1
+            continue
+        low = name.lower()
+        if any(w in low for w in NON_COMMON_NAME_WORDS):
+            dropped["suffix"] += 1
+            continue
+        if "deposit" in low and any(x in low for x in DEPOSITARY_PREFERRED_MARKERS):
+            dropped["suffix"] += 1
+            continue
+        if len(sym) == 5 and sym[4].upper() in NON_COMMON_SUFFIXES:
+            dropped["suffix"] += 1
+            continue
+        out.append(sym.upper())
+    log.info("Nasdaq directory: %d candidates after filters (dropped "
+             "%d wrong tier, %d ETFs, %d test issues, %d non-common, "
+             "%d exchange-flagged)", len(out), dropped["cat"], dropped["etf"],
+             dropped["test"], dropped["suffix"], dropped["status"])
+    return out
+
+
+def rank_by_liquidity(yahoo: YahooProvider, symbols: List[str],
+                      cfg: Dict[str, Any]) -> List[str]:
+    """Keep the most traded candidates, measured on prices we fetch anyway.
+
+    Returns [] rather than an arbitrary slice when the price download fails:
+    an alphabetical cut of a four-thousand-name file is a universe of companies
+    beginning with A, which would look like coverage and be nothing of the kind.
+    """
+    if not symbols:
+        return []
+    want = int(cfg.get("max_names", 150))
+    floor = float(cfg.get("min_median_turnover_usd", 5_000_000))
+    log.info("Ranking %d Nasdaq candidates by liquidity (keeping %d above "
+             "USD %s median daily turnover)", len(symbols), want, f"{floor:,.0f}")
+    frames = yahoo.prices_batch(symbols, period="6mo")
+    scored = []
+    for sym, df in (frames or {}).items():
+        if df is None or len(df) < 40 or "Volume" not in df:
+            continue
+        try:
+            turnover = float((df["Close"].astype(float)
+                              * df["Volume"].astype(float)).iloc[-60:].median())
+        except Exception:                        # noqa: BLE001
+            continue
+        if turnover >= floor:
+            scored.append((sym, turnover))
+    if not scored:
+        log.warning("No Nasdaq candidate cleared the turnover floor — either "
+                    "the price download failed or the floor is set too high; "
+                    "no extra names added")
+        return []
+    scored.sort(key=lambda x: -x[1])
+    kept = [s for s, _v in scored[:want]]
+    log.info("Nasdaq liquidity pass: %d of %d priced, %d above the floor, "
+             "%d kept (smallest kept trades USD %s a day)",
+             len(frames or {}), len(symbols), len(scored), len(kept),
+             f"{scored[min(len(scored), want) - 1][1]:,.0f}")
+    return kept
+
+
 SUFFIX_MARKET = {".T": "JP", ".SI": "SG", ".HK": "HK", ".BK": "TH",
                  ".JK": "ID", ".KL": "MY"}
 
@@ -449,6 +590,26 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
 
     tickers_by_market = merge_themes(universe_cfg, 
                                      resolve_universe(universe_cfg, markets), markets)
+
+    # Nasdaq coverage beyond the Nasdaq-100, deduplicated against everything
+    # already resolved. Done here rather than in resolve_universe because the
+    # liquidity ranking needs the price provider, and ranking is what keeps
+    # this from being an alphabetical slice of a four-thousand-name file.
+    _nas = ((universe_cfg.get("markets", {}).get("US") or {})
+            .get("nasdaq_listed") or {})
+    if _nas.get("enabled") and "US" in tickers_by_market:
+        try:
+            have = {t.upper() for t in tickers_by_market["US"]}
+            cands = [t for t in nasdaq_listed(_nas) if t.upper() not in have]
+            log.info("Nasdaq extra: %d candidates after removing the %d names "
+                     "already in the universe", len(cands), len(have))
+            added = [t for t in rank_by_liquidity(yahoo, cands, _nas)
+                     if t.upper() not in have]
+            tickers_by_market["US"].extend(added)
+            log.info("Nasdaq extra: %d names added — US universe is now %d",
+                     len(added), len(tickers_by_market["US"]))
+        except Exception as e:                    # noqa: BLE001
+            log.warning("Nasdaq extra coverage failed, continuing without it: %s", e)
     themes_by_ticker = theme_map(universe_cfg)
     fund_tickers = {str(t).upper() for t in (universe_cfg.get("etfs") or [])}
 

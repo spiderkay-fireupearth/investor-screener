@@ -4196,6 +4196,144 @@ def test_munger_full_framework():
           len(rows[0]["mun_readings"]) >= 2, True)
 
 
+def test_nasdaq_coverage():
+    """Nasdaq beyond the Nasdaq-100, with no overlap and no alphabetical slice."""
+    from src import run as R
+    uni = yaml.safe_load(open("config/universe.yml"))
+    cfg = uni["markets"]["US"]["nasdaq_listed"]
+    check("the Nasdaq layer is on", cfg["enabled"], True)
+    check("it reads Nasdaq's own symbol directory",
+          "nasdaqtrader.com" in cfg["url"], True)
+    check("starting at the Global Select tier",
+          cfg["market_categories"], ["Q"])
+    check("with a cap on how many names it may add", cfg["max_names"], 150)
+    check("and a turnover floor beneath it",
+          cfg["min_median_turnover_usd"] > 0, True)
+
+    # --- the directory parser ------------------------------------------------
+    # Real file shape: header row, pipe-delimited, trailing creation-time line.
+    fixture = "\n".join([
+        "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares",
+        "AAPL|Apple Inc. - Common Stock|Q|N|N|100|N|N",
+        "GOOD|Good Co - Common Stock|Q|N|N|100|N|N",
+        "SMLC|Small Co - Common Stock|S|N|N|100|N|N",        # wrong tier
+        "QQQ|Invesco QQQ Trust|Q|N|N|100|Y|N",               # ETF
+        "ZTEST|Test Issue|Q|Y|N|100|N|N",                    # test issue
+        "SICKX|Deficient Co|Q|N|D|100|N|N",                  # exchange-flagged
+        "ABCDW|Some Co - Warrant|Q|N|N|100|N|N",             # warrant
+        "ABCDR|Some Co - Rights|Q|N|N|100|N|N",              # rights
+        "ABCDU|Some Co - Unit|Q|N|N|100|N|N",                # units
+        "PFDXX|Some Co - 6.5% Series A Preferred|Q|N|N|100|N|N",
+        "ADRCO|Foreign Co - American Depositary Shares|Q|N|N|100|N|N",
+        "PFDDS|Some REIT - Depositary Shares Series E|Q|N|N|100|N|N",
+        "GOOGL|Alphabet Inc. - Class A Common Stock|Q|N|N|100|N|N",
+        "BRKAB|Some Co - Class B Common Stock|Q|N|N|100|N|N"
+        "File Creation Time: 0818202609:30|||||||",
+    ])
+    import unittest.mock as _mock
+    with _mock.patch.object(R, "_http_get", return_value=fixture):
+        got = R.nasdaq_listed(cfg)
+    check("ordinary common stock is kept", "AAPL" in got and "GOOD" in got, True)
+    check("a lower tier is dropped when only Q is asked for",
+          "SMLC" in got, False)
+    check("ETFs are dropped — they are not companies", "QQQ" in got, False)
+    check("test issues are dropped", "ZTEST" in got, False)
+    check("names the exchange has flagged as deficient are dropped",
+          "SICKX" in got, False)
+    for junk in ("ABCDW", "ABCDR", "ABCDU"):
+        check(f"{junk} (a warrant, right or unit) is dropped", junk in got, False)
+    check("preferred stock is dropped", "PFDXX" in got, False)
+    # "Depositary" alone is not disqualifying. Every foreign issuer on Nasdaq
+    # trades as American Depositary Shares — PDD, BIDU, JD, ASML — and they are
+    # ordinary equity. Dropping on the word would have removed the foreign
+    # listings this layer exists to reach.
+    check("an American Depositary Share is kept", "ADRCO" in got, True)
+    check("but a depositary share over a PREFERRED series is not",
+          "PFDDS" in got, False)
+    # The fifth-letter convention is the traditional shortcut and it is wrong
+    # often enough to matter: GOOGL ends in L, which the convention reserves
+    # for "miscellaneous", and it is Alphabet's ordinary class A stock. Reading
+    # the security NAME instead keeps it — and this test is here because the
+    # first version of the parser dropped it.
+    check("GOOGL survives — the fifth letter is not the instrument type",
+          "GOOGL" in got, True)
+    check("and so does a five-letter class B line", "BRKAB" in got, True)
+
+    with _mock.patch.object(R, "_http_get", return_value=None):
+        check("a failed fetch adds nothing rather than guessing",
+              R.nasdaq_listed(cfg), [])
+
+    # Widening the tiers widens the universe, from config alone.
+    with _mock.patch.object(R, "_http_get", return_value=fixture):
+        wide = R.nasdaq_listed({**cfg, "market_categories": ["Q", "S"]})
+    check("adding the Capital Market tier picks up the smaller names",
+          "SMLC" in wide, True)
+
+    # --- liquidity ranking, not an alphabetical slice ------------------------
+    idx = pd.date_range("2025-01-01", periods=140, freq="B")
+
+    class FakeYahoo:
+        """Returns frames whose turnover is encoded in the symbol's position."""
+        def __init__(self, turnovers):
+            self.turnovers = turnovers
+            self.asked = None
+
+        def prices_batch(self, tickers, period="6mo"):
+            self.asked = list(tickers)
+            out = {}
+            for t in tickers:
+                v = self.turnovers.get(t)
+                if v is None:
+                    continue
+                close = pd.Series(np.full(len(idx), 10.0), index=idx)
+                vol = pd.Series(np.full(len(idx), v / 10.0), index=idx)
+                out[t] = pd.DataFrame({"Close": close, "Volume": vol})
+            return out
+
+    turn = {"AAA": 1e9, "BBB": 5e8, "CCC": 1e8, "DDD": 3e7, "TINY": 1e5}
+    y = FakeYahoo(turn)
+    kept = R.rank_by_liquidity(y, ["AAA", "BBB", "CCC", "DDD", "TINY"],
+                               {"max_names": 3, "min_median_turnover_usd": 2e7})
+    check("the most traded names are kept", kept, ["AAA", "BBB", "CCC"])
+    check("the cap is honoured", len(kept), 3)
+    # THE POINT of ranking: an alphabetical cut of the same list would have
+    # taken AAA, BBB, CCC too — so test the case where it would differ.
+    y2 = FakeYahoo({"ZZZ": 1e9, "AAA": 1e5, "BBB": 2e5})
+    check("liquidity beats the alphabet",
+          R.rank_by_liquidity(y2, ["AAA", "BBB", "ZZZ"],
+                              {"max_names": 1, "min_median_turnover_usd": 1e4}),
+          ["ZZZ"])
+    check("the turnover floor excludes what is not worth screening",
+          "TINY" in R.rank_by_liquidity(
+              y, ["AAA", "TINY"], {"max_names": 5,
+                                   "min_median_turnover_usd": 2e7}), False)
+    check("nothing priced means nothing added, not an arbitrary slice",
+          R.rank_by_liquidity(FakeYahoo({}), ["AAA", "BBB"],
+                              {"max_names": 2}), [])
+    check("an empty candidate list is handled",
+          R.rank_by_liquidity(y, [], {"max_names": 5}), [])
+
+    # --- no overlap with the S&P 500 -----------------------------------------
+    # The dedupe happens BEFORE the liquidity pass, so an S&P name cannot use
+    # up one of the slots and then be discarded.
+    have = {"AAPL", "MSFT"}
+    with _mock.patch.object(R, "_http_get", return_value=fixture):
+        cands = [t for t in R.nasdaq_listed(cfg) if t.upper() not in have]
+    check("a name already in the S&P 500 is removed before ranking",
+          "AAPL" in cands, False)
+    check("and the rest survive", "GOOD" in cands, True)
+
+    src = open("src/run.py").read()
+    check("the run dedupes against the resolved universe",
+          "if t.upper() not in have]" in src, True)
+    check("and again after ranking, so nothing can slip through twice",
+          src.count("if t.upper() not in have") >= 2, True)
+    check("the Nasdaq layer never aborts the run",
+          "Nasdaq extra coverage failed, continuing without it" in src, True)
+    check("and reports the new universe size",
+          "US universe is now" in src, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -4220,6 +4358,7 @@ if __name__ == "__main__":
     test_rsi_reading()
     test_display_metric_contract()
     test_malaysia_market()
+    test_nasdaq_coverage()
     test_synopsis()
     test_lynch_categories()
     test_schloss_deep_value()

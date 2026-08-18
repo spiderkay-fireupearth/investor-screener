@@ -59,6 +59,33 @@ markets:
           - "ON"          # quoted: bare ON is the YAML boolean true
           - ANSS
           - DXCM
+    # Nasdaq coverage BEYOND the Nasdaq-100, deduplicated against everything
+    # already in the universe. The directory carries ~4,000 securities, which
+    # is far more than this pipeline can fetch fundamentals for, so the
+    # narrowing is explicit:
+    #
+    #   market_categories  Q = Global Select (the top tier, ~1,400 names),
+    #                      G = Global Market, S = Capital Market. Add G or S to
+    #                      go further down the size scale.
+    #   max_names          how many survive the liquidity ranking. Each name
+    #                      costs one EDGAR fundamentals call and one price
+    #                      history on every US run, so this is the dial that
+    #                      trades coverage against run time.
+    #   min_median_turnover_usd
+    #                      the floor a candidate must trade above to be worth
+    #                      screening at all.
+    #
+    # Ranked on median dollar turnover rather than alphabetically, because the
+    # directory has no market cap and an alphabetical cut of 4,000 names is a
+    # universe of companies beginning with A.
+    nasdaq_listed:
+      enabled: true
+      url: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
+      market_categories: ["Q"]
+      exclude_etfs: true
+      normal_status_only: true
+      max_names: 150
+      min_median_turnover_usd: 20000000
     seed_fallback:
       - AAPL
       - MSFT
