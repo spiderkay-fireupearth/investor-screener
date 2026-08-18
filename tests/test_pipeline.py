@@ -1446,6 +1446,24 @@ def test_reflexive_stages():
     check("a Reflexive risk filter chip exists", "Reflexive risk" in t, True)
     check("and the filter is wired to the late flag", "fRfx && !r.rfx_late" in t, True)
 
+    # A two-letter badge with no key is a puzzle, not a label.
+    leg = rn._reflexive_legend({"BC": 120, "CD": 40, "DE": 60, "EQ": 600, "GH": 20})
+    check("the legend explains the codes", "what the badges mean" in leg, True)
+    check("it shows each stage's share", "(7%)" in leg or "(70%)" in leg, True)
+    check("a healthy spread raises no warning",
+          "not identifying anything" in leg, False)
+
+    # The self-check that matters: a stage firing on most of the universe has
+    # stopped discriminating, and the page must say so rather than leaving the
+    # user to notice that every row carries the same badge.
+    dom = rn._reflexive_legend({"DE": 500, "EF": 60, "BC": 40, "EQ": 30})
+    check("DE dominance is called out on the page",
+          "not identifying anything" in dom, True)
+    check("and quantified", "89%" in dom, True)
+    check("mostly near-equilibrium is explained as expected, not alarming",
+          "expected result" in rn._reflexive_legend({"EQ": 900, "BC": 50}), True)
+    check("no census renders nothing", rn._reflexive_legend({}), "")
+
 
 
 def test_ownership_and_government_theme():
@@ -1528,6 +1546,218 @@ def test_ownership_and_government_theme():
     check("and it names its source", "no official register" in gov["source"], True)
 
 
+
+def test_dislocation():
+    """Hard falls the accounts do not explain, and the causes ruled out."""
+    from src import dislocation as ds
+    cfg = yaml.safe_load(open("config/thresholds.yml"))["dislocation"]
+
+    def m(**kw):
+        base = dict(return_6m=-0.38, rs_vs_market_index_6m=-0.31,
+                    worst_month_in_6m=0.26, vol20_over_vol50=1.6,
+                    revenue_growth_1y=0.08, eps_growth_1y=0.04,
+                    free_cash_flow_ttm=120.0, net_debt_to_ebitda=1.2,
+                    loss_years_in_10=0, accruals_ratio=0.01)
+        base.update(kw)
+        return base
+
+    # Nothing that has not fallen far enough may appear at all.
+    check("a 10% fall does not qualify", ds.assess(m(return_6m=-0.10), cfg), None)
+    check("a rise does not qualify", ds.assess(m(return_6m=0.20), cfg), None)
+    check("no price history does not qualify",
+          ds.assess(m(return_6m=None), cfg), None)
+
+    a = ds.assess(m(), cfg)
+    check("a 38% fall with intact accounts qualifies", a["qualifies"], True)
+
+    # The three discriminators. These are the whole value of the module: the
+    # app cannot know WHY a stock fell, but it can rule causes in and out.
+    check("fell far more than its index -> name-specific", a["scope"], "name")
+    check("68% of the fall in one month -> cliff", a["shape"], "cliff")
+    check("volume 1.6x baseline -> heavy", a["volume"], "heavy")
+    ns = [c["n"] for c in a["candidate_causes"]]
+    check("market-wide causes are ruled out for a solo fall",
+          any(n in ns for n in (1, 4, 8, 9, 10)), False)
+    check("a scandal stays on the list", 5 in ns, True)
+    check("and a short-seller loop stays on the list", 14 in ns, True)
+
+    # Same fall, but the whole market went with it: the opposite shortlist.
+    b = ds.assess(m(rs_vs_market_index_6m=-0.03, worst_month_in_6m=0.09,
+                    vol20_over_vol50=0.7), cfg)
+    check("in-line with a falling market -> macro", b["scope"], "market")
+    check("spread over the period -> grind", b["shape"], "grind")
+    bn = [c["n"] for c in b["candidate_causes"]]
+    check("flight to safety is now a candidate", 8 in bn, True)
+    check("a CEO scandal is not", 5 in bn, False)
+    check("thin volume reads as a liquidity vacuum, not forced selling",
+          b["volume"], "thin")
+    check("and forced liquidation is dropped when volume is thin", 10 in bn, False)
+
+    # The gate that stops this being a list of broken businesses.
+    broken = ds.assess(m(revenue_growth_1y=-0.34, eps_growth_1y=-0.70,
+                         free_cash_flow_ttm=-50.0), cfg)
+    check("a collapsing business does NOT qualify", broken["qualifies"], False)
+    check("but it is still assessed rather than hidden",
+          broken["return_6m"], -0.38)
+
+    # Missing fundamentals must not quietly count as intact.
+    thin = ds.assess({"return_6m": -0.40}, cfg)
+    check("a name with no accounts at all cannot qualify",
+          thin["qualifies"], False)
+    check("and the caution says how many tests were unevaluable",
+          "could not be evaluated" in thin["caution"], True)
+
+    # The warning must travel with every hit, without exception.
+    check("every hit carries the stale-accounts caution",
+          "filings are stale and the market is right" in a["caution"], True)
+
+    # The scan labels rows and counts them.
+    res = {"A": {"metrics": m()}, "B": {"metrics": m(return_6m=-0.05)},
+           "C": {"metrics": m(revenue_growth_1y=-0.5, eps_growth_1y=-0.8,
+                              free_cash_flow_ttm=-10.0)}}
+    summ = ds.scan(res, {}, cfg)
+    check("two names fell more than 30%", summ["fell_30pct"], 2)
+    check("only one had intact accounts", summ["fundamentals_intact"], 1)
+    check("the qualifying row is labelled", res["A"]["dislocation"]["qualifies"], True)
+    check("the un-fallen row is not labelled", "dislocation" in res["B"], False)
+
+    # Renderer.
+    pan = rn._dislocation_panel(summ)
+    check("panel names the counts", "1 of 2" in pan, True)
+    check("panel leads with the stale-accounts warning",
+          "filings are stale and the market is right" in pan, True)
+    check("panel says it cannot identify a cause",
+          "cannot</b> identify a cause" in pan, True)
+    check("panel lists all fifteen causes",
+          all(f"#{i} " in pan for i in range(1, 16)), True)
+    check("panel names the three feeds",
+          all(k in pan for k in ("SEC 8-K item codes", "USGS", "GDELT")), True)
+    check("panel says silence is not evidence",
+          "Silence is not evidence" in pan, True)
+    check("panel warns that 4.02 removes a name", "4.02" in pan, True)
+    check("no fallers renders nothing",
+          rn._dislocation_panel({"fell_30pct": 0, "fundamentals_intact": 0}), "")
+    t = rn.TEMPLATE
+    check("a dislocation badge exists", 'class="dis"' in t, True)
+    check("a Dislocation filter chip exists", "disOnly" in t, True)
+    check("and the filter is wired", "fDis && !r.dis" in t, True)
+
+    # The technical input the shape test depends on.
+    idx = pd.bdate_range("2025-01-01", periods=140)
+    # Flat, then one violent month, then flat: a cliff.
+    vals = [100.0] * 80 + [100.0 - 2.0 * i for i in range(21)] + [58.0] * 39
+    cliff = pd.Series(vals[:140], index=idx)
+    tt = ta.compute(pd.DataFrame({"Close": cliff, "High": cliff, "Low": cliff,
+                                  "Volume": [1e6] * 140}, index=idx))
+    check("the worst month inside 6m is measured",
+          round(tt["worst_month_in_6m"], 2) >= 0.35, True)
+    rise = pd.Series([100.0 * (1.002 ** i) for i in range(140)], index=idx)
+    tr = ta.compute(pd.DataFrame({"Close": rise, "High": rise, "Low": rise,
+                                  "Volume": [1e6] * 140}, index=idx))
+    check("a series that only rose has no down month",
+          tr["worst_month_in_6m"], 0.0)
+
+
+
+def test_events():
+    """Structured event feeds: 8-K item codes, quakes, and what they override."""
+    from src import events as ev, dislocation as ds
+    cfg = yaml.safe_load(open("config/thresholds.yml"))["dislocation"]
+
+    sub = {"filings": {"recent": {
+        "filingDate": ["2026-07-02", "2026-06-11", "2026-05-30", "2026-01-04"],
+        "form": ["8-K", "8-K", "10-Q", "8-K"],
+        "items": ["5.02,9.01", "2.06", "", "4.02"],
+        "accessionNumber": ["a1", "a2", "a3", "a4"]}}}
+
+    recent = ev.parse_submissions(sub, "2026-06-01")
+    check("only filings inside the window are returned", len(recent), 2)
+    check("a 10-Q is not an 8-K", all(e["form"] == "8-K" for e in recent), True)
+    check("5.02 is read as an officer departure",
+          "Departure" in recent[0]["labels"][0], True)
+    check("and mapped to cause #5", recent[0]["causes"], [5])
+    check("9.01 (exhibits) is carried but not given a cause",
+          "9.01" in recent[0]["codes"] and len(recent[0]["labels"]) == 1, True)
+    check("2.06 maps to a physical shock", recent[1]["causes"], [2])
+
+    # The most important code in the file. A company that has told the market
+    # its own past accounts cannot be relied on has NOT been dislocated — the
+    # "intact fundamentals" this screen measured are, by its own admission,
+    # not intact.
+    allf = ev.parse_submissions(sub, "2025-01-01")
+    disq = next((e["disqualifies"] for e in allf if e["disqualifies"]), None)
+    check("a 4.02 disqualifies", bool(disq), True)
+    check("and says why", "cannot be relied on" in disq, True)
+    for code in ("1.03", "3.01", "4.02"):
+        check(f"{code} carries a disqualifier",
+              bool(ev.ITEM_CODES[code].get("disqualifies")), True)
+    check("a routine 8.01 does not",
+          ev.ITEM_CODES["8.01"].get("disqualifies"), None)
+
+    # Quakes are matched to a market by box, and small ones are ignored.
+    q = ev.parse_quakes({"features": [
+        {"properties": {"mag": 7.1, "place": "off Sumatra", "time": 1755000000000},
+         "geometry": {"coordinates": [100.2, -2.1, 30]}},
+        {"properties": {"mag": 5.2, "place": "minor", "time": 1755000000000},
+         "geometry": {"coordinates": [139.0, 35.0, 10]}},
+        {"properties": {"mag": 6.5, "place": "Honshu", "time": 1755000000000},
+         "geometry": {"coordinates": [139.0, 35.0, 10]}}]})
+    check("a magnitude 7.1 off Sumatra lands in Indonesia",
+          [x["magnitude"] for x in q.get("ID", [])], [7.1])
+    check("a 5.2 is below the bar and dropped", len(q.get("JP", [])), 1)
+    check("a 6.5 in Honshu lands in Japan",
+          q["JP"][0]["magnitude"], 6.5)
+    check("quakes carry cause #2", q["JP"][0]["causes"], [2])
+
+    # An OBSERVED event must collapse the inferred shortlist.
+    base = dict(return_6m=-0.38, rs_vs_market_index_6m=-0.31,
+                worst_month_in_6m=0.26, vol20_over_vol50=1.6,
+                revenue_growth_1y=0.08, eps_growth_1y=0.04,
+                free_cash_flow_ttm=120.0, net_debt_to_ebitda=1.2,
+                loss_years_in_10=0, accruals_ratio=0.01)
+    inferred = ds.assess(base, cfg)
+    seen = ds.assess(dict(base, _events={"observed_causes": [5],
+                                         "events": [{"source": "SEC 8-K"}]}), cfg)
+    check("without a feed the app infers a shortlist",
+          len(inferred["candidate_causes"]) > 1, True)
+    check("with an observed 5.02 it collapses to one",
+          [c["n"] for c in seen["candidate_causes"]], [5])
+    check("and is graded as observed rather than inferred",
+          seen["evidence_grade"], "observed")
+    check("the inferred shortlist is kept as context",
+          len(seen["inferred_shortlist"]) > 1, True)
+
+    # A disqualifying filing must remove the name, not annotate it.
+    bad = ds.assess(dict(base, _events={"observed_causes": [5],
+                                        "disqualifies": "accounts unreliable"}), cfg)
+    check("a disqualifying filing removes the name", bad["qualifies"], False)
+    check("even though its fundamentals tested intact",
+          bad["fundamentals"]["intact"], True)
+
+    # Silence from the feeds is not evidence of nothing happening.
+    quiet = ev.explain.__doc__
+    none_ = ds.assess(dict(base, _events={"events": [], "note": "nothing seen"}), cfg)
+    check("no events -> still inferred", none_["evidence_grade"], "inferred")
+    check("and the feed note travels with it", none_["feed_note"], "nothing seen")
+
+    # No key, no commercial feed — and that must not raise.
+    import os as _os
+    saved = _os.environ.pop("FINNHUB_API_KEY", None)
+    check("the commercial feed is skipped without a key",
+          ev.news_events(None, "AAPL"), [])
+    if saved:
+        _os.environ["FINNHUB_API_KEY"] = saved
+
+    # The CIK regression: CompanyRecord has no `cik` attribute, so resolving it
+    # from the record would silently disable the 8-K feed on every name.
+    check("CompanyRecord still has no cik field",
+          hasattr(CompanyRecord(ticker="X", market="US"), "cik"), False)
+    src = open("src/run.py").read()
+    check("run.py resolves CIK through the provider",
+          "edgar.cik_for(t)" in src, True)
+    check("and shouts if none resolve", "NO CIK resolved" in src, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -1547,6 +1777,8 @@ if __name__ == "__main__":
     test_commodities_cnav_and_gauge()
     test_reflexive_stages()
     test_ownership_and_government_theme()
+    test_dislocation()
+    test_events()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

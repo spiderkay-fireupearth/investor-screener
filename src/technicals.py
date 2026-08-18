@@ -206,6 +206,17 @@ def compute(df: pd.DataFrame,
     # times." A trend that has been tested and held is a different object from
     # one that has never been tested, and the one-year drawdown is how you
     # tell them apart.
+    # The worst single month inside the last six. A 30% fall concentrated in
+    # one month is a cascade; the same fall spread over six is a re-rating,
+    # and telling them apart is most of the dislocation question.
+    out["worst_month_in_6m"] = None
+    w6 = close.iloc[-126:]
+    if len(w6) >= 60:
+        roll = w6 / w6.shift(21) - 1.0
+        mn = roll.dropna().min()
+        if mn == mn:
+            out["worst_month_in_6m"] = float(-mn) if mn < 0 else 0.0
+
     out["max_drawdown_1y"] = None
     w1 = close.iloc[-252:]
     if len(w1) >= 200:

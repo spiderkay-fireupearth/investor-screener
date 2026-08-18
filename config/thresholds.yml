@@ -626,3 +626,25 @@ composite:
   always_surface_if_passed:
     - greenblatt
     - klarman
+
+# ---------------------------------------------------------------------------
+# Dislocation scan: hard falls the accounts do not explain.
+#
+# This finds a DIVERGENCE — price down sharply while the last published
+# statements are still intact — and then narrows fifteen candidate causes to
+# the ones the price and volume evidence is consistent with. It does NOT
+# identify a cause; nothing in a price series can.
+#
+# Read the caution the app prints with every hit. The commonest reason a stock
+# falls 30% while its filings look healthy is that the filings are stale and
+# the market is right.
+dislocation:
+  fall_6m: -0.30          # the fall that puts a name on the list
+  cliff_share: 0.55       # worst month as a share of the total fall -> cascade
+  alone_gap: -0.20        # underperformance vs its own index -> idiosyncratic
+  heavy_volume: 1.25      # 20d/50d volume -> capitulation or forced selling
+  thin_volume: 0.80       # -> a liquidity vacuum rather than a verdict
+  # Event feeds run only on names that already fell, and are capped so three
+  # APIs cannot turn an 11-minute pipeline into an hour.
+  max_event_lookups: 60
+  use_news: true          # GDELT always; Finnhub only if FINNHUB_API_KEY is set

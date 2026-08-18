@@ -39,6 +39,8 @@ from . import cycle as cyc
 from . import debtcycle as dbt
 from . import commodities as cmd
 from . import reflexivity as rfx
+from . import dislocation as dis
+from . import events as evt
 
 log = logging.getLogger("screener")
 
@@ -548,6 +550,56 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     # region's stored rows are labelled too, and the census covers the whole
     # published table rather than just this run's half of it.
     census = rfx.annotate(merged, metrics_by_ticker)
+    # Only the names that actually fell get an event lookup — three feeds
+    # across 900 names would be thousands of requests for no purpose.
+    dis_cfg = thresholds.get("dislocation") or {}
+    disl = dis.scan(merged, metrics_by_ticker, dis_cfg)
+    try:
+        fallers = [t for t, r in merged.items() if r.get("dislocation")]
+        if fallers:
+            quakes = evt.quake_events(requests.Session())
+            log.info("Quake feed: %s", ", ".join(
+                f"{k}={len(v)}" for k, v in quakes.items()) or "nothing significant")
+            sess = requests.Session()
+            n_cik = 0
+            for t in fallers[:dis_cfg.get("max_event_lookups", 60)]:
+                m = metrics_by_ticker.get(t)
+                if m is None:
+                    continue
+                # CompanyRecord carries no CIK — an earlier version of this
+                # line read `getattr(rec, "cik", None)`, which is None on every
+                # record, and the 8-K feed would have silently never fired.
+                # The provider is the only thing that knows the mapping.
+                cik = None
+                if (merged[t].get("market") or "") == "US":
+                    try:
+                        cik = edgar.cik_for(t)
+                    except Exception:              # noqa: BLE001
+                        cik = None
+                    n_cik += bool(cik)
+                m["_events"] = evt.explain(
+                    sess, t, cik, merged[t].get("market") or "",
+                    quakes, use_news=dis_cfg.get("use_news", True))
+            us_fallers = sum(1 for t in fallers
+                             if (merged[t].get("market") or "") == "US")
+            if us_fallers and not n_cik:
+                log.error("NO CIK resolved for any of the %d US fallers — the "
+                          "8-K feed produced nothing and every name will show "
+                          "an inferred shortlist only", us_fallers)
+            else:
+                log.info("8-K lookup: %d of %d US fallers resolved to a CIK",
+                         n_cik, us_fallers)
+            if len(fallers) > dis_cfg.get("max_event_lookups", 60):
+                log.warning("Event lookup capped at %d of %d fallers — the "
+                            "rest show an inferred shortlist only",
+                            dis_cfg.get("max_event_lookups", 60), len(fallers))
+            disl = dis.scan(merged, metrics_by_ticker, dis_cfg)
+    except Exception as e:                        # noqa: BLE001
+        log.warning("event lookup failed, falling back to inference only: %s", e)
+    screened["dislocation_summary"] = disl
+    log.info("Dislocation: %d names fell >%.0f%% in 6m, %d with intact "
+             "fundamentals", disl["fell_30pct"], abs(disl["threshold"]) * 100,
+             disl["fundamentals_intact"])
     screened["reflexive_census"] = census
     if census:
         log.info("Reflexive stages: %s",

@@ -129,6 +129,8 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                          or (r.get("reflexive") or {}).get("note") or ""),
             "rfx_late": bool((r.get("reflexive") or {}).get("late")),
             "rfx_evidence": "; ".join((r.get("reflexive") or {}).get("evidence") or []),
+            "dis": bool((r.get("dislocation") or {}).get("qualifies")),
+            "dis_note": _dis_tip(r.get("dislocation")),
             "surfaced": bool(r.get("surfaced")),
             "has_report": ticker in report_tickers,
             "themes": r.get("themes") or [],
@@ -184,6 +186,9 @@ h1{font-size:23px;margin:0 0 4px;letter-spacing:-.02em}
 .rfx{font-size:9.5px;font-weight:700;margin-left:5px;padding:1px 5px;border-radius:4px;
 background:var(--panel2);color:var(--tx3);border:1px solid var(--line);cursor:help;
 letter-spacing:.04em}
+.dis{font-size:9.5px;font-weight:700;margin-left:4px;padding:1px 5px;
+border-radius:4px;background:rgba(91,157,255,.16);color:var(--acc);
+border:1px solid rgba(91,157,255,.45);cursor:help;letter-spacing:.03em}
 .rfx.late{background:rgba(226,88,94,.16);color:var(--bad);border-color:rgba(226,88,94,.45)}
 .dalio{background:var(--panel);border:1px solid var(--line);border-radius:10px;
 margin:14px 0;padding:0;overflow:hidden}
@@ -328,6 +333,7 @@ __GATE__
   __THEMEROW__
   <span class="sep"></span>
   <button class="chip" id="techOnly">Technical pass</button>
+  <button class="chip" id="disOnly" title="Down more than 30% in six months while the last published accounts are still intact">Dislocation</button>
   <button class="chip" id="rfxOnly" title="Soros stage DE or EF — price rising through an earnings setback, or expectations run far ahead of reality">Reflexive risk</button>
   <button class="chip on" id="surfOnly">Surfaced only</button>
   <span class="sep"></span>
@@ -365,6 +371,7 @@ const WF_URL = __WFURL__;
 const ISSUE_URL = __ISSUEURL__;
 let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="", fTheme="ALL";
 let fRfx=false;   // Soros stage DE/EF only
+let fDis=false;   // hard fall, accounts intact
 
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 
@@ -379,6 +386,7 @@ function visible(){
       return r.ticker.toLowerCase().includes(q) || r.name.toLowerCase().includes(q);
     }
     if(fRfx && !r.rfx_late) return false;
+    if(fDis && !r.dis) return false;
     if(fSurf && !r.surfaced) return false;
     if(fMkt!=="ALL" && r.market!==fMkt) return false;
     if(fTheme!=="ALL" && !(r.themes||[]).includes(fTheme)) return false;
@@ -512,7 +520,8 @@ function render(){
     // one framework's column.
     const rx = r.rfx && r.rfx!=='EQ'
       ? `<span class="rfx${r.rfx_late?' late':''}" title="${esc(r.rfx_label||'')} — ${esc(r.rfx_note||'')}${r.rfx_evidence?' ['+esc(r.rfx_evidence)+']':''}">${esc(r.rfx)}</span>` : '';
-    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${rx}</td><td class="nm" title="${esc(r.name)}">${esc(r.name)}</td>
+    const dl = r.dis ? `<span class="dis" title="${esc(r.dis_note||'')}">&#8595;30</span>` : '';
+    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${rx}${dl}</td><td class="nm" title="${esc(r.name)}">${esc(r.name)}</td>
       <td><span class="mk">${esc(r.market_label)}</span></td>
       <td class="num">${esc(r.price)}</td><td class="num">${esc(r.mcap_usd)}</td>`;
     for(const [key] of FWS){
@@ -542,6 +551,8 @@ document.getElementById('techOnly').onclick=function(){
   fTech=!fTech; this.classList.toggle('on',fTech); render();};
 document.getElementById('rfxOnly').onclick=function(){
   fRfx=!fRfx; this.classList.toggle('on',fRfx); render();};
+document.getElementById('disOnly').onclick=function(){
+  fDis=!fDis; this.classList.toggle('on',fDis); render();};
 document.getElementById('surfOnly').onclick=function(){
   fSurf=!fSurf; this.classList.toggle('on',fSurf); render();};
 document.getElementById('q').oninput=e=>{fQ=e.target.value; render();};
@@ -573,6 +584,153 @@ def _pct_cell(v, dp=1):
         return '<td class="r">—</td>'
     cls = "up" if v > 0 else ("dn" if v < 0 else "")
     return f'<td class="r {cls}">{v * 100:+.{dp}f}%</td>'
+
+
+
+
+def _dis_tip(d: Optional[Dict[str, Any]]) -> str:
+    """One-line summary of a dislocation, for the badge tooltip."""
+    if not d:
+        return ""
+    bits = [f"down {abs(d['return_6m']):.0%} in 6 months"]
+    for k in ("scope_reading", "shape_reading", "volume_reading"):
+        if d.get(k):
+            bits.append(d[k])
+    if d.get("evidence_grade") == "observed":
+        for e in (d.get("events") or [])[:3]:
+            lab = (", ".join(e.get("labels") or [])
+                   or e.get("title")
+                   or (f"M{e['magnitude']} quake, {e.get('place')}"
+                       if e.get("magnitude") else ""))
+            if lab:
+                bits.append(f"OBSERVED {e.get('source', '')}: {lab}"
+                            + (f" ({e['date']})" if e.get("date") else ""))
+    causes = d.get("candidate_causes") or []
+    if causes:
+        bits.append(("observed cause: " if d.get("evidence_grade") == "observed"
+                     else "consistent with: ")
+                    + ", ".join(f"#{c['n']} {c['name']}" for c in causes[:4])
+                    + ("…" if len(causes) > 4 else ""))
+    return " · ".join(bits)
+
+
+
+def _dislocation_panel(summary: Dict[str, Any]) -> str:
+    """What the Dislocation filter is, and the warning that must travel with it."""
+    if not summary or not summary.get("fell_30pct"):
+        return ""
+    from . import dislocation as _d
+    fell, hits = summary["fell_30pct"], summary["fundamentals_intact"]
+    thr = abs(summary.get("threshold", -0.30))
+    causes = "".join(
+        f'<div class="drow"><span class="k">#{c["n"]} {e_attr(c["name"])}</span>'
+        f'<span class="v"><span class="pill">'
+        f'{"market-wide" if c["scope"] == "market" else "name-specific" if c["scope"] == "name" else "either"}'
+        f' &middot; {c["shape"]}</span></span></div>'
+        for c in _d.CAUSES)
+    return (
+        '<details class="dalio"><summary>'
+        f'<span class="stg">Dislocation &middot; {hits} of {fell} hard falls '
+        f'the accounts do not explain</span>'
+        '<span class="muted-ink">down more than '
+        f'{thr:.0%} in six months, last statements still intact</span>'
+        '<span class="muted-ink" style="margin-left:auto">details &#9662;</span>'
+        '</summary><div class="body">'
+        '<div class="dnote"><b>Read this first.</b> The commonest reason a '
+        'stock falls 30% while its filings look healthy is not panic &mdash; '
+        'it is that the filings are stale and the market is right. Annual '
+        'statements can be a year old; the market prices tomorrow. Every name '
+        'on this list is one where the market disagrees with the last filing, '
+        'and the market usually wins that argument. This is a list of '
+        '<i>questions</i>: read the last three announcements before treating '
+        'any of it as a mispricing.</div>'
+        '<div class="dnote"><b>What the app can and cannot tell you.</b> It can '
+        'establish the <i>divergence</i> &mdash; price down hard, accounts '
+        'intact &mdash; and it can separate a fall the whole market shared from '
+        'one the name took alone, a cascade concentrated in days from a steady '
+        're-rating, and heavy volume from an empty order book. It <b>cannot</b> '
+        'identify a cause. Nothing in a price series can. So each hit narrows '
+        'the fifteen candidates below to the ones the evidence is consistent '
+        'with, and leaves the diagnosis to you.</div>'
+        f'<div class="dgrid"><div class="dcard">'
+        f'<h4>The fifteen candidate causes</h4>{causes}</div></div>'
+        '<div class="dnote"><b>Where the causes come from.</b> Three feeds run '
+        'on the names that fell. <b>SEC 8-K item codes</b> &mdash; free, '
+        'structured, US issuers only; item 5.02 <i>is</i> an officer '
+        'departure, it is not a model guessing from a headline. <b>USGS '
+        'quakes</b>, matched to a market by location. <b>GDELT</b> headlines, '
+        'which narrow but never conclude. A name with an observed event shows '
+        '<b>OBSERVED</b> in its tooltip and its shortlist collapses to what was '
+        'actually seen; a name with none keeps the inferred shortlist. '
+        '<b>Silence is not evidence that nothing happened</b> &mdash; 8-K '
+        'covers US filers only, and news coverage of SGX, SET and IDX names is '
+        'thin, so an empty result says more about the feeds than the company. '
+        'Two codes REMOVE a name outright rather than annotate it: '
+        '<b>4.02</b> (previously issued accounts can no longer be relied on) '
+        'and <b>1.03</b> (bankruptcy) &mdash; because the intact fundamentals '
+        'this screen just measured are, in those cases, fiction.</div>'
+        '</div></details>')
+
+def _reflexive_legend(census: Dict[str, int]) -> str:
+    """A legend for the stage badges, plus the census that keeps them honest.
+
+    Two jobs. First, a two-letter code with no key is a puzzle, not a label.
+    Second — and this is why the counts are shown rather than just the key —
+    a stage that fires on most of the universe has stopped discriminating.
+    Printing the distribution means over-firing is visible on the page rather
+    than something you have to go and audit.
+    """
+    if not census:
+        return ""
+    order = [("AB", "trend unrecognised"), ("BC", "recognition"),
+             ("CD", "tested and held"), ("DE", "conviction through a setback"),
+             ("EF", "expectations excessive"), ("FG", "de-rating"),
+             ("GH", "break, fundamentals following"), ("HI", "pessimism overdone"),
+             ("EQ", "near-equilibrium — framework off")]
+    total = sum(census.values()) or 1
+    bits = []
+    for code, label in order:
+        n = census.get(code, 0)
+        if not n:
+            continue
+        share = n / total
+        cls = "rfx late" if code in ("DE", "EF") else "rfx"
+        bits.append(f'<span class="{cls}">{code}</span>&nbsp;{label} '
+                    f'<b>{n}</b> <span class="muted-ink">({share:.0%})</span>')
+    if not bits:
+        return ""
+
+    # The honesty check, stated on the page.
+    late = census.get("DE", 0) + census.get("EF", 0)
+    warn = ""
+    if late / total > 0.5:
+        warn = ('<div class="dnote"><b>Read this before trusting the badges.</b> '
+                f'{late / total:.0%} of the universe is reading DE or EF. A '
+                'stage that fires on most names is not identifying anything — '
+                'it is describing a market where prices rose faster than '
+                'earnings across the board, which is a fact about the index '
+                'rather than about these companies. Treat the badge as '
+                'contextual until that share falls.</div>')
+    elif census.get("EQ", 0) / total > 0.8:
+        warn = ('<div class="dnote"><span class="muted-ink">Most names show '
+                'no reflexive channel at all, which is the expected result — '
+                'Soros\'s framework describes prices that CHANGE fundamentals, '
+                'and most companies do not transact in their own equity.</span>'
+                '</div>')
+
+    return ('<details class="dalio"><summary>'
+            '<span class="stg">Reflexive stage &middot; what the badges mean</span>'
+            '<span class="muted-ink">Soros\'s boom/bust path, one label per '
+            'name</span><span class="muted-ink" style="margin-left:auto">'
+            'details &#9662;</span></summary><div class="body">'
+            + '<div class="dnote">' + ' &nbsp;&middot;&nbsp; '.join(bits) + '</div>'
+            + warn
+            + '<div class="dnote"><span class="muted-ink">The path runs AB to '
+              'HI. DE is the diagnostic one: price rising through an earnings '
+              'setback near the highs. GH is where reflexivity is confirmed '
+              'rather than asserted, because the earnings deteriorated AFTER '
+              'the price did.</span></div>'
+            '</div></details>')
 
 
 def _commodity_panel(cb: Dict[str, Any]) -> str:
@@ -863,6 +1021,8 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
 
     debt_html = _dalio_panel(screened.get("debt_cycle") or {})
     cmd_html = _commodity_panel(screened.get("commodity_board") or {})
+    rfx_html = _reflexive_legend(screened.get("reflexive_census") or {})
+    dis_html = _dislocation_panel(screened.get("dislocation_summary") or {})
 
     gate = (f'<div class="gate {"open" if open_ else "closed"}">'
             f'<b>Soros macro gate: {"OPEN" if open_ else "CLOSED"}</b> — {reason}.'
@@ -880,7 +1040,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
-            .replace("__GATE__", debt_html + cmd_html + cycle_html + gate)
+            .replace("__GATE__", debt_html + cmd_html + rfx_html + dis_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
             .replace("__TS__", datetime.now(timezone.utc)
