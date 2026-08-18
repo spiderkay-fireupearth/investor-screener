@@ -3394,6 +3394,167 @@ def test_greenblatt_magic_formula():
           rows[0]["key_metrics"]["Earnings yield (EBIT/EV)"] != "—", True)
 
 
+def test_value_growth_style():
+    """The value–growth axis, and the '?' that made it necessary."""
+    from src import style as st, lynch as ly
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    scfg = th["style"]
+
+    # --- the sector tilt ----------------------------------------------------
+    check("technology tilts growth",
+          st.sector_tilt("Technology", "Software - Infrastructure")["direction"],
+          "growth")
+    check("and so does an internet platform whatever its sector",
+          st.sector_tilt("Consumer Cyclical", "Internet Retail")["direction"],
+          "growth")
+    check("banks tilt value",
+          st.sector_tilt("Financial Services", "Banks")["direction"], "value")
+    check("machinery tilts neither way",
+          st.sector_tilt("Industrials", "Machinery")["direction"], "neutral")
+    check("and the tilt explains itself",
+          "priced on what it will earn" in
+          st.sector_tilt("Technology", "Software")["why"], True)
+
+    # --- the axis itself ----------------------------------------------------
+    def rec(t, sector, industry, **mm):
+        r = CompanyRecord(ticker=t, market="HK", currency="HKD",
+                          sector=sector, industry=industry)
+        return r, dict(mm)
+
+    universe = []
+    mets = {}
+    # A spread of cheap, slow names and expensive, fast ones, so the
+    # percentiles have something to rank.
+    for i in range(10):
+        r, mm = rec(f"CHEAP{i}", "Financial Services", "Banks",
+                    ebit_to_ev=0.14 + i * 0.002, fcf_yield=0.11 + i * 0.002,
+                    price_to_book=0.5 + i * 0.02, dividend_yield=0.06,
+                    eps_cagr_lynch=0.01, revenue_cagr_5y=0.01,
+                    revenue_growth_1y=0.01, gross_margin_ttm=0.30)
+        universe.append(r)
+        mets[r.ticker] = mm
+    for i in range(10):
+        r, mm = rec(f"FAST{i}", "Technology", "Software - Infrastructure",
+                    ebit_to_ev=0.02 + i * 0.001, fcf_yield=0.01 + i * 0.001,
+                    price_to_book=9.0 + i * 0.2, dividend_yield=0.0,
+                    eps_cagr_lynch=0.30, revenue_cagr_5y=0.28,
+                    revenue_growth_1y=0.25, gross_margin_ttm=0.75)
+        universe.append(r)
+        mets[r.ticker] = mm
+
+    census = st.assign(universe, mets, scfg)
+    check("cheap slow banks come out on the value side",
+          mets["CHEAP0"]["style"] in ("value", "deep value"), True)
+    check("fast expensive software comes out on the growth side",
+          mets["FAST0"]["style"] in ("growth", "high growth"), True)
+    check("the score is signed, growth positive",
+          mets["FAST0"]["style_score"] > 0 > mets["CHEAP0"]["style_score"], True)
+    check("book-to-price is used, not price-to-book",
+          mets["CHEAP0"]["book_to_price"] > mets["FAST0"]["book_to_price"], True)
+    check("every label carries its evidence",
+          len(mets["FAST0"]["style_evidence"]) >= 5, True)
+    check("including the sector tilt, named separately",
+          any("sector tilt growth" in e for e in mets["FAST0"]["style_evidence"]),
+          True)
+    check("and a sentence a person can read",
+          "percentile for growth" in mets["FAST0"]["style_why"], True)
+    check("the census counts both sides",
+          census["growth_names"] + census["value_names"] > 0, True)
+    check("and says the labels are relative to this universe",
+          "Relative to THIS universe" in census["caveat"], True)
+
+    # Meituan's case, in the user's own words: a technology business is a
+    # growth stock even when its multiples are unremarkable.
+    mt, mtm = rec("3690.HK", "Technology", "Software - Application",
+                  ebit_to_ev=0.05, fcf_yield=0.03, price_to_book=3.0,
+                  dividend_yield=0.0, eps_cagr_lynch=0.10,
+                  revenue_cagr_5y=0.15, revenue_growth_1y=0.12,
+                  gross_margin_ttm=0.35)
+    universe2 = universe + [mt]
+    mets2 = {**{k: dict(v) for k, v in mets.items()}, "3690.HK": mtm}
+    st.assign(universe2, mets2, scfg)
+    check("a technology name lands on the growth side",
+          mets2["3690.HK"]["style"] in ("growth", "high growth"), True)
+    check("and the reason names its sector",
+          "priced on what it will earn" in mets2["3690.HK"]["style_why"], True)
+
+    # A name with nothing to score is UNSCORED, not quietly called blend — a
+    # measured middle and an unmeasured one are different facts.
+    blank, blankm = rec("EMPTY", "Industrials", "Machinery")
+    st.assign(universe + [blank], {**mets, "EMPTY": blankm}, scfg)
+    check("a name with no factors is not called blend", blankm["style"], None)
+    check("it is labelled unscored", blankm["style_label"], "unscored")
+    check("and says why", "no valuation or growth factors" in
+          blankm["style_evidence"][0], True)
+
+    # --- the '?' that prompted this -------------------------------------------
+    # A company with exactly five statements used to classify as "unclassified"
+    # because eps_cagr_5y needs a sixth. It should now find a growth rate.
+    five = CompanyRecord(ticker="FIVE2", market="HK", currency="HKD",
+                         sector="Industrials", industry="Machinery")
+    five.years = [mkyear(2025 - i, revenue=1000.0,
+                         net_income=100.0 * (0.9 ** i),
+                         eps_diluted=1.0 * (0.9 ** i), shares_diluted=100.0,
+                         total_equity=700.0, total_assets=1200.0,
+                         total_debt=150.0, short_term_debt=30.0,
+                         long_term_debt=120.0, cash_and_equivalents=200.0,
+                         current_assets=500.0, current_liabilities=250.0,
+                         inventory=80.0, cfo=150.0, capex=30.0,
+                         depreciation_amortization=40.0,
+                         operating_income=140.0, pretax_income=130.0)
+                  for i in range(5)]
+    five.price, five.market_cap = 10.0, 1000.0
+    m5 = mx.compute_metrics(five)
+    check("five statements no longer produce a question mark",
+          ly.classify(m5, "Industrials", "Machinery")["category"] != "unclassified",
+          True)
+    check("because the classifier now reads the five-year rate",
+          m5["eps_cagr_lynch"] is not None, True)
+
+    # And where even that is missing, one year of revenue growth is used —
+    # noisy, but labelled as such rather than shrugged at.
+    one_year = ly.classify({"revenue_growth_1y": 0.22}, "Industrials", "Tools")
+    check("a single year of revenue growth still yields a category",
+          one_year["category"], "fast_grower")
+    check("with the noise declared",
+          "one year of revenue growth" in one_year["why"], True)
+    check("and a name with truly nothing is still unclassified",
+          ly.classify({}, "Industrials", "Tools")["category"], "unclassified")
+
+    # --- it reaches the page ---------------------------------------------------
+    html = rn.TEMPLATE
+    check("the style badge is rendered", 'class="sty ' in html, True)
+    check("there are value and growth filters",
+          'id="valOnly"' in html and 'id="grwOnly"' in html, True)
+    check("the two filters are mutually exclusive",
+          "fVal=false;document.getElementById('valOnly')" in html, True)
+    check("and survive a copied link", "p.set('style','growth')" in html, True)
+    check("the drawer explains the label", "<b>Style: " in html, True)
+    check("a blend carries no badge, to keep the column quiet",
+          "r.sty !== 'blend'" in html, True)
+
+    panel = rn._lynch_panel({"stalwart": 3}, {}, {}, {}, {},
+                            {"census": {"value": 4, "growth": 6, "blend": 2},
+                             "value_names": 4, "growth_names": 6,
+                             "blend_names": 2, "caveat": "Relative to THIS universe."})
+    check("the panel gains a value-or-growth card",
+          "Value or growth" in panel, True)
+    check("with the split stated", "4 value, 6 growth, 2 blend" in panel, True)
+    check("and the Lynch card is named rather than 'universe split'",
+          "Lynch categories</h4>" in panel, True)
+
+    # Round trip through the store.
+    out = sc.screen_universe(universe2, mets2, th, {}, cycle=None)
+    check("the census reaches the run output",
+          bool(out["style_census"]["census"]), True)
+    stored = out["results"]["3690.HK"]["metrics"]
+    check("the style label is persisted", stored.get("style") is not None, True)
+    check("so is the evidence behind it",
+          bool(stored.get("style_evidence")), True)
+    rows = rn.build_payload({"3690.HK": out["results"]["3690.HK"]}, {}, out)
+    check("and a merged row still carries the badge", bool(rows[0]["sty"]), True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -3427,6 +3588,7 @@ if __name__ == "__main__":
     test_schloss_five_year_window()
     test_sentiment_gauges()
     test_greenblatt_magic_formula()
+    test_value_growth_style()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

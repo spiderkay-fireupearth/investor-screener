@@ -30,6 +30,27 @@ global:
     - Utilities
 
 # ---------------------------------------------------------------------------
+# Value or growth — the other axis. Lynch's categories say what KIND of company
+# a name is; this says what the MARKET is paying for, and therefore what has to
+# go right for the price to work out.
+#
+# Every factor is scored as a percentile across the universe being screened, so
+# the label is RELATIVE to the names in the table rather than absolute. That is
+# how style boxes work generally; change the universe and the labels move.
+#
+# Sector is a legitimate input and enters as a named voter with its own weight:
+# a technology business is priced on what it will earn rather than on what it
+# owns, and that stays true in a year when its multiples happen to look
+# ordinary. The evidence line on each row shows the sector tilt separately, so
+# a name labelled growth purely on its sector can be seen to have been.
+style:
+  bands:
+    deep value: -40      # score at or below this
+    value: -15
+    blend: 15            # below this is blend, at or above is growth
+    growth: 40           # at or above this is high growth
+
+# ---------------------------------------------------------------------------
 buffett:
   label: Quality compounders
   min_tests_passed: 11     # of 16

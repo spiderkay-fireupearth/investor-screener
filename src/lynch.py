@@ -100,9 +100,24 @@ def classify(m: Dict[str, Any], sector: Optional[str] = None,
     its numbers currently say, because the numbers of a cyclical or a
     turnaround are precisely the ones that lie about the category.
     """
-    g = m.get("eps_cagr_5y")
+    # Prefer the five-year window Lynch is now run on. The six-year metric was
+    # the reason so many rows came back "unclassified": a company with exactly
+    # five statements has no year -5 to compare against, so `eps_cagr_5y` is
+    # empty for most of the Asian universe, and the classifier fell through to
+    # the strictest bands for a fencepost reason rather than a real one.
+    g = m.get("eps_cagr_lynch")
+    if not _n(g):
+        g = m.get("eps_cagr_5y")
     if not _n(g):
         g = m.get("revenue_cagr_5y")
+    if not _n(g):
+        # Last resort: a single year of revenue growth. Noisy, and labelled as
+        # such in the reason string, but a noisy label beats a question mark
+        # when the alternative is applying fast-grower bands to a company
+        # nobody has looked at.
+        g = m.get("revenue_growth_1y")
+        if _n(g):
+            m = {**m, "_growth_source": "one year of revenue growth"}
     losses = m.get("loss_years_in_10")
     recent_loss = m.get("loss_years_in_3")
     eps_now = m.get("eps_vs_5y_avg")
@@ -151,13 +166,18 @@ def classify(m: Dict[str, Any], sector: Optional[str] = None,
     # 4–6. The growth bands.
     if not _n(g):
         return _out("unclassified",
-                    "no usable five-year growth rate, so the strictest bands apply")
+                    "no usable growth rate at all — not five years of earnings, "
+                    "not five of revenue, not even one — so the strictest bands "
+                    "apply")
+    src = m.get("_growth_source")
+    tail = f" (measured on {src})" if src else ""
     if g >= 0.20:
-        return _out("fast_grower", f"earnings compounding at {g:.0%} a year")
+        return _out("fast_grower",
+                    f"earnings compounding at {g:.0%} a year{tail}")
     if g >= 0.10:
-        return _out("stalwart", f"earnings compounding at {g:.0%} a year — "
+        return _out("stalwart", f"earnings compounding at {g:.0%} a year{tail} — "
                                 "large and durable rather than fast")
-    why = f"earnings growth of {g:.0%} a year"
+    why = f"earnings growth of {g:.0%} a year{tail}"
     if _n(yld) and yld > 0:
         why += f", paying {yld:.1%}"
     return _out("slow_grower", why)

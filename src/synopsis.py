@@ -50,6 +50,7 @@ SYNOPSIS_FIELDS = (
     "owner_earnings_to_net_income", "intrinsic_value_per_share",
     "margin_of_safety", "net_margin_ttm", "gross_margin_ttm",
     "one_dollar_premise",
+    "style", "style_label", "style_why", "style_score",
 )
 
 MAX_DESCRIPTION_CHARS = 260
@@ -285,8 +286,12 @@ def _buffett(m: Dict[str, Any]) -> List[str]:
 
 
 def _category(m: Dict[str, Any]) -> List[str]:
-    """Lynch's label, and the warning that only a label makes possible."""
+    """Lynch's label, the style label, and the warning a label makes possible."""
     out = []
+    sty, why = _g(m, "style"), _g(m, "style_why")
+    if sty and sty != "blend":
+        out.append(f"On the value–growth axis it reads {why}."
+                   if why else f"On the value–growth axis it reads {sty}.")
     lab, why = _g(m, "lynch_category_label"), _g(m, "lynch_category_why")
     if lab:
         line = f"Lynch would file this as a {lab.lower()}"

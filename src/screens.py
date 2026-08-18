@@ -24,6 +24,7 @@ import numpy as np
 from . import buffett as _bf
 from . import lynch as _lynch
 from . import reflexivity as rfx
+from . import style as _style
 from . import synopsis as syn
 
 log = logging.getLogger(__name__)
@@ -558,6 +559,8 @@ def screen_universe(records: List[Any],
     add_relative_value(records, metrics_by_ticker)
     value_regime = set_value_regime(
         metrics_by_ticker, thresholds.get("schloss", {}))
+    style_census = _style.assign(records, metrics_by_ticker,
+                                 thresholds.get("style", {}))
     buffett_valuation = add_buffett_valuation(
         records, metrics_by_ticker, macro, thresholds.get("buffett", {}))
 
@@ -693,6 +696,7 @@ def screen_universe(records: List[Any],
         "value_regime": value_regime,
         "buffett_valuation": buffett_valuation,
         "magic_formula": magic_formula,
+        "style_census": style_census,
         "lynch_census": lynch_census(metrics_by_ticker),
         # Lynch's macro sanity check, computed on this screener's own US rows
         # so the gauge and the table are struck on the same numbers.

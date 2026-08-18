@@ -79,6 +79,12 @@ DISPLAY_METRICS = (
     "ebit_to_ev_greenblatt", "ebit_to_invested_capital_greenblatt",
     "enterprise_value_greenblatt", "invested_capital_greenblatt",
     "excess_cash", "greenblatt_working_capital_floored",
+    # The value/growth axis. `style_evidence` is a list rather than a scalar —
+    # it is what stops the badge being an assertion.
+    "style", "style_label", "style_score", "style_why", "style_evidence",
+    "style_sector_tilt", "style_value_side", "style_growth_side",
+    "book_to_price", "revenue_cagr_5y", "revenue_growth_1y",
+    "eps_cagr_lynch", "eps_cagr_lynch_years", "peg_ratio_lynch",
 )
 
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
@@ -243,6 +249,12 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             "cat_label": m.get("lynch_category_label"),
             "cat_why": m.get("lynch_category_why") or "",
             "cat_warn": m.get("lynch_peak_earnings_warning") or "",
+            # Value or growth: the other axis, and the one that says what has
+            # to go right for the price to work out.
+            "sty": m.get("style"),
+            "sty_score": m.get("style_score"),
+            "sty_why": m.get("style_why") or "",
+            "sty_ev": m.get("style_evidence") or [],
             # Buffett's three business tenets, as a label plus its evidence.
             "b": bool(m.get("buffett_b_label")),
             "b_summary": m.get("buffett_tenets_summary") or "",
@@ -287,6 +299,8 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "RS 6m vs index": _fmt_num(m.get("rs_vs_market_index_6m"), 1, pct=True),
                 # Lynch
                 "Lynch category": m.get("lynch_category_label") or "—",
+                "Style": (m.get("style_label") or "—").title(),
+                "Style score": _fmt_num(m.get("style_score"), 0),
                 "PEGY": _fmt_num(m.get("pegy_ratio")),
                 "Growth+yield ÷ P/E": _fmt_num(m.get("growth_plus_yield_to_pe")),
                 "Dividend yield": _fmt_num(m.get("dividend_yield"), 1, pct=True),
@@ -381,6 +395,13 @@ letter-spacing:.04em}
 .cat.turnaround{background:rgba(226,88,94,.14);color:var(--bad);border-color:rgba(226,88,94,.4)}
 .cat.fast_grower{background:rgba(63,191,127,.13);color:var(--ok);border-color:rgba(63,191,127,.38)}
 .cat.warnflag{background:rgba(226,88,94,.2);color:var(--bad);border-color:rgba(226,88,94,.5)}
+.sty{font-size:9.5px;font-weight:700;margin-left:4px;padding:1px 5px;border-radius:4px;
+background:var(--panel2);color:var(--tx2);border:1px solid var(--line);cursor:help;
+letter-spacing:.04em}
+.sty.growth,.sty.highgrowth{background:rgba(91,157,255,.16);color:var(--acc);
+border-color:rgba(91,157,255,.45)}
+.sty.value,.sty.deepvalue{background:rgba(63,191,127,.13);color:var(--ok);
+border-color:rgba(63,191,127,.38)}
 .blab{font-size:10px;font-weight:800;margin-left:4px;padding:1px 6px;border-radius:4px;
 background:rgba(63,191,127,.18);color:var(--ok);border:1px solid rgba(63,191,127,.5);
 cursor:help;letter-spacing:.04em}
@@ -536,6 +557,8 @@ __GATE__
   <button class="chip" id="techOnly">Technical pass</button>
   <button class="chip" id="disOnly" title="Every name down more than 30% over six months, whatever the reason">Fell &gt;30% (6m)</button>
   <button class="chip" id="disQual" title="Of those, the ones whose last published accounts do NOT explain the fall">&hellip; accounts intact</button>
+  <button class="chip" id="valOnly" title="Priced on assets in place and current cash — cheap against earnings, book or cash flow relative to the rest of this universe">Value</button>
+  <button class="chip" id="grwOnly" title="Priced on what it will earn rather than on what it owns — technology and related industries carry a growth tilt by sector">Growth</button>
   <button class="chip" id="bOnly" title="Buffett's three business tenets: inside the circle of competence you declared, showing the footprint of a durable moat, and with a consistent operating history">B &mdash; business tenets</button>
   <button class="chip" id="rfxOnly" title="Soros stage DE or EF — price rising through an earnings setback, or expectations run far ahead of reality">Reflexive risk</button>
   <button class="chip on" id="surfOnly">Surfaced only</button>
@@ -571,6 +594,7 @@ Macro: FRED. Not investment advice — a screen is a starting point for research
 const DATA = __DATA__;
 const FWS = __FWS__;
 const CATS = __CATS__;
+const STY = __STY__;
 const WF_URL = __WFURL__;
 const ISSUE_URL = __ISSUEURL__;
 let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="", fTheme="ALL";
@@ -578,6 +602,8 @@ let fRfx=false;   // Soros stage DE/EF only
 let fDis=false;   // fell >30% in 6m
 let fDisQ=false;  // ...and the accounts do not explain it
 let fB=false;     // Buffett's three business tenets
+let fVal=false;   // value stocks
+let fGrw=false;   // growth stocks
 
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 
@@ -592,6 +618,8 @@ function visible(){
       return r.ticker.toLowerCase().includes(q) || r.name.toLowerCase().includes(q);
     }
     if(fB && !r.b) return false;
+    if(fVal && !(r.sty==='value'||r.sty==='deep value')) return false;
+    if(fGrw && !(r.sty==='growth'||r.sty==='high growth')) return false;
     if(fRfx && !r.rfx_late) return false;
     if(fDis && !r.dis_fell) return false;
     if(fDisQ && !r.dis) return false;
@@ -612,6 +640,8 @@ function syncUrl(){
   if(fFw.size) p.set('pass',[...fFw].join(','));
   if(fTech) p.set('tech','1');
   if(fB) p.set('b','1');
+  if(fVal) p.set('style','value');
+  if(fGrw) p.set('style','growth');
   if(!fSurf) p.set('all','1');
   if(fQ.trim()) p.set('q',fQ.trim());
   const s=p.toString();
@@ -633,6 +663,9 @@ function loadUrl(){
     const b=document.querySelector(`[data-fw="${k}"]`); if(b) b.classList.add('on'); });
   if(p.get('tech')==='1'){ fTech=true; document.getElementById('techOnly').classList.add('on'); }
   if(p.get('b')==='1'){ fB=true; document.getElementById('bOnly').classList.add('on'); }
+  const sty=p.get('style');
+  if(sty==='value'){ fVal=true; document.getElementById('valOnly').classList.add('on'); }
+  if(sty==='growth'){ fGrw=true; document.getElementById('grwOnly').classList.add('on'); }
   if(p.get('all')==='1'){ fSurf=false; document.getElementById('surfOnly').classList.remove('on'); }
   const q=p.get('q');
   if(q){ fQ=q; document.getElementById('q').value=q; }
@@ -697,6 +730,16 @@ function detail(r){
     h+='<div class="tagrow">'+r.themes.map(t=>`<span class="tag">${esc(t)}</span>`).join('')+'</div>';
   // Lynch's category decides which bar this row was judged against, so it is
   // stated before the panels rather than buried inside one of them.
+  // Value or growth, with the percentiles that produced it. The badge is one
+  // letter; this is where the letter has to justify itself.
+  if(r.sty_why)
+    h+='<div class="note" style="border-left-color:var(--tx3)"><b>Style: '
+      +esc((r.sty||'').charAt(0).toUpperCase()+(r.sty||'').slice(1))+'.</b> '
+      +esc(r.sty_why)
+      +(r.sty_ev && r.sty_ev.length
+        ? '<div style="font-size:11.5px;color:var(--tx3);margin-top:6px">'
+          +r.sty_ev.map(esc).join(' &nbsp;&middot;&nbsp; ')+'</div>' : '')
+      +'</div>';
   if(r.cat_label)
     h+='<div class="note" style="border-left-color:var(--tx3)"><b>Lynch category: '
       +esc(r.cat_label)+'.</b> '+esc(r.cat_why)+'. The Lynch panel below is scored '
@@ -790,7 +833,12 @@ function render(){
     // it is: a business you could understand, protected, and boringly steady.
     const bl = r.b
       ? `<span class="blab" title="${esc(r.b_summary)}">B</span>` : '';
-    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${bl}${ct}${rx}${dl}</td><td class="nm" title="${esc(r.name)}${r.syn&&r.syn.one_liner?' — '+esc(r.syn.one_liner):''}">${esc(r.name)}</td>
+    // Value or growth, in one letter. V, G, and nothing at all for a blend —
+    // the middle is where most of the market lives and badging it would be
+    // noise on every second row.
+    const st = r.sty && r.sty !== 'blend' && r.sty !== 'unscored'
+      ? `<span class="sty ${r.sty.replace(' ','')}" title="${esc(r.sty_why||'')}${r.sty_ev&&r.sty_ev.length?' ['+esc(r.sty_ev.join(', '))+']':''}">${STY[r.sty]||'?'}</span>` : '';
+    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${bl}${st}${ct}${rx}${dl}</td><td class="nm" title="${esc(r.name)}${r.syn&&r.syn.one_liner?' — '+esc(r.syn.one_liner):''}">${esc(r.name)}</td>
       <td><span class="mk">${esc(r.market_label)}</span></td>
       <td class="num">${esc(r.price)}</td><td class="num">${esc(r.mcap_usd)}</td>`;
     for(const [key] of FWS){
@@ -820,6 +868,12 @@ document.getElementById('techOnly').onclick=function(){
   fTech=!fTech; this.classList.toggle('on',fTech); render();};
 document.getElementById('rfxOnly').onclick=function(){
   fRfx=!fRfx; this.classList.toggle('on',fRfx); render();};
+document.getElementById('valOnly').onclick=function(){
+  fVal=!fVal; if(fVal){fGrw=false;document.getElementById('grwOnly').classList.remove('on');}
+  this.classList.toggle('on',fVal); render();};
+document.getElementById('grwOnly').onclick=function(){
+  fGrw=!fGrw; if(fGrw){fVal=false;document.getElementById('valOnly').classList.remove('on');}
+  this.classList.toggle('on',fGrw); render();};
 document.getElementById('bOnly').onclick=function(){
   fB=!fB; this.classList.toggle('on',fB); render();};
 document.getElementById('disOnly').onclick=function(){
@@ -1259,6 +1313,11 @@ def _buffett_indicator_line(bi: Dict[str, Any]) -> str:
             f'<span class="muted-ink">{e_attr(bi["caveat"])}</span></div>')
 
 
+STYLES_ORDER = ("deep value", "value", "blend", "growth", "high growth")
+
+STYLE_SHORT = {"deep value": "VV", "value": "V", "blend": "—",
+               "growth": "G", "high growth": "GG"}
+
 CAT_SHORT = {"fast_grower": "FG", "stalwart": "SW", "slow_grower": "SG",
              "cyclical": "CY", "turnaround": "TA", "asset_play": "AP",
              "unclassified": "?"}
@@ -1267,7 +1326,8 @@ CAT_SHORT = {"fast_grower": "FG", "stalwart": "SW", "slow_grower": "SG",
 def _lynch_panel(census: Dict[str, int], regime: Dict[str, Any],
                  rule20: Optional[Dict[str, Any]] = None,
                  buffett_ind: Optional[Dict[str, Any]] = None,
-                 b_count: Optional[Dict[str, Any]] = None) -> str:
+                 b_count: Optional[Dict[str, Any]] = None,
+                 style: Optional[Dict[str, Any]] = None) -> str:
     """Lynch's six categories across the universe, plus Schloss's value regime.
 
     Both are published for the same reason: they change how every row below is
@@ -1288,6 +1348,22 @@ def _lynch_panel(census: Dict[str, int], regime: Dict[str, Any],
     elif rule20.get("reason"):
         r20 = '<span class="pill">Rule of 20 unavailable</span>'
     order = [c for c in ly.CATEGORIES if census.get(c)]
+    sty = style or {}
+    sty_cells = ""
+    if sty.get("census"):
+        sty_order = [k for k in STYLES_ORDER if sty["census"].get(k)]
+        tot = sum(sty["census"].values()) or 1
+        sty_cells = "".join(
+            f'<div class="drow"><span class="k">{e_attr(k.title())} '
+            f'<span class="pill">{STYLE_SHORT.get(k, "?")}</span></span>'
+            f'<span class="v">{sty["census"][k]} · '
+            f'{sty["census"][k] / tot:.0%}</span></div>'
+            for k in sty_order)
+        if sty["census"].get("unscored"):
+            sty_cells += (
+                f'<div class="drow"><span class="k muted-ink">Unscored</span>'
+                f'<span class="v muted-ink">{sty["census"]["unscored"]}</span>'
+                '</div>')
     cells = "".join(
         f'<div class="drow"><span class="k">{e_attr(ly.LABELS[c])} '
         f'<span class="pill">{CAT_SHORT[c]}</span></span>'
@@ -1316,6 +1392,11 @@ def _lynch_panel(census: Dict[str, int], regime: Dict[str, Any],
     elif rule20.get("reason"):
         notes.append('<span class="muted-ink">Rule of 20 not computed: '
                      + e_attr(str(rule20["reason"])) + '.</span>')
+    if sty.get("caveat"):
+        notes.append(
+            f'<b>{sty.get("value_names", 0)} value, '
+            f'{sty.get("growth_names", 0)} growth, '
+            f'{sty.get("blend_names", 0)} blend.</b> ' + sty["caveat"])
     notes.append(
         'Lynch looked for names institutions had <em>not</em> found — under '
         '15–20% institutional ownership. This universe is built from index '
@@ -1363,8 +1444,10 @@ def _lynch_panel(census: Dict[str, int], regime: Dict[str, Any],
         'the bar each name is judged against</span>'
         '<span class="muted-ink" style="margin-left:auto">details &#9662;</span>'
         '</summary><div class="body"><div class="dgrid">'
-        f'<div class="dcard"><h4>Universe split</h4>{cells}</div>'
-        '<div class="dcard"><h4>What each is judged on</h4>'
+        f'<div class="dcard"><h4>Lynch categories</h4>{cells}</div>'
+        + (f'<div class="dcard"><h4>Value or growth</h4>{sty_cells}</div>'
+           if sty_cells else '')
+        + '<div class="dcard"><h4>What each is judged on</h4>'
         + "".join(f'<div class="drow"><span class="k">{e_attr(ly.LABELS[c])}</span>'
                   f'<span class="v" style="text-align:left;max-width:60%">'
                   f'{e_attr(ly.RATIONALE[c])}</span></div>'
@@ -1670,7 +1753,8 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                             screened.get("value_regime") or {},
                             screened.get("rule_of_20") or {},
                             screened.get("buffett_indicator") or {},
-                            screened.get("buffett_valuation") or {})
+                            screened.get("buffett_valuation") or {},
+                            screened.get("style_census") or {})
 
     gate = (f'<div class="gate {"open" if open_ else "closed"}">'
             f'<b>Soros macro gate: {"OPEN" if open_ else "CLOSED"}</b> — {reason}.'
@@ -1683,6 +1767,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__DATA__", json.dumps(rows, default=str))
             .replace("__FWS__", json.dumps(FRAMEWORKS))
             .replace("__CATS__", json.dumps(CAT_SHORT))
+            .replace("__STY__", json.dumps(STYLE_SHORT))
             .replace("__WFURL__", json.dumps(wf_url))
             .replace("__ISSUEURL__", json.dumps(issue_url))
             .replace("__MKTCHIPS__", mkt_chips)
