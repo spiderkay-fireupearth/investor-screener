@@ -20,6 +20,32 @@ FRAMEWORKS = [
     ("rogers", "Rogers"), ("graham", "Graham"),
 ]
 
+
+# Every metric key the payload displays. This list is the CONTRACT between the
+# renderer and the store: `screens.py` persists exactly these with each result,
+# because a row merged in from the other region's last run has no live metrics
+# dict behind it and falls back to the stored copy.
+#
+# It used to be hand-maintained inside screens.py, and drifted twice — the
+# returns and the RSI reading were both added to the display and forgotten
+# here, so every merged row rendered them as "—" while the live rows showed
+# them. A silent dash is indistinguishable from missing data, which is the
+# worst possible failure for a screener whose whole discipline is making
+# missing data visible. There is now a test that reads build_payload's source
+# and fails if it touches a key this list does not contain.
+DISPLAY_METRICS = (
+    "pe_ttm", "price_to_tangible_book", "price_to_book", "ev_to_ebit",
+    "roe_ttm", "roic_5y_avg", "debt_to_equity", "fcf_yield", "peg_ratio",
+    "eps_cagr_5y", "rsi_14", "price_above_sma200", "sma50_above_sma200",
+    "history_years", "rs_vs_market_index_6m", "pct_above_5y_low",
+    "pct_below_52w_high", "net_cash_to_market_cap", "ncav_to_market_cap",
+    "statement_currency", "macd_histogram", "atr_pct_percentile",
+    # returns and the RSI reading — the two that drifted
+    "return_3m", "return_6m", "return_12m", "worst_month_in_6m",
+    "rsi_label", "rsi_regime", "rsi_note", "rsi_divergence",
+    "rsi_divergence_note",
+)
+
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
                  "HK": "HKEX", "TH": "SET", "ID": "IDX"}
 

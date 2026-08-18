@@ -1859,6 +1859,72 @@ def test_rsi_reading():
     check("and a note", bool(t["rsi_note"]), True)
 
 
+
+def test_display_metric_contract():
+    """Every metric the renderer displays must also be persisted.
+
+    A row merged in from the other region's last run has no live metrics dict,
+    so it falls back to the stored `key_metrics`. If the display reads a key
+    the store never wrote, that row shows "—" while an identical live row
+    shows a number — and a dash is indistinguishable from genuinely missing
+    data, which is the one thing this app is built never to do.
+
+    This drifted twice (returns, then the RSI reading), so it is now checked
+    structurally rather than by memory.
+    """
+    import inspect
+    src = inspect.getsource(rn.build_payload)
+    used = set(re.findall(r'm\.get\(\s*"([a-z0-9_]+)"', src))
+    declared = set(rn.DISPLAY_METRICS)
+    missing = sorted(used - declared)
+    check("every displayed metric is persisted", missing, [])
+    check("the contract is not empty", len(declared) > 20, True)
+
+    # The two that actually drifted, pinned by name.
+    for k in ("return_6m", "return_3m", "return_12m", "worst_month_in_6m",
+              "rsi_label", "rsi_regime", "rsi_note", "rsi_divergence"):
+        check(f"{k} is persisted", k in declared, True)
+
+    # screens.py must use the shared list, not its own copy.
+    sc_src = open("src/screens.py").read()
+    check("screens.py imports the contract",
+          "from .render import DISPLAY_METRICS" in sc_src, True)
+    check("and no longer keeps a private list",
+          'key_metrics = {k: m.get(k) for k in (\n' in sc_src, False)
+
+    # End to end: a stored row must render the same fields as a live one.
+    rec = CompanyRecord(ticker="Z1", market="HK", currency="HKD",
+                        years=[mkyear(2025 - i, revenue=1000.0, net_income=100.0,
+                                      eps_diluted=1.0, shares_diluted=100.0,
+                                      total_equity=800.0, total_assets=1200.0,
+                                      cfo=150.0, capex=30.0,
+                                      current_assets=400.0,
+                                      current_liabilities=200.0,
+                                      operating_income=140.0,
+                                      pretax_income=130.0) for i in range(4)])
+    rec.price, rec.market_cap = 10.0, 1000.0
+    rec.technicals = {"rsi_14": 48.6, "return_6m": -0.12, "return_3m": 0.04,
+                      "return_12m": 0.15, "worst_month_in_6m": 0.09,
+                      "rsi_label": "bearish zone", "rsi_regime": "ranging",
+                      "rsi_note": "downward momentum, but moderating",
+                      "price_above_sma200": 1, "rs_vs_market_index_6m": 0.15}
+    m = mx.compute_metrics(rec)
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    out = sc.screen_universe([rec], {"Z1": m}, th, {}, cycle=None)
+    stored = out["results"]["Z1"]["metrics"]
+    check("the stored copy carries the 6-month return",
+          stored.get("return_6m"), -0.12)
+    check("and the RSI label", stored.get("rsi_label"), "bearish zone")
+
+    # Render from the STORED copy only, exactly as a merged row does.
+    rows = rn.build_payload({"Z1": out["results"]["Z1"]}, {}, out)
+    km = rows[0]["key_metrics"]
+    check("a merged row shows its 6-month return, not a dash",
+          km["Return 6m"], "-12.0%")
+    check("and its RSI reading", "bearish zone" in km["RSI(14)"], True)
+    check("and its RSI context", "ranging" in km["RSI context"], True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -1881,6 +1947,7 @@ if __name__ == "__main__":
     test_dislocation()
     test_events()
     test_rsi_reading()
+    test_display_metric_contract()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

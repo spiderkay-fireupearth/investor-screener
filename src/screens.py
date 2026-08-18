@@ -444,14 +444,10 @@ def screen_universe(records: List[Any],
         # merged row has no live metrics dict behind it — without this, half the
         # table renders every key metric as "—" and the 200-day-MA field
         # contradicts the technical test card sitting right beside it.
-        key_metrics = {k: m.get(k) for k in (
-            "pe_ttm", "price_to_tangible_book", "price_to_book", "ev_to_ebit",
-            "roe_ttm", "roic_5y_avg", "debt_to_equity", "fcf_yield", "peg_ratio",
-            "eps_cagr_5y", "rsi_14", "price_above_sma200", "sma50_above_sma200",
-            "history_years",
-            "rs_vs_market_index_6m", "pct_above_5y_low", "pct_below_52w_high",
-            "net_cash_to_market_cap", "ncav_to_market_cap", "statement_currency",
-            "macd_histogram", "atr_pct_percentile")}
+        # The list lives in render.py, next to the code that consumes it, so
+        # adding a metric to the display cannot silently fail to persist it.
+        from .render import DISPLAY_METRICS
+        key_metrics = {k: m.get(k) for k in DISPLAY_METRICS}
 
         results[rec.ticker] = {
             "ticker": rec.ticker,
