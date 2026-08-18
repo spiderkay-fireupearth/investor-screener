@@ -488,6 +488,15 @@ lynch:
       threshold: 0.15
       operator: gte
       min_history_years: 5
+      # Five statements clear the gate, but a missing EPS line inside those
+      # five leaves no rate to test. That is the feed's gap, not the company's
+      # failing, so it is excluded and the bar scales — the same treatment a
+      # short history gets. Without this a name would clear the five-year gate
+      # and then be FAILED for the data that gate was checking for.
+      skip_if_missing: true
+      missing_note: >-
+        five years of statements are on file but they carry no usable earnings
+        series, so no growth rate could be struck
       by: lynch_category
       cases:
         stalwart:
@@ -512,6 +521,10 @@ lynch:
       threshold: 0.30             # above 30% Lynch turned cautious, not greedy
       operator: lte
       min_history_years: 5
+      skip_if_missing: true
+      missing_note: >-
+        five years of statements are on file but they carry no usable earnings
+        series, so no growth rate could be struck
       by: lynch_category
       cases:
         cyclical:

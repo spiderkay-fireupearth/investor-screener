@@ -3647,6 +3647,105 @@ def test_technical_charts():
           ".chart.wide>svg{height:" in html, True)
 
 
+def test_lynch_never_asks_for_six_years():
+    """A structural guard: no Lynch test may need more than five statements.
+
+    This is pinned rather than remembered because the failure is invisible on
+    the page. A six-year requirement does not show as an error — it shows as a
+    tidy amber note reading "needs 6y of statements, have 5", three tests
+    quietly leaving the denominator, and a bar scaled down to match. The card
+    looks correct while measuring a third less than it claims to.
+    """
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    lyn = th["lynch"]["tests"]
+
+    worst = 0
+    for name, spec in lyn.items():
+        need = spec.get("min_history_years") or 0
+        check(f"{name} needs no more than five years", need <= 5, True)
+        worst = max(worst, need)
+        for cname, case in (spec.get("cases") or {}).items():
+            if isinstance(case, dict) and "min_history_years" in case:
+                check(f"{name}/{cname} likewise",
+                      case["min_history_years"] <= 5, True)
+    check("nothing in the whole framework asks for six", worst <= 5, True)
+
+    # And the metrics those tests read must be computable from five statements.
+    for name in ("valuation", "growth_floor", "growth_ceiling"):
+        check(f"{name} reads the five-year metric",
+              lyn[name]["metric"].endswith("_lynch"), True)
+
+    # End to end on exactly five statements — the case in the screenshot.
+    rec = CompanyRecord(ticker="G5", market="HK", currency="HKD",
+                        sector="Industrials", industry="Machinery")
+    rec.years = [mkyear(2025 - i, revenue=1000.0,
+                        net_income=100.0 * (1.12 ** -i),
+                        eps_diluted=1.0 * (1.12 ** -i), shares_diluted=100.0,
+                        total_equity=700.0, total_assets=1200.0,
+                        total_debt=150.0, short_term_debt=30.0,
+                        long_term_debt=120.0, cash_and_equivalents=200.0,
+                        current_assets=500.0, current_liabilities=250.0,
+                        inventory=80.0, cfo=150.0, capex=30.0,
+                        depreciation_amortization=40.0,
+                        operating_income=140.0, pretax_income=130.0)
+                 for i in range(5)]
+    rec.price, rec.market_cap = 10.0, 1000.0
+    m = mx.compute_metrics(rec)
+    out = sc.screen_universe([rec], {"G5": m}, th, {}, cycle=None)
+    tests = {t["name"]: t
+             for t in out["results"]["G5"]["frameworks"]["lynch"]["tests"]}
+    for name in ("valuation", "growth_floor", "growth_ceiling"):
+        check(f"{name} is evaluated on five statements",
+              tests[name]["result"] is not None, True)
+        check(f"and {name} carries no history complaint",
+              "needs 6y" in (tests[name].get("note") or ""), False)
+
+    # The gap this closes: five statements that clear the gate but carry no
+    # usable earnings line. Excluded, not failed — a name must never clear the
+    # five-year gate and then be marked down for the very data that gate checks.
+    blank = CompanyRecord(ticker="G5B", market="HK", currency="HKD",
+                          sector="Industrials", industry="Machinery")
+    blank.years = [mkyear(2025 - i, revenue=1000.0, shares_diluted=100.0,
+                          total_equity=700.0, total_assets=1200.0,
+                          total_debt=150.0, short_term_debt=30.0,
+                          cash_and_equivalents=200.0, current_assets=500.0,
+                          current_liabilities=250.0, inventory=80.0,
+                          cfo=150.0, capex=30.0, operating_income=140.0)
+                   for i in range(5)]
+    blank.price, blank.market_cap = 10.0, 1000.0
+    mb = mx.compute_metrics(blank)
+    check("with no earnings line there is no growth rate",
+          mb["eps_cagr_lynch"], None)
+    outb = sc.screen_universe([blank], {"G5B": mb}, th, {}, cycle=None)
+    tb = {t["name"]: t
+          for t in outb["results"]["G5B"]["frameworks"]["lynch"]["tests"]}
+    check("the growth floor is excluded, not failed",
+          tb["growth_floor"].get("not_applicable"), True)
+    check("the ceiling likewise",
+          tb["growth_ceiling"].get("not_applicable"), True)
+    # That name classified as a slow grower, so the CATEGORY route excluded the
+    # floor first and its note says so. The missing-data route is checked
+    # directly, on a category that does ask for a growth rate.
+    direct = sc.evaluate_test(
+        "growth_floor", lyn["growth_floor"],
+        {"history_years": 5, "lynch_category": "fast_grower"})
+    check("a fast grower with no earnings series is excluded too",
+          direct.get("not_applicable"), True)
+    check("and says the feed carried no earnings series",
+          "no usable earnings series" in (direct.get("note") or ""), True)
+    check("rather than complaining about the number of years",
+          "needs" in (direct.get("note") or ""), False)
+
+    # Buffett and Graham DO legitimately need six: both compare a value today
+    # against the same value five years back, which takes six data points.
+    # They are left alone deliberately, and that is pinned too so a future
+    # sweep does not "fix" arithmetic that was never broken.
+    check("Buffett's share-count test still needs six, correctly",
+          th["buffett"]["tests"]["share_count_discipline"]["min_history_years"], 6)
+    check("and so does the one-dollar premise",
+          th["buffett"]["tests"]["one_dollar_premise"]["min_history_years"], 6)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -3682,6 +3781,7 @@ if __name__ == "__main__":
     test_greenblatt_magic_formula()
     test_value_growth_style()
     test_technical_charts()
+    test_lynch_never_asks_for_six_years()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")
