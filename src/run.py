@@ -46,8 +46,8 @@ log = logging.getLogger("screener")
 
 REGION_MARKETS = {
     "us": ["US"],
-    "asia": ["JP", "SG", "HK", "TH", "ID"],
-    "all": ["US", "JP", "SG", "HK", "TH", "ID"],
+    "asia": ["JP", "SG", "HK", "TH", "ID", "MY"],
+    "all": ["US", "JP", "SG", "HK", "TH", "ID", "MY"],
 }
 
 
@@ -148,7 +148,13 @@ def wikipedia_constituents(url: str, suffix: str = "",
 
     for t in tables:
         cols = {str(c).strip().lower(): c for c in t.columns}
-        col = next((cols[k] for k in ("code", "ticker", "symbol", "ticker symbol")
+        # Column naming is not standardised across Wikipedia's index pages.
+        # Bursa Malaysia's table calls it "Stock Code"; without that spelling
+        # the fetch returns nothing and silently falls back to the seed list,
+        # which is exactly the S&P failure mode from earlier in this project.
+        col = next((cols[k] for k in ("code", "ticker", "symbol",
+                                      "ticker symbol", "stock code",
+                                      "stock symbol", "sehk code", "scrip")
                     if k in cols), None)
         if col is None:
             continue
@@ -167,7 +173,8 @@ def wikipedia_constituents(url: str, suffix: str = "",
     return []
 
 
-SUFFIX_MARKET = {".T": "JP", ".SI": "SG", ".HK": "HK", ".BK": "TH", ".JK": "ID"}
+SUFFIX_MARKET = {".T": "JP", ".SI": "SG", ".HK": "HK", ".BK": "TH",
+                 ".JK": "ID", ".KL": "MY"}
 
 
 def theme_map(universe_cfg: Dict) -> Dict[str, List[str]]:

@@ -47,7 +47,8 @@ DISPLAY_METRICS = (
 )
 
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
-                 "HK": "HKEX", "TH": "SET", "ID": "IDX"}
+                 "HK": "HKEX", "TH": "SET", "ID": "IDX",
+                 "MY": "Bursa Malaysia"}
 
 
 def _fmt_num(v, dp=2, pct=False, money=False):

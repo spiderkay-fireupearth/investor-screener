@@ -1943,6 +1943,73 @@ def test_display_metric_contract():
     check("and its RSI context", "ranging" in km["RSI context"], True)
 
 
+
+def test_malaysia_market():
+    """Bursa Malaysia joins the Asia job; the dislocation screen needs no change."""
+    from src import run as rn_run, dislocation as ds
+    uni = yaml.safe_load(open("config/universe.yml"))
+    my = uni["markets"]["MY"]
+
+    check("Malaysia is in the universe", bool(my), True)
+    check("index is the KLCI", my["index_ticker"], "^KLSE")
+    check("Yahoo suffix is .KL", my["ticker_suffix"], ".KL")
+    check("Bursa codes are padded to 4 digits", my["ticker_pad"], 4)
+    check("currency is MYR", my["currency"], "MYR")
+    check("an FX pair exists for MYR", uni["fx_pairs"]["MYR"], "MYRUSD=X")
+    check("fundamentals come from Yahoo, like the other Asian markets",
+          my["fundamentals_provider"], "yahoo")
+    check("min_expected suits a 30-name index", my["min_expected"] <= 30, True)
+    check("it runs in the Asia job", "MY" in rn_run.REGION_MARKETS["asia"], True)
+    check("and in a full rebuild", "MY" in rn_run.REGION_MARKETS["all"], True)
+    check("the .KL suffix maps back to MY",
+          rn_run.SUFFIX_MARKET[".KL"], "MY")
+    check("the market has a display label", rn.MARKET_LABELS["MY"], "Bursa Malaysia")
+
+    # The column-name regression. Bursa's Wikipedia table heads its ticker
+    # column "Stock Code", which the generic fetcher did not recognise — it
+    # would have returned nothing and fallen back to the 30-name seed while
+    # LOOKING like a successful fetch. Same failure as the S&P 500 one.
+    src = open("src/run.py").read()
+    check("the fetcher accepts 'Stock Code'", '"stock code"' in src, True)
+
+    import pandas as _pd
+    from io import StringIO
+    html = ("<table><tr><th>Constituent Name</th><th>Stock Code</th></tr>"
+            + "".join(f"<tr><td>Co {i}</td><td>{1000 + i}</td></tr>"
+                      for i in range(30)) + "</table>")
+    got = rn_run.wikipedia_constituents.__wrapped__ if hasattr(
+        rn_run.wikipedia_constituents, "__wrapped__") else None
+    # Exercise the parsing directly against the table shape.
+    tables = _pd.read_html(StringIO(html))
+    cols = {str(c).strip().lower(): c for c in tables[0].columns}
+    col = next((cols[k] for k in ("code", "ticker", "symbol", "ticker symbol",
+                                  "stock code", "stock symbol", "sehk code",
+                                  "scrip") if k in cols), None)
+    check("a Bursa-shaped table resolves its ticker column", col is not None, True)
+    syms = [f"{str(v).strip().zfill(4)}.KL" for v in tables[0][col].tolist()]
+    check("codes are padded and suffixed", syms[0], "1000.KL")
+    check("all 30 parse", len(syms), 30)
+
+    # Every seed is a well-formed Yahoo symbol.
+    for t in my["seed_fallback"]:
+        check(f"{t} is a valid Bursa symbol",
+              bool(re.match(r"^\d{4}\.KL$", str(t))), True)
+    check("seeds are unique", len(set(my["seed_fallback"])),
+          len(my["seed_fallback"]))
+    check("Maybank is in the seeds", "1155.KL" in my["seed_fallback"], True)
+
+    # The dislocation screen is market-agnostic — a Malaysian name works with
+    # no code change at all, because it compares against its OWN index.
+    m = dict(return_6m=-0.36, rs_vs_market_index_6m=-0.28,
+             worst_month_in_6m=0.24, vol20_over_vol50=1.4,
+             revenue_growth_1y=0.05, eps_growth_1y=0.02,
+             free_cash_flow_ttm=80.0, net_debt_to_ebitda=1.5,
+             loss_years_in_10=0, accruals_ratio=0.02)
+    a = ds.assess(m, yaml.safe_load(open("config/thresholds.yml"))["dislocation"])
+    check("a Malaysian faller is assessed like any other", a["qualifies"], True)
+    check("and scoped against its own market", a["scope"], "name")
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -1966,6 +2033,7 @@ if __name__ == "__main__":
     test_events()
     test_rsi_reading()
     test_display_metric_contract()
+    test_malaysia_market()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

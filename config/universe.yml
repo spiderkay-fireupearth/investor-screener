@@ -388,6 +388,61 @@ markets:
       - 9868.HK     # XPeng
       - 6690.HK     # Haier Smart Home
 
+  MY:
+    name: Malaysia
+    index_ticker: "^KLSE"
+    index_name: FTSE Bursa Malaysia KLCI
+    currency: MYR
+    timezone: Asia/Kuala_Lumpur
+    close_local: "17:00"        # Bursa's afternoon session ends 17:00 MYT
+    fundamentals_provider: yahoo
+    price_provider: yahoo
+    # The Wikipedia table heads its ticker column "Stock Code" rather than
+    # "Code" or "Symbol", which the generic fetcher now accepts. Only 30
+    # constituents, so min_expected is set accordingly.
+    constituents_source: wikipedia
+    constituents_url: "https://en.wikipedia.org/wiki/FTSE_Bursa_Malaysia_KLCI"
+    ticker_suffix: ".KL"
+    ticker_pad: 4               # Bursa codes are 4 digits: 1155.KL, not 1155
+    min_expected: 25
+    seed_fallback:
+      # Banks and financials
+      - 1155.KL   # Malayan Banking (Maybank)
+      - 1295.KL   # Public Bank
+      - 1023.KL   # CIMB Group
+      - 1066.KL   # RHB Bank
+      - 5819.KL   # Hong Leong Bank
+      - 1082.KL   # Hong Leong Financial Group
+      # Telecoms and media
+      - 6888.KL   # Axiata Group
+      - 6947.KL   # CelcomDigi
+      - 6012.KL   # Maxis
+      - 4863.KL   # Telekom Malaysia
+      # Utilities and energy
+      - 5347.KL   # Tenaga Nasional
+      - 6033.KL   # Petronas Gas
+      - 5681.KL   # Petronas Dagangan
+      - 5183.KL   # Petronas Chemicals
+      - 4677.KL   # YTL Corporation
+      - 6742.KL   # YTL Power International
+      # Plantations and agriculture
+      - 1961.KL   # IOI Corporation
+      - 2445.KL   # Kuala Lumpur Kepong
+      - 5285.KL   # SD Guthrie
+      - 4197.KL   # Sime Darby
+      - 4065.KL   # PPB Group
+      - 7084.KL   # QL Resources
+      # Industrials, construction and materials
+      - 5398.KL   # Gamuda
+      - 8869.KL   # Press Metal Aluminium
+      - 5211.KL   # Sunway
+      - 3816.KL   # MISC
+      # Consumer and healthcare
+      - 4707.KL   # Nestle Malaysia
+      - 5296.KL   # Mr D.I.Y. Group
+      - 5326.KL   # 99 Speed Mart Retail
+      - 5225.KL   # IHH Healthcare
+
   TH:
     name: Thailand
     index_ticker: "^SET.BK"
