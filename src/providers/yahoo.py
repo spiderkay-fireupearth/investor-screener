@@ -214,6 +214,10 @@ class YahooProvider:
                 info["name"] = full.get("longName") or full.get("shortName")
                 info["sector"] = full.get("sector")
                 info["industry"] = full.get("industry")
+                # What the company actually does. Everything else on this page
+                # is a ratio; without one line of description a screener asks
+                # you to judge a business you cannot name.
+                info["business_summary"] = full.get("longBusinessSummary")
                 info["trailing_pe"] = full.get("trailingPE")
                 # ETF / MUTUALFUND / EQUITY. A fund has no revenue, equity or
                 # ROE, so the value frameworks must be skipped rather than

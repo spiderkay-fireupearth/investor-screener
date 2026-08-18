@@ -13,6 +13,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from . import synopsis as syn
+
 FRAMEWORKS = [
     ("buffett", "Buffett"), ("munger", "Munger"), ("schloss", "Schloss"),
     ("klarman", "Klarman"), ("lynch", "Lynch"), ("templeton", "Templeton"),
@@ -141,6 +143,15 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             }
 
         tech = r.get("technical", {})
+        # A sentence-level read of the row, assembled from the same numbers the
+        # panels below it show. Built here rather than at screen time so a row
+        # merged in from another region's run gets one too — and so the wording
+        # can never lag the data it describes by a full refresh cycle.
+        try:
+            sy = syn.build(r, m, dict(FRAMEWORKS), len(FRAMEWORKS))
+        except Exception as e:                       # noqa: BLE001
+            sy = {"what": "", "what_source": "", "one_liner": "",
+                  "numbers": [f"synopsis unavailable: {e}"]}
         rows.append({
             "ticker": ticker,
             "name": r.get("name") or ticker,
@@ -175,6 +186,7 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             "dis_6m": _fmt_num((r.get("dislocation") or {}).get("return_6m"),
                                1, pct=True),
             "dis_note": _dis_tip(r.get("dislocation")),
+            "syn": sy,
             "surfaced": bool(r.get("surfaced")),
             "has_report": ticker in report_tickers,
             "themes": r.get("themes") or [],
@@ -362,6 +374,13 @@ tr.detail>td{background:var(--panel);padding:0;border-bottom:2px solid var(--lin
 .kmet div{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:7px 9px}
 .kmet .kl{font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em}
 .kmet .kv{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.syn{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--acc);
+border-radius:0 9px 9px 0;padding:12px 15px;margin-bottom:13px;font-size:13px;line-height:1.62}
+.syn .what{color:var(--tx2);margin-bottom:8px}
+.syn .what b{color:var(--tx)}
+.syn p{margin:0 0 6px}
+.syn p:last-child{margin-bottom:0}
+.syn .src{font-size:10.5px;color:var(--tx3);margin-top:9px;font-style:italic}
 .warn{background:rgba(201,162,39,.12);border:1px solid rgba(201,162,39,.3);border-radius:7px;
 padding:8px 11px;margin-bottom:12px;font-size:12px;color:var(--warn)}
 .note{background:var(--panel);border-left:3px solid var(--acc);border-radius:0 8px 8px 0;
@@ -517,6 +536,22 @@ function testList(tests){
 
 function detail(r){
   let h='<div class="dwrap">';
+  // The synopsis leads, because the panels below it are a reference and this
+  // is the read. Everything in it is derived from those same panels, so if the
+  // two ever disagree the panels are right and this is a bug.
+  if(r.syn && (r.syn.what || (r.syn.numbers && r.syn.numbers.length))){
+    h+='<div class="syn">';
+    if(r.syn.what) h+=`<div class="what"><b>What it is.</b> ${esc(r.syn.what)}</div>`;
+    h+=(r.syn.numbers||[]).map(x=>`<p>${esc(x)}</p>`).join('');
+    h+='<div class="src">Written from this row&rsquo;s own figures'
+      +(r.syn.what_source==='feed'
+        ? ' plus the company description carried by the data feed'
+        : (r.syn.what_source==='classification'
+           ? ' — the feed carries no business description for this name, only its sector'
+           : ''))
+      +'. No forecast, no outside commentary.</div>';
+    h+='</div>';
+  }
   // A static page on a public repo cannot hold a GitHub token, so it cannot
   // trigger a workflow. It can link to an existing report, and it can send you
   // to the workflow with the ticker ready to copy.
@@ -593,7 +628,7 @@ function render(){
     const dl = r.dis_fell
       ? `<span class="dis${r.dis?'':' expl'}" title="${esc(r.dis_note||'')}">&#8595;${esc(r.dis_6m||'30')}</span>`
       : '';
-    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${rx}${dl}</td><td class="nm" title="${esc(r.name)}">${esc(r.name)}</td>
+    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${rx}${dl}</td><td class="nm" title="${esc(r.name)}${r.syn&&r.syn.one_liner?' — '+esc(r.syn.one_liner):''}">${esc(r.name)}</td>
       <td><span class="mk">${esc(r.market_label)}</span></td>
       <td class="num">${esc(r.price)}</td><td class="num">${esc(r.mcap_usd)}</td>`;
     for(const [key] of FWS){

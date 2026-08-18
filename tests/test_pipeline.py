@@ -2010,6 +2010,149 @@ def test_malaysia_market():
     check("and scoped against its own market", a["scope"], "name")
 
 
+def test_synopsis():
+    """A per-stock synopsis, and the persistence trap it could have walked into."""
+    from src import synopsis as sy
+
+    # ---- the contract ---------------------------------------------------
+    # The synopsis is rendered for merged rows too, and a merged row carries
+    # only DISPLAY_METRICS. Reading anything else would render fully for the
+    # region that just ran and degrade silently everywhere else.
+    undeclared = sorted(set(sy.SYNOPSIS_FIELDS) - set(rn.DISPLAY_METRICS))
+    check("every field the synopsis reads is persisted", undeclared, [])
+
+    try:
+        sy._g({"revenue_growth_1y": 0.2}, "revenue_growth_1y")
+        raised = False
+    except KeyError:
+        raised = True
+    check("reading an undeclared metric fails loudly", raised, True)
+
+    src = open("src/synopsis.py").read()
+    body = src.split("def _pct", 1)[1]          # everything after the accessor
+    check("no metric is read behind the accessor's back",
+          re.findall(r'\bm\.get\(\s*"', body), [])
+
+    # ---- trimming a feed blurb -------------------------------------------
+    long = ("Acme Berhad operates as a plantation company in Malaysia. "
+            "The company was incorporated in 1971 and is headquartered in "
+            "Kuala Lumpur. It also engages in property development, "
+            "manufacturing, and a great many other activities besides.")
+    t = sy.trim_description(long, 120)
+    check("a long blurb is cut", len(t) <= 121, True)
+    check("and cut at a sentence end, not mid-word", t.endswith("."), True)
+    check("the first fact survives the cut", t.startswith("Acme Berhad"), True)
+    check("a short blurb is left alone",
+          sy.trim_description("Makes things."), "Makes things.")
+    check("no blurb is not an error", sy.trim_description(None), "")
+
+    # ---- a realistic row --------------------------------------------------
+    rec = CompanyRecord(ticker="SYN", market="HK", currency="HKD",
+                        sector="Energy", industry="Oil & Gas Integrated",
+                        years=[mkyear(2025 - i, revenue=1000.0, net_income=100.0,
+                                      eps_diluted=1.0, shares_diluted=100.0,
+                                      total_equity=800.0, total_assets=1200.0,
+                                      cfo=150.0, capex=30.0, current_assets=400.0,
+                                      current_liabilities=200.0,
+                                      operating_income=140.0, pretax_income=130.0)
+                               for i in range(6)])
+    rec.price, rec.market_cap = 8.0, 800.0
+    rec.business_summary = long
+    rec.technicals = {"rsi_14": 31.4, "rsi_label": "oversold", "rsi_regime": "ranging",
+                      "return_6m": -0.34, "return_12m": -0.21,
+                      "pct_below_52w_high": 0.38, "price_above_sma200": 0,
+                      "rs_vs_market_index_6m": -0.26}
+    m = mx.compute_metrics(rec)
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    out = sc.screen_universe([rec], {"SYN": m}, th, {}, cycle=None)
+    res = out["results"]["SYN"]
+
+    check("the business description is persisted with the row",
+          res["business_summary"].startswith("Acme Berhad"), True)
+    check("and trimmed before it is stored",
+          len(res["business_summary"]) <= sy.MAX_DESCRIPTION_CHARS, True)
+    check("the industry travels with it", res["industry"], "Oil & Gas Integrated")
+
+    s = sy.build(res, m, dict(rn.FRAMEWORKS), len(rn.FRAMEWORKS))
+    text = " ".join(s["numbers"])
+    check("the synopsis leads with the framework verdict",
+          "frameworks" in s["numbers"][0], True)
+    check("it names the count out of the real total",
+          f"of {len(rn.FRAMEWORKS)} value frameworks" in s["numbers"][0], True)
+    check("it says whether the technicals agree",
+          "technical timing test" in s["numbers"][0], True)
+    check("it quotes the valuation", "priced at" in text, True)
+    check("it quotes return on equity", "return on equity" in text, True)
+    check("it reads the price action", "over six months" in text, True)
+    check("and the RSI in words, not just a number",
+          "RSI at 31" in text and "oversold" in text, True)
+    check("the description is reported, not generated", s["what_source"], "feed")
+    check("it is brief", len(s["numbers"]) <= 7, True)
+    check("the one-liner fits a tooltip", len(s["one_liner"]) < 100, True)
+
+    # ---- the parity test that matters -------------------------------------
+    # Same row, rendered from the stored subset instead of the live metrics.
+    # If these two ever differ, half the published table is reading a poorer
+    # synopsis than the other half and nothing on the page would say so.
+    stored_only = {k: res["metrics"].get(k) for k in rn.DISPLAY_METRICS}
+    s2 = sy.build(res, stored_only, dict(rn.FRAMEWORKS), len(rn.FRAMEWORKS))
+    check("a merged row gets exactly the same synopsis as a live one",
+          s2["numbers"], s["numbers"])
+    check("including the one-liner", s2["one_liner"], s["one_liner"])
+
+    # ---- graceful degradation ---------------------------------------------
+    bare = sy.build({"ticker": "X", "frameworks": {}}, {}, {}, 11)
+    check("an empty row still produces a verdict", len(bare["numbers"]) >= 1, True)
+    check("and says the ratios are missing rather than printing dashes",
+          "none of the headline valuation ratios" in " ".join(bare["numbers"]), True)
+    nodesc = sy.build({"sector": "Utilities", "frameworks": {}}, {}, {}, 11)
+    check("with no blurb it falls back to the classification",
+          nodesc["what_source"], "classification")
+    check("and does not invent a description",
+          "Utilities" in nodesc["what"], True)
+
+    # ---- the flags ---------------------------------------------------------
+    flagged = dict(res)
+    flagged["reflexive"] = {"stage": "DE", "label": "the moment of truth",
+                            "late": True}
+    flagged["dislocation"] = {"return_6m": -0.34, "qualifies": True,
+                              "evidence_grade": "observed",
+                              "observed_causes": [{"n": 2,
+                                                   "name": "Natural calamity or physical shock"}]}
+    f = sy.build(flagged, m, dict(rn.FRAMEWORKS), len(rn.FRAMEWORKS))
+    ftext = " ".join(f["numbers"])
+    check("a late reflexive stage is called out", "Soros stage DE" in ftext, True)
+    check("and named as risk, not opportunity",
+          "risk rather than as an opportunity" in ftext, True)
+    check("the 30% fall is stated in the prose", "It fell 34%" in ftext, True)
+    check("an observed cause is distinguished from an inferred one",
+          "a feed actually reported" in ftext, True)
+    check("and the staleness caveat rides with it",
+          "may simply be stale" in ftext, True)
+
+    dq = dict(res)
+    dq["dislocation"] = {"return_6m": -0.51, "qualifies": False,
+                         "disqualified_by_filing": "8-K item 4.02"}
+    dtext = " ".join(sy.build(dq, m, dict(rn.FRAMEWORKS), 11)["numbers"])
+    check("a disqualifying filing is not dressed up as a bargain",
+          "takes it off the dislocation list" in dtext, True)
+
+    explained = dict(res)
+    explained["dislocation"] = {"return_6m": -0.33, "qualifies": False}
+    etext = " ".join(sy.build(explained, m, dict(rn.FRAMEWORKS), 11)["numbers"])
+    check("a fall the accounts explain says so",
+          "business problem rather than a price accident" in etext, True)
+
+    # ---- it reaches the page ----------------------------------------------
+    rows = rn.build_payload({"SYN": res}, {}, out)
+    check("the payload carries the synopsis", bool(rows[0]["syn"]["numbers"]), True)
+    html = rn.TEMPLATE
+    check("the drawer renders it", 'class="syn"' in html, True)
+    check("and says where the words came from", "No forecast" in html, True)
+    check("the table tooltip carries the one-liner",
+          "r.syn.one_liner" in html, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -2034,6 +2177,7 @@ if __name__ == "__main__":
     test_rsi_reading()
     test_display_metric_contract()
     test_malaysia_market()
+    test_synopsis()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")

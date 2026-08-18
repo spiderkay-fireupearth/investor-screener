@@ -316,6 +316,7 @@ def build_record(ticker: str, market_cfg: Dict, market_key: str,
     rec.name = prof.get("name") or ticker
     rec.sector = prof.get("sector")
     rec.industry = prof.get("industry")
+    rec.business_summary = prof.get("business_summary")
     if prof.get("currency"):
         rec.currency = prof["currency"]
     rec.financial_currency = prof.get("financial_currency") or rec.currency

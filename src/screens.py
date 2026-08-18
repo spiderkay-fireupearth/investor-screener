@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 
 from . import reflexivity as rfx
+from . import synopsis as syn
 
 log = logging.getLogger(__name__)
 
@@ -457,6 +458,12 @@ def screen_universe(records: List[Any],
             "quote_type": getattr(rec, "quote_type", None),
             "is_fund": is_fund,
             "sector": rec.sector,
+            "industry": rec.industry,
+            # Trimmed at write time, not at render time: the published page
+            # inlines every row, and a full profile paragraph per name would
+            # add megabytes to a file that has to load on a phone.
+            "business_summary": syn.trim_description(
+                getattr(rec, "business_summary", None)),
             "currency": rec.currency,
             "price": rec.price,
             "market_cap": rec.market_cap,

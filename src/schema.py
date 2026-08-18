@@ -154,6 +154,7 @@ class CompanyRecord:
     name: Optional[str] = None
     sector: Optional[str] = None
     industry: Optional[str] = None
+    business_summary: Optional[str] = None    # one-paragraph blurb from the feed
     currency: str = "USD"            # currency the SHARES TRADE in
     financial_currency: Optional[str] = None   # currency the STATEMENTS use
     standard: str = "ifrs"
