@@ -73,6 +73,12 @@ DISPLAY_METRICS = (
     "intrinsic_value_per_share", "margin_of_safety", "discount_rate_used",
     "buffett_b_label", "buffett_tenets_summary", "business_tenets",
     "return_on_net_tangible_assets", "roic_5y_avg", "eps_cv_5y",
+    # Greenblatt's own definitions, kept apart from the general EV and capital
+    # base so the Magic Formula panel can say which basis a row was ranked on.
+    "ebit_to_ev", "ebit_to_invested_capital",
+    "ebit_to_ev_greenblatt", "ebit_to_invested_capital_greenblatt",
+    "enterprise_value_greenblatt", "invested_capital_greenblatt",
+    "excess_cash", "greenblatt_working_capital_floored",
 )
 
 MARKET_LABELS = {"US": "US large cap", "JP": "Nikkei 225", "SG": "SGX",
@@ -314,6 +320,16 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "SG&A ÷ gross profit": _fmt_num(m.get("sga_to_gross_profit"),
                                                 0, pct=True),
                 "$1 retained → $ value": _fmt_num(m.get("one_dollar_premise")),
+                # Greenblatt
+                "Earnings yield (EBIT/EV)": _fmt_num(
+                    m.get("ebit_to_ev_greenblatt")
+                    if m.get("ebit_to_ev_greenblatt") is not None
+                    else m.get("ebit_to_ev"), 1, pct=True),
+                "Return on capital": _fmt_num(
+                    m.get("ebit_to_invested_capital_greenblatt")
+                    if m.get("ebit_to_invested_capital_greenblatt") is not None
+                    else m.get("ebit_to_invested_capital"), 0, pct=True),
+                "Excess cash": _fmt_num(m.get("excess_cash"), money=True),
                 "Years CFO positive (5y)": _fmt_num(m.get("cfo_positive_share_5y"),
                                                     0, pct=True),
                 "Loss years in 5": _fmt_num(m.get("loss_years_in_5"), 0),
@@ -1000,6 +1016,73 @@ def _reflexive_legend(census: Dict[str, int]) -> str:
             '</div></details>')
 
 
+def _magic_formula_panel(mf: Dict[str, Any]) -> str:
+    """The list the Magic Formula actually prescribes, and what to do with it.
+
+    Separated from the pass/fail column deliberately. The green tick in the
+    Greenblatt column means "inside the top N of ITS OWN MARKET", which is this
+    app's deviation from the book; the list below is the book's own — one
+    ranking across the whole universe. Publishing both is the only way the
+    deviation stays visible.
+    """
+    rows = (mf or {}).get("rows") or []
+    if not rows:
+        return ""
+    body = "".join(
+        f'<tr><td class="r">{r["rank"]}</td>'
+        f'<td class="sym">{e_attr(r["ticker"])}</td>'
+        f'<td>{e_attr(MARKET_LABELS.get(r["market"], r["market"] or ""))}</td>'
+        f'<td class="r">{r["earnings_yield"] * 100:.1f}%</td>'
+        f'<td class="r">{r["return_on_capital"] * 100:.0f}%</td>'
+        f'<td class="r">{r["ey_rank"]}</td>'
+        f'<td class="r">{r["roc_rank"]}</td>'
+        f'<td class="r">{r["combined_score"]}</td></tr>'
+        for r in rows)
+    notes = [
+        "<b>How to use this.</b> Greenblatt's instruction is mechanical: buy "
+        f"the top {mf.get('top_n', 30)} by combined rank, hold for a year, then "
+        "rebalance. The holding period is not incidental — it is what makes the "
+        "formula survive the stretches where it underperforms, which the book "
+        "says will be roughly one year in three. A list re-picked every month "
+        "is a different strategy with the same inputs.",
+        f"Ranked across all {mf.get('universe_size', 0)} eligible names, "
+        f"{mf.get('excluded', 0)} excluded — financials, REITs and utilities "
+        "(where EV/EBIT and return on capital are meaningless because the "
+        "balance sheet IS the business) and anything under the market-cap floor.",
+    ]
+    if mf.get("scope_in_use") == "market":
+        notes.append(
+            "<b>Note the two rankings.</b> The list above is the book's: one "
+            "ranking across the whole universe. The green tick in the "
+            "Greenblatt column of the table below is this app's deviation — "
+            "ranked within each market, so one structurally cheap market "
+            "cannot take every slot. A name can be top-30 in its own market "
+            "and nowhere near this list.")
+    if mf.get("basis_mixed"):
+        notes.append(
+            f"{mf.get('on_greenblatt_basis', 0)} of {mf.get('universe_size', 0)} "
+            "names are ranked on Greenblatt's stricter definitions — excess "
+            "cash rather than all cash, and a capital base net of "
+            "interest-bearing current liabilities. The rest fall back to the "
+            "general definitions because their feed lacks the split, and a "
+            "ranking that mixes the two is not quite comparing like with like.")
+    return (
+        '<details class="dalio cmd"><summary>'
+        '<span class="stg">Magic Formula portfolio</span>'
+        f'<span class="muted-ink">top {len(rows)} by combined rank across '
+        f'{mf.get("universe_size", 0)} eligible names — buy the list, hold a '
+        'year, rebalance</span>'
+        '<span class="muted-ink" style="margin-left:auto">details &#9662;</span>'
+        '</summary><div class="body">'
+        '<table><thead><tr><th class="r">#</th><th>Ticker</th><th>Market</th>'
+        '<th class="r">Earnings yield</th><th class="r">Return on capital</th>'
+        '<th class="r">EY rank</th><th class="r">ROC rank</th>'
+        '<th class="r">Score</th></tr></thead><tbody>'
+        + body + '</tbody></table>'
+        + "".join(f'<div class="dnote">{n}</div>' for n in notes)
+        + '</div></details>')
+
+
 def _sentiment_panel(s: Dict[str, Any]) -> str:
     """The six psychology gauges, each with its contrarian reading.
 
@@ -1582,6 +1665,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     rfx_html = _reflexive_legend(screened.get("reflexive_census") or {})
     dis_html = _dislocation_panel(screened.get("dislocation_summary") or {})
     sen_html = _sentiment_panel(screened.get("sentiment") or {})
+    mf_html = _magic_formula_panel(screened.get("magic_formula") or {})
     lyn_html = _lynch_panel(screened.get("lynch_census") or {},
                             screened.get("value_regime") or {},
                             screened.get("rule_of_20") or {},
@@ -1605,8 +1689,8 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__FWCHIPS__", fw_chips)
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
-            .replace("__GATE__", debt_html + sen_html + cmd_html + lyn_html
-                     + rfx_html + dis_html + cycle_html + gate)
+            .replace("__GATE__", debt_html + sen_html + mf_html + cmd_html
+                     + lyn_html + rfx_html + dis_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
             .replace("__TS__", datetime.now(timezone.utc)

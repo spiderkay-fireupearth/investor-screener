@@ -687,8 +687,26 @@ greenblatt:
   # Rank-based, not threshold-based. Pass = combined rank inside top N of the
   # eligible universe. Ranked within market by default so a single cheap market
   # doesn't crowd out the rest; set rank_scope: global to rank across all five.
+  # The GLOBAL ranking — the one the book actually prescribes — is computed
+  # either way and published as the Magic Formula portfolio panel, so this
+  # deviation is visible rather than assumed.
   rank_scope: market          # market | global
   top_n: 30
+  # Greenblatt's own screening parameter, applied to the RANKING and not only
+  # to the surfacing gate: a micro-cap left in the ranking pushes a real
+  # candidate out of the top 30 before anyone sees either of them.
+  min_market_cap_usd: 100000000
+  # "Excess cash", not all cash. A business needs some cash on hand to operate;
+  # only what sits above that is a financing asset the buyer of the whole
+  # company gets back. Two per cent of revenue is the common working
+  # convention. Raise it and more cash counts as operational, which lowers
+  # earnings yield and raises capital employed.
+  operating_cash_pct_of_revenue: 0.02
+  # A business funded by its suppliers really does employ less capital, but
+  # letting working capital run negative sends return on capital to absurd
+  # heights on a tiny denominator. Floored at zero, and the fact that it was
+  # floored is recorded on the row rather than swallowed.
+  floor_negative_working_capital: true
   exclude_sectors_from_global: true
   tests:
     earnings_yield:

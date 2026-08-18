@@ -516,7 +516,9 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
 
     metrics_by_ticker: Dict[str, Dict[str, Any]] = {}
     for rec in records:
-        m = mx.compute_metrics(rec, fx_rates=fx_rates)
+        m = mx.compute_metrics(
+            rec, fx_rates=fx_rates,
+            greenblatt_cfg=thresholds.get("greenblatt", {}))
         fx = fx_rates.get((rec.currency or "USD").upper()) or 1.0
         m["market_cap_usd"] = rec.market_cap * fx if rec.market_cap else None
         m["fx_to_usd"] = fx

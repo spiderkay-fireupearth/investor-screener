@@ -131,7 +131,8 @@ def sanity_check(m: Dict[str, Any]) -> List[str]:
 
 
 def compute_metrics(rec: CompanyRecord,
-                    fx_rates: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+                    fx_rates: Optional[Dict[str, float]] = None,
+                    greenblatt_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     m: Dict[str, Any] = {}
     ys = rec.years
     latest = rec.latest
@@ -636,6 +637,71 @@ def compute_metrics(rec: CompanyRecord,
                   "net_cash_share_of_price", "price_to_sales",
                   "cash_to_short_term_debt"):
             m[k] = None
+
+    # ========================================================================
+    # Greenblatt — the Magic Formula's own definitions of capital and value
+    # ========================================================================
+    # These sit ALONGSIDE the general `invested_capital` and `enterprise_value`
+    # rather than replacing them, and the reason is not fussiness. Greenblatt's
+    # capital base excludes interest-bearing current liabilities and only
+    # EXCESS cash; the general definitions used everywhere else in this app
+    # exclude all cash and no current liabilities. Silently switching the
+    # general ones to his would move the ROIC and EV/EBIT numbers that the
+    # Buffett, Munger, Klarman and Templeton thresholds were calibrated
+    # against, and every one of those pass/fail results would change for a
+    # reason nothing on the page explained. So both exist, and the Magic
+    # Formula panel says which it is using.
+    m["excess_cash"] = None
+    for k in ("enterprise_value_greenblatt", "ebit_to_ev_greenblatt",
+              "invested_capital_greenblatt",
+              "ebit_to_invested_capital_greenblatt"):
+        m[k] = None
+    m["greenblatt_working_capital_floored"] = None
+    if ys:
+        y0 = ys[0]
+        cash_all = ((y0.cash_and_equivalents or 0.0)
+                    + (y0.short_term_investments or 0.0))
+        # "Excess" cash, not all cash. A business needs some cash on hand to
+        # run; only what sits above that is a financing asset the buyer of the
+        # whole company gets back. Two per cent of revenue is the common
+        # working convention and is exposed in config rather than hidden here.
+        need = (greenblatt_cfg or {}).get("operating_cash_pct_of_revenue", 0.02)
+        op_cash_need = (y0.revenue or 0.0) * need if _n(y0.revenue) else 0.0
+        excess = max(cash_all - op_cash_need, 0.0)
+        m["excess_cash"] = excess
+        m["operating_cash_need"] = op_cash_need
+
+        if _n(mcap):
+            ev_gb = (mcap + (y0.total_debt or 0.0)
+                     + (y0.minority_interest or 0.0) - excess)
+            if ev_gb > 0:
+                m["enterprise_value_greenblatt"] = ev_gb
+                if _n(y0.ebit) and y0.ebit > 0:
+                    m["ebit_to_ev_greenblatt"] = y0.ebit / ev_gb
+
+        # Capital actually deployed in operations: working capital net of
+        # excess cash AND of interest-bearing current liabilities (which are
+        # financing, not operations), plus net fixed assets. Goodwill and
+        # intangibles are excluded — Greenblatt is asking what the business
+        # needs to run, not what somebody once paid for it.
+        if _n(y0.current_assets) and _n(y0.current_liabilities) and _n(y0.net_ppe):
+            op_cl = y0.current_liabilities - (y0.short_term_debt or 0.0)
+            nwc = (y0.current_assets - excess) - op_cl
+            floored = nwc < 0
+            if floored and (greenblatt_cfg or {}).get(
+                    "floor_negative_working_capital", True):
+                # A business funded by its suppliers genuinely employs less
+                # capital, and letting that run negative can send return on
+                # capital to absurd heights on a small denominator. Floored at
+                # zero, and the fact that it was floored is recorded rather
+                # than swallowed.
+                nwc = 0.0
+            m["greenblatt_working_capital_floored"] = bool(floored)
+            ic = nwc + y0.net_ppe
+            if ic > 0:
+                m["invested_capital_greenblatt"] = ic
+                if _n(y0.ebit) and y0.ebit > 0:
+                    m["ebit_to_invested_capital_greenblatt"] = y0.ebit / ic
 
     # --- Lynch on FIVE years of statements, not six -------------------------
     # `eps_cagr_5y` needs a year -5 to compare against, i.e. six statements —

@@ -259,6 +259,7 @@ def run_greenblatt(records: List[Any], metrics_by_ticker: Dict[str, Dict[str, An
     """
     scope = cfg.get("rank_scope", "market")
     top_n = cfg.get("top_n", 30)
+    min_cap = cfg.get("min_market_cap_usd", 100_000_000)
 
     eligible: List[Tuple[str, str, float, float]] = []
     ineligible: Dict[str, str] = {}
@@ -268,29 +269,61 @@ def run_greenblatt(records: List[Any], metrics_by_ticker: Dict[str, Dict[str, An
         if sector_excluded(rec.sector, excluded_sectors):
             ineligible[rec.ticker] = "sector excluded (financials/REITs/utilities)"
             continue
-        ey = m.get("ebit_to_ev")
-        roc = m.get("ebit_to_invested_capital")
+        # Greenblatt's own screening parameter, and it belongs HERE rather than
+        # only on the surfacing gate: a micro-cap left in the ranking pushes a
+        # real candidate out of the top 30 before anyone sees either of them.
+        cap = m.get("market_cap_usd")
+        if _is_num(cap) and cap < min_cap:
+            ineligible[rec.ticker] = (
+                f"below the USD {min_cap:,.0f} market-cap floor the Magic "
+                "Formula screens on")
+            continue
+        # Greenblatt's OWN definitions of yield and capital, not the general
+        # ones: excess cash rather than all cash, and a capital base net of
+        # interest-bearing current liabilities. They fall back to the general
+        # metrics where the feed cannot support the stricter version, and the
+        # row records which was used so no ranking is struck on a mixture
+        # nobody can see.
+        ey = m.get("ebit_to_ev_greenblatt")
+        roc = m.get("ebit_to_invested_capital_greenblatt")
+        basis = "greenblatt"
+        if not (_is_num(ey) and _is_num(roc)):
+            ey = m.get("ebit_to_ev") if not _is_num(ey) else ey
+            roc = (m.get("ebit_to_invested_capital")
+                   if not _is_num(roc) else roc)
+            basis = "general"
         if not (_is_num(ey) and _is_num(roc)):
             ineligible[rec.ticker] = "missing EBIT, EV or invested capital"
             continue
         if ey <= 0 or roc <= 0:
             ineligible[rec.ticker] = "negative earnings yield or return on capital"
             continue
-        eligible.append((rec.ticker, rec.market, float(ey), float(roc)))
+        eligible.append((rec.ticker, rec.market, float(ey), float(roc), basis))
 
     out: Dict[str, Dict[str, Any]] = {}
 
-    groups: Dict[str, List[Tuple[str, str, float, float]]] = {}
+    def _ranks(rows):
+        by_ey = sorted(rows, key=lambda r: r[2], reverse=True)
+        by_roc = sorted(rows, key=lambda r: r[3], reverse=True)
+        return ({r[0]: i + 1 for i, r in enumerate(by_ey)},
+                {r[0]: i + 1 for i, r in enumerate(by_roc)})
+
+    # The global ranking is ALWAYS computed, whatever the scope in use. The
+    # Magic Formula as written is one list across the whole universe; ranking
+    # per market is this app's deviation, made so that one structurally cheap
+    # market cannot monopolise the table. Both numbers are published so the
+    # deviation is visible rather than assumed.
+    g_ey, g_roc = _ranks(eligible)
+    g_order = sorted(eligible, key=lambda r: g_ey[r[0]] + g_roc[r[0]])
+    global_pos = {r[0]: i + 1 for i, r in enumerate(g_order)}
+
+    groups: Dict[str, List[Tuple[str, str, float, float, str]]] = {}
     for row in eligible:
         key = row[1] if scope == "market" else "_global"
         groups.setdefault(key, []).append(row)
 
     for key, rows in groups.items():
-        by_ey = sorted(rows, key=lambda r: r[2], reverse=True)
-        ey_rank = {r[0]: i + 1 for i, r in enumerate(by_ey)}
-        by_roc = sorted(rows, key=lambda r: r[3], reverse=True)
-        roc_rank = {r[0]: i + 1 for i, r in enumerate(by_roc)}
-
+        ey_rank, roc_rank = _ranks(rows)
         combined = sorted(rows, key=lambda r: ey_rank[r[0]] + roc_rank[r[0]])
         for pos, r in enumerate(combined):
             t = r[0]
@@ -305,17 +338,63 @@ def run_greenblatt(records: List[Any], metrics_by_ticker: Dict[str, Dict[str, An
                 "required": 2,
                 "scope": key,
                 "universe_size": len(rows),
+                "basis": r[4],
                 "tests": [
-                    {"name": "earnings_yield", "metric": "ebit_to_ev", "value": r[2],
+                    {"name": "earnings_yield",
+                     "metric": ("ebit_to_ev_greenblatt" if r[4] == "greenblatt"
+                                else "ebit_to_ev"),
+                     "value": r[2],
                      "threshold": None, "operator": "rank",
-                     "result": True, "rank": ey_rank[t], "via_alt": False},
-                    {"name": "return_on_capital", "metric": "ebit_to_invested_capital",
-                     "value": r[3], "threshold": None, "operator": "rank",
-                     "result": True, "rank": roc_rank[t], "via_alt": False},
+                     "result": True, "rank": ey_rank[t], "via_alt": False,
+                     "note": ("EBIT ÷ enterprise value, with EV struck on "
+                              "EXCESS cash rather than all cash"
+                              if r[4] == "greenblatt" else
+                              "struck on the general EV — the feed lacked what "
+                              "Greenblatt's stricter definition needs")},
+                    {"name": "return_on_capital",
+                     "metric": ("ebit_to_invested_capital_greenblatt"
+                                if r[4] == "greenblatt"
+                                else "ebit_to_invested_capital"),
+                     "value": r[3],
+                     "threshold": None, "operator": "rank",
+                     "result": True, "rank": roc_rank[t], "via_alt": False,
+                     "note": ("EBIT ÷ (net working capital + net fixed assets), "
+                              "excluding goodwill, excess cash and "
+                              "interest-bearing current liabilities"
+                              if r[4] == "greenblatt" else
+                              "struck on the general capital base — the feed "
+                              "lacked the short-term debt split")},
                 ],
                 "combined_rank": pos + 1,
                 "combined_rank_score": ey_rank[t] + roc_rank[t],
+                "global_rank": global_pos.get(t),
+                "global_rank_score": g_ey.get(t, 0) + g_roc.get(t, 0),
+                "global_universe_size": len(eligible),
             }
+
+    # The portfolio the formula actually prescribes: the top N by COMBINED
+    # rank across the whole universe, which is what "buy the top 20 to 30 and
+    # rebalance annually" means. Kept separate from the per-market pass flag so
+    # the two are never confused.
+    portfolio = []
+    for r in g_order[:max(top_n, 1)]:
+        t = r[0]
+        portfolio.append({
+            "ticker": t, "market": r[1],
+            "earnings_yield": r[2], "return_on_capital": r[3],
+            "ey_rank": g_ey[t], "roc_rank": g_roc[t],
+            "combined_score": g_ey[t] + g_roc[t],
+            "rank": global_pos[t], "basis": r[4],
+        })
+    out["_portfolio"] = {
+        "rows": portfolio,
+        "universe_size": len(eligible),
+        "excluded": len(ineligible),
+        "top_n": top_n,
+        "scope_in_use": scope,
+        "basis_mixed": len({r[4] for r in eligible}) > 1,
+        "on_greenblatt_basis": sum(1 for r in eligible if r[4] == "greenblatt"),
+    }
 
     for t, reason in ineligible.items():
         out[t] = {
@@ -472,6 +551,9 @@ def screen_universe(records: List[Any],
 
     greenblatt = run_greenblatt(records, metrics_by_ticker,
                                 thresholds.get("greenblatt", {}), excluded)
+    # Pulled out before the per-name loop, so a ticker literally named
+    # "_portfolio" could never collide with it.
+    magic_formula = greenblatt.pop("_portfolio", {})
 
     add_relative_value(records, metrics_by_ticker)
     value_regime = set_value_regime(
@@ -610,6 +692,7 @@ def screen_universe(records: List[Any],
         "macro": macro,
         "value_regime": value_regime,
         "buffett_valuation": buffett_valuation,
+        "magic_formula": magic_formula,
         "lynch_census": lynch_census(metrics_by_ticker),
         # Lynch's macro sanity check, computed on this screener's own US rows
         # so the gauge and the table are struck on the same numbers.

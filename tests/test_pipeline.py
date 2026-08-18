@@ -3203,6 +3203,197 @@ def test_sentiment_gauges():
           True)
 
 
+def test_greenblatt_magic_formula():
+    """Greenblatt's own definitions of capital and value, and the list they make."""
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    gcfg = th["greenblatt"]
+    check("the market-cap floor is applied to the ranking",
+          gcfg["min_market_cap_usd"], 100000000)
+    check("excess cash is defined as a share of revenue",
+          gcfg["operating_cash_pct_of_revenue"], 0.02)
+    check("negative working capital is floored, and that is a stated choice",
+          gcfg["floor_negative_working_capital"], True)
+    check("the portfolio is the top 20-30", 20 <= gcfg["top_n"] <= 30, True)
+
+    # --- the two metrics ----------------------------------------------------
+    # Revenue 1000, cash 300 (excess = 300 - 20 = 280), ST debt 50, CL 250,
+    # CA 600, net PPE 400, EBIT 200, debt 200, market cap 2000.
+    #   Greenblatt capital = (600 - 280) - (250 - 50) + 400 = 520
+    #   Greenblatt ROC     = 200 / 520 = 38.5%
+    #   Greenblatt EV      = 2000 + 200 - 280 = 1920
+    #   Greenblatt EY      = 200 / 1920 = 10.4%
+    rec = CompanyRecord(ticker="GB", market="US", currency="USD",
+                        sector="Industrials", industry="Machinery")
+    rec.years = [mkyear(2025 - i, revenue=1000.0, operating_income=200.0,
+                        pretax_income=190.0, net_income=150.0,
+                        eps_diluted=1.5, shares_diluted=100.0,
+                        total_equity=900.0, total_assets=1500.0,
+                        total_debt=200.0, short_term_debt=50.0,
+                        long_term_debt=150.0, cash_and_equivalents=300.0,
+                        current_assets=600.0, current_liabilities=250.0,
+                        total_liabilities=600.0, net_ppe=400.0, goodwill=100.0,
+                        cfo=180.0, capex=40.0, depreciation_amortization=50.0)
+                 for i in range(6)]
+    rec.price, rec.market_cap = 20.0, 2000.0
+    m = mx.compute_metrics(rec, greenblatt_cfg=gcfg)
+
+    check("excess cash is cash above the operating need", m["excess_cash"], 280.0)
+    check("and the operating need is 2% of revenue", m["operating_cash_need"], 20.0)
+    check("capital employed nets off interest-bearing current liabilities",
+          m["invested_capital_greenblatt"], 520.0)
+    check("return on capital follows from it",
+          round(m["ebit_to_invested_capital_greenblatt"], 4),
+          round(200.0 / 520.0, 4))
+    check("enterprise value subtracts EXCESS cash, not all cash",
+          m["enterprise_value_greenblatt"], 1920.0)
+    check("earnings yield follows from that",
+          round(m["ebit_to_ev_greenblatt"], 4), round(200.0 / 1920.0, 4))
+    # Goodwill is excluded from the capital base by construction: it is what
+    # somebody once paid, not what the business needs to run.
+    check("goodwill is not in the capital base",
+          m["invested_capital_greenblatt"] < 520.0 + 100.0, True)
+
+    # The general definitions must NOT have moved. Buffett, Munger, Klarman and
+    # Templeton thresholds are calibrated against those, and shifting them
+    # silently would change unrelated pass/fail results with no explanation.
+    check("the general EV still subtracts all cash",
+          m["enterprise_value"], 2000.0 + 200.0 - 300.0)
+    check("and is a different number from Greenblatt's",
+          m["enterprise_value"] != m["enterprise_value_greenblatt"], True)
+    check("the general capital base is untouched too",
+          m["ebit_to_invested_capital"] != m["ebit_to_invested_capital_greenblatt"],
+          True)
+
+    # Negative working capital: floored, and the fact recorded.
+    supplier_funded = CompanyRecord(ticker="NWC", market="US", currency="USD",
+                                    sector="Consumer Defensive",
+                                    industry="Grocery")
+    supplier_funded.years = [mkyear(2025 - i, revenue=1000.0,
+                                    operating_income=100.0, net_income=70.0,
+                                    eps_diluted=0.7, shares_diluted=100.0,
+                                    total_equity=300.0, total_assets=900.0,
+                                    total_debt=100.0, short_term_debt=20.0,
+                                    cash_and_equivalents=50.0,
+                                    current_assets=200.0,
+                                    current_liabilities=500.0,
+                                    net_ppe=400.0, cfo=90.0, capex=30.0,
+                                    depreciation_amortization=25.0)
+                             for i in range(6)]
+    supplier_funded.price, supplier_funded.market_cap = 10.0, 1000.0
+    mn = mx.compute_metrics(supplier_funded, greenblatt_cfg=gcfg)
+    check("negative working capital is recorded as having been floored",
+          mn["greenblatt_working_capital_floored"], True)
+    check("so the capital base is just net fixed assets",
+          mn["invested_capital_greenblatt"], 400.0)
+    check("which keeps return on capital finite rather than absurd",
+          mn["ebit_to_invested_capital_greenblatt"], 0.25)
+
+    # --- the ranking ---------------------------------------------------------
+    def mkrec(t, ebit, ev_cash, cap_ppe, mktcap, sector="Industrials",
+              market="US"):
+        r = CompanyRecord(ticker=t, market=market, currency="USD",
+                          sector=sector, industry="Machinery")
+        r.years = [mkyear(2025 - i, revenue=1000.0, operating_income=ebit,
+                          pretax_income=ebit - 10, net_income=ebit * 0.7,
+                          eps_diluted=ebit * 0.007, shares_diluted=100.0,
+                          total_equity=900.0, total_assets=1500.0,
+                          total_debt=100.0, short_term_debt=20.0,
+                          cash_and_equivalents=ev_cash, current_assets=600.0,
+                          current_liabilities=250.0, total_liabilities=600.0,
+                          net_ppe=cap_ppe, cfo=ebit, capex=30.0,
+                          depreciation_amortization=40.0) for i in range(6)]
+        r.price, r.market_cap = mktcap / 100.0, mktcap
+        return r
+
+    recs = [mkrec("CHEAP", 300.0, 100.0, 200.0, 900.0),
+            mkrec("MID", 200.0, 100.0, 500.0, 1800.0),
+            mkrec("DEAR", 100.0, 100.0, 900.0, 4000.0),
+            mkrec("BANK", 300.0, 100.0, 200.0, 900.0, sector="Financial Services"),
+            mkrec("TINY", 300.0, 100.0, 200.0, 0.5)]
+    mets = {r.ticker: mx.compute_metrics(r, greenblatt_cfg=gcfg) for r in recs}
+    for t, mm in mets.items():
+        mm["market_cap_usd"] = next(r.market_cap for r in recs if r.ticker == t)
+    # The synthetic caps above are small numbers for readability, so the floor
+    # is lowered for the ranking test and exercised separately by TINY.
+    gcfg2 = {**gcfg, "min_market_cap_usd": 1.0}
+    res = sc.run_greenblatt(recs, mets, gcfg2,
+                            th["global"]["capital_intensive_excluded_sectors"])
+    port = res.pop("_portfolio")
+
+    check("the cheap, capital-light name ranks first",
+          port["rows"][0]["ticker"], "CHEAP")
+    check("and the expensive, capital-heavy one ranks last",
+          port["rows"][-1]["ticker"], "DEAR")
+    check("both component ranks are published",
+          all(("ey_rank" in r and "roc_rank" in r) for r in port["rows"]), True)
+    check("and the composite is their sum",
+          port["rows"][0]["combined_score"],
+          port["rows"][0]["ey_rank"] + port["rows"][0]["roc_rank"])
+    check("financials are excluded from the ranking",
+          "sector excluded" in res["BANK"]["ineligible_reason"], True)
+    check("and so is anything under the market-cap floor",
+          "market-cap floor" in res["TINY"]["ineligible_reason"], True)
+    check("the excluded names are counted", port["excluded"], 2)
+    check("the ranking says which basis it used",
+          port["rows"][0]["basis"], "greenblatt")
+    check("and reports how many names it could use it for",
+          port["on_greenblatt_basis"], 3)
+
+    # The global rank travels with every row even when ranking per market, so
+    # this app's per-market deviation from the book stays visible.
+    two_mkt = recs[:3] + [mkrec("HKCHEAP", 400.0, 100.0, 150.0, 800.0,
+                                market="HK")]
+    mets2 = {r.ticker: mx.compute_metrics(r, greenblatt_cfg=gcfg)
+             for r in two_mkt}
+    for t, mm in mets2.items():
+        mm["market_cap_usd"] = next(r.market_cap for r in two_mkt if r.ticker == t)
+    res2 = sc.run_greenblatt(
+        two_mkt, mets2, {**gcfg2, "rank_scope": "market"},
+        th["global"]["capital_intensive_excluded_sectors"])
+    res2.pop("_portfolio")
+    check("a lone name in its own market is top of that market",
+          res2["HKCHEAP"]["combined_rank"], 1)
+    check("but its GLOBAL rank is reported too",
+          res2["HKCHEAP"]["global_rank"] is not None, True)
+    check("against the whole eligible universe",
+          res2["HKCHEAP"]["global_universe_size"], 4)
+    check("so the per-market deviation is visible, not assumed",
+          res2["MID"]["global_rank"] != res2["MID"]["combined_rank"]
+          or res2["MID"]["scope"] == "US", True)
+
+    # --- the panel ------------------------------------------------------------
+    html = rn._magic_formula_panel(port)
+    check("the portfolio panel renders", "Magic Formula portfolio" in html, True)
+    check("with both component ranks in the table", "EY rank" in html, True)
+    check("and the annual rebalance instruction",
+          "hold for a year" in html, True)
+    check("with the reason the holding period matters",
+          "one year in three" in html, True)
+    check("it states what was excluded and why",
+          "balance sheet IS the business" in html, True)
+    check("and flags the two different rankings",
+          "this app&rsquo;s deviation" in html or "this app's deviation" in html,
+          True)
+    check("an empty portfolio renders nothing rather than an empty table",
+          rn._magic_formula_panel({}), "")
+
+    # End to end, and through the store.
+    out = sc.screen_universe(
+        recs, mets, {**th, "greenblatt": gcfg2}, {}, cycle=None)
+    check("the portfolio reaches the run output",
+          bool(out["magic_formula"]["rows"]), True)
+    check("and is not left in the per-ticker results",
+          "_portfolio" in out["results"], False)
+    stored = out["results"]["CHEAP"]["metrics"]
+    check("Greenblatt's earnings yield is persisted",
+          stored.get("ebit_to_ev_greenblatt") is not None, True)
+    check("so is his capital base",
+          stored.get("invested_capital_greenblatt") is not None, True)
+    rows = rn.build_payload({"CHEAP": out["results"]["CHEAP"]}, {}, out)
+    check("and a merged row still shows the earnings yield",
+          rows[0]["key_metrics"]["Earnings yield (EBIT/EV)"] != "—", True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -3235,6 +3426,7 @@ if __name__ == "__main__":
     test_lynch_five_year_window()
     test_schloss_five_year_window()
     test_sentiment_gauges()
+    test_greenblatt_magic_formula()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")
