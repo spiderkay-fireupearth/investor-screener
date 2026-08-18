@@ -3658,6 +3658,15 @@ def test_technical_charts():
         check("a deploy that wrote its own page still gets the series back",
               os.path.exists(os.path.join(out2, "series", "US.json")), True)
 
+
+    # The Pages gotcha: a JSON directory served through a Jekyll build step
+    # 404s on files that are plainly in the artifact. One marker removes it.
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as td:
+        rn.write_series({"A": {"market": "US", "metrics": {"spark": sp}}}, {}, td)
+        check("a .nojekyll marker is written beside the series",
+              os.path.exists(os.path.join(td, ".nojekyll")), True)
+
     # --- raw values, not formatted strings ------------------------------------
     # A chart cannot plot "12.5%". This is the mistake that would have made the
     # whole panel silently blank.
@@ -3684,8 +3693,14 @@ def test_technical_charts():
           "const SERIES_CACHE" in html and "series/" in html, True)
     check("and the fetch fires when a drawer opens",
           "fillPriceCharts(dr)" in html, True)
-    check("a fetch that comes back empty says which refresh writes the file",
-          "if that market has not run since this feature was" in html, True)
+    check("a fetch that comes back empty names the exact URL it tried",
+          "series/' + mkt + '.json'" in html, True)
+    check("and says what a 404 there means",
+          "has not run since the feature was" in html, True)
+    check("and what a hit-but-missing-row means",
+          "under sixty trading days" in html, True)
+    check("the footer reports what the run actually wrote",
+          "Price series written this run" in html, True)
     check("the threshold marker is the midpoint of every bar",
           "markAt=0.5" in html, True)
 

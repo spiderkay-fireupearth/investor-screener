@@ -425,6 +425,14 @@ def write_series(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     """
     dest = os.path.join(out_dir, "series")
     os.makedirs(dest, exist_ok=True)
+    # GitHub Pages will happily serve a directory of JSON, but a Jekyll build
+    # step in front of it will not, and the symptom is a 404 on a file that is
+    # plainly in the repo. One empty marker file removes the whole class of
+    # failure and costs nothing if it was never going to happen.
+    try:
+        open(os.path.join(out_dir, ".nojekyll"), "w").close()
+    except OSError:
+        pass
     by_market: Dict[str, Dict[str, Any]] = {}
     for ticker, r in results.items():
         m = metrics.get(ticker) or r.get("metrics") or {}
@@ -730,7 +738,10 @@ Click any row to see exactly which test failed and on what value.</div>
 
 <div class="foot">Fundamentals: SEC EDGAR XBRL (US, audited filings) · Yahoo Finance (SGX, HKEX, SET, IDX).
 Prices: Yahoo Finance, split and dividend adjusted, computed on each market's own trading calendar.
-Macro: FRED. Not investment advice — a screen is a starting point for research, not a conclusion.</div>
+Macro: FRED. Not investment advice — a screen is a starting point for research, not a conclusion.<br>
+Price series written this run: __SERIES__. Each row's chart is fetched from
+<code>series/&lt;market&gt;.json</code> when you open it — a market shows charts only after its own
+refresh has run.</div>
 </div>
 
 <script>
@@ -877,10 +888,16 @@ function fillPriceCharts(root){
     loadSeries(mkt).then(all => {
       const sp = all[t];
       if(!sp){
-        slot.innerHTML = '<div class="cap">The price series for this row could '
-          + 'not be loaded. It is written by the refresh that covers '
-          + esc(mkt) + ' — if that market has not run since this feature was '
-          + 'added, the file will appear after its next refresh.</div>';
+        // Name the exact URL. "Could not load" sends someone hunting; a link
+        // that either shows JSON or a 404 answers the question in one click.
+        const u = new URL('series/' + mkt + '.json', location.href).href;
+        slot.innerHTML = '<div class="cap"><b>No price series for this row yet.</b><br>'
+          + 'The chart reads <a href="' + esc(u) + '" target="_blank" rel="noopener">'
+          + esc(u) + '</a>, written by the refresh that covers ' + esc(mkt) + '.<br>'
+          + 'If that link 404s, this market has not run since the feature was '
+          + 'added — run its refresh workflow. If it returns JSON but this row '
+          + 'is missing from it, the company has under sixty trading days of '
+          + 'price history.</div>';
         return;
       }
       const row = DATA.find(x => x.ticker === t) || {};
@@ -2387,6 +2404,12 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                "it normally means in this regime.")
             + '</div>')
 
+    # Written BEFORE the page is assembled, because the footer reports what was
+    # written and a count that is computed after the string it appears in is a
+    # count that never appears.
+    os.makedirs(out_dir, exist_ok=True)
+    series_counts = write_series(results, metrics, out_dir)
+
     html = (TEMPLATE
             .replace("__DATA__", json.dumps(rows, default=str))
             .replace("__FWS__", json.dumps(FRAMEWORKS))
@@ -2403,11 +2426,12 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                      + lyn_html + rfx_html + dis_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
+            .replace("__SERIES__", ", ".join(
+                f"{MARKET_LABELS.get(k, k)} {v}"
+                for k, v in sorted(series_counts.items())) or "none written")
             .replace("__TS__", datetime.now(timezone.utc)
                      .strftime("%Y-%m-%d %H:%M UTC")))
 
-    os.makedirs(out_dir, exist_ok=True)
-    write_series(results, metrics, out_dir)
     path = os.path.join(out_dir, "index.html")
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
