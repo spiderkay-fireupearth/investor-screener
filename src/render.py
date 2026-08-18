@@ -100,6 +100,15 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
         # Prefer metrics persisted in the result. Rows merged in from the other
         # region's last run have no entry in the live metrics dict.
         m = metrics.get(ticker) or r.get("metrics") or {}
+        # A merged row is read back from the store, and the store wrote it with
+        # whatever DISPLAY_METRICS looked like on the run that produced it. If
+        # that run predates a field being added, the key is ABSENT (not None —
+        # the writer always materialises every key it knows about), and the row
+        # would quietly show dashes for data the app can compute perfectly
+        # well. Detect the older schema and say so, rather than letting a
+        # stale row impersonate missing data.
+        stale_schema = (not metrics.get(ticker) and bool(m)
+                        and any(k not in m for k in DISPLAY_METRICS))
         fw_state = {}
         fw_detail = {}
         for key, _label in FRAMEWORKS:
@@ -170,7 +179,11 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             "themes": r.get("themes") or [],
             "is_fund": bool(r.get("is_fund")),
             "gates": r.get("gates_failed", []),
-            "warnings": r.get("warnings", []),
+            "warnings": (list(r.get("warnings", []))
+                         + (["some fields are blank because this row was "
+                             "stored by an earlier build — re-run this "
+                             "market's refresh to fill them in"]
+                            if stale_schema else [])),
             "key_metrics": {
                 "P/E": _fmt_num(m.get("pe_ttm")),
                 "P/TB": _fmt_num(m.get("price_to_tangible_book")),

@@ -1921,6 +1921,24 @@ def test_display_metric_contract():
     km = rows[0]["key_metrics"]
     check("a merged row shows its 6-month return, not a dash",
           km["Return 6m"], "-12.0%")
+    check("a current stored row raises no staleness warning",
+          any("earlier build" in w for w in rows[0]["warnings"]), False)
+
+    # A row written by an older build has the key ABSENT rather than None.
+    # That is the only way to tell "we never stored this" from "we stored it
+    # and it was genuinely missing", and the row must say which it is.
+    old_row = dict(out["results"]["Z1"])
+    old_row["metrics"] = {k: v for k, v in stored.items()
+                          if k not in ("return_6m", "rsi_label")}
+    old_rows = rn.build_payload({"Z1": old_row}, {}, out)
+    check("an older stored row is flagged, not silently blank",
+          any("earlier build" in w for w in old_rows[0]["warnings"]), True)
+    check("and the warning says how to fix it",
+          any("re-run this market" in w for w in old_rows[0]["warnings"]), True)
+    # A LIVE row must never be flagged, however sparse its metrics.
+    live = rn.build_payload({"Z1": old_row}, {"Z1": {"pe_ttm": 9.0}}, out)
+    check("a live row is never called stale",
+          any("earlier build" in w for w in live[0]["warnings"]), False)
     check("and its RSI reading", "bearish zone" in km["RSI(14)"], True)
     check("and its RSI context", "ranging" in km["RSI context"], True)
 
