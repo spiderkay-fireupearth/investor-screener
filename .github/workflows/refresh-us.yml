@@ -6,7 +6,9 @@ name: Refresh US (07:00 SGT)
 #
 # Why 07:00: the NYSE close lands at 04:00 SGT during US daylight saving and
 # 05:00 SGT outside it. 07:00 clears both, plus the 1-2 hours vendors take to
-# publish adjusted bars.
+# publish adjusted bars. A midnight-SGT run would be reading noon in New York
+# — mid-session — and would therefore screen the PREVIOUS trading day's close,
+# leaving every S&P 500 name a full session stale.
 on:
   schedule:
     - cron: '0 23 * * 0-4'
@@ -17,7 +19,7 @@ on:
         required: false
 
 concurrency:
-  group: screener-refresh
+  group: screener-refresh          # never let the two region jobs race the DB
   cancel-in-progress: false
 
 permissions:
@@ -28,7 +30,13 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Raised from 60. The US universe is no longer capped, so the FIRST
+    # run after a widening has to fetch fundamentals for every new name;
+    # later runs are far cheaper because filings are cached for two
+    # weeks. src/run.py also holds its own fetch budget, which stops and
+    # publishes rather than letting this timeout kill the job — a killed
+    # job deploys nothing at all.
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
 
@@ -40,9 +48,7 @@ jobs:
       - run: pip install -r requirements.txt
 
       # The store is what makes a Yahoo outage cost one day of freshness
-      # rather than the whole history. Restore before the run, save after.
-      # run_attempt is in the key so a re-run can save instead of colliding
-      # with the cache its own first attempt already wrote.
+      # rather than the whole history. Restore it before the run, save after.
       - name: Restore data store
         uses: actions/cache/restore@v4
         with:
