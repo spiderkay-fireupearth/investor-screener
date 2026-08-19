@@ -636,3 +636,154 @@ def summarise(scan: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None
             "framing is the same: every pattern here says what the last two or "
             "three sessions did, not what the business is worth."),
     }
+
+
+# ---------------------------------------------------------------------------
+# The reference catalogue.
+#
+# Every detector above already carries its own `rule` (how it is recognised)
+# and `why` (what it means), but those only surface when a pattern actually
+# fires. A reader looking at a chart with a "Dark Cloud Cover" marker on it has
+# no way to learn what that signifies without waiting for one to appear.
+#
+# This adds the two things a reference needs and a detector does not: a GROUP,
+# so patterns that do the same job sit together, and a SHAPE, so the glyph can
+# be drawn. The prose stays in the detectors — a test asserts this catalogue
+# covers exactly the detector set, so the two cannot drift apart.
+#
+# `shape` is a list of (open, high, low, close) in arbitrary units. It is drawn,
+# not measured, so only the proportions matter.
+# ---------------------------------------------------------------------------
+
+GROUP_ORDER = [
+    "Single candle — reversal",
+    "Two candles — reversal",
+    "Three candles — reversal",
+    "Continuation",
+    "Indecision",
+]
+
+GROUP_NOTES = {
+    "Single candle — reversal": (
+        "One session that reverses the story. These are the weakest signals in "
+        "the book precisely because they rest on a single day, which is why "
+        "the trend before them and the confirmation after them do most of the "
+        "work. The shape alone is close to meaningless."),
+    "Two candles — reversal": (
+        "A session that undoes or overwhelms the one before it. Stronger than "
+        "any single candle, because the pattern itself contains the fight and "
+        "its outcome rather than only a shape."),
+    "Three candles — reversal": (
+        "A two-candle reversal that has ALREADY been confirmed by its third "
+        "session. The most reliable group here — the confirmation that other "
+        "patterns have to wait for is built into the pattern."),
+    "Continuation": (
+        "These say the existing move is intact, not that it is turning. The "
+        "common error is reading a green candle inside one as bullish: "
+        "On-Neck ends in a rising session and means the opposite."),
+    "Indecision": (
+        "Neither side won. It is not a buy and not a sell, and treating it as "
+        "either is the mistake — its value is as a warning that a trend has "
+        "stopped trending."),
+}
+
+# reliability follows the book's own emphasis: how much confirmation each
+# pattern needs before it is worth acting on.
+CATALOGUE = [
+    {"name": "Hammer", "group": "Single candle — reversal", "direction": "bullish",
+     "reliability": "moderate",
+     "signifies": "A downtrend was pushed lower and bought back before the "
+                  "close. Sellers no longer control the session.",
+     "shape": [(9.4, 9.6, 5.5, 9.5)]},
+    {"name": "Inverted Hammer", "group": "Single candle — reversal",
+     "direction": "bullish", "reliability": "weak",
+     "signifies": "Buyers attempted a rally in a downtrend and lost it by the "
+                  "close — but the attempt itself is new information.",
+     "shape": [(5.6, 9.6, 5.4, 5.7)]},
+    {"name": "Hanging Man", "group": "Single candle — reversal",
+     "direction": "bearish", "reliability": "moderate",
+     "signifies": "The hammer's exact shape, formed after an UPTREND instead. "
+                  "Same picture, opposite meaning — this is why trend context "
+                  "is not optional.",
+     "shape": [(9.4, 9.6, 5.5, 9.5)]},
+    {"name": "Shooting Star", "group": "Single candle — reversal",
+     "direction": "bearish", "reliability": "moderate",
+     "signifies": "A rally inside an uptrend was sold into and gave back "
+                  "everything. Supply is sitting above.",
+     "shape": [(5.6, 9.6, 5.4, 5.5)]},
+
+    {"name": "Bullish Engulfing", "group": "Two candles — reversal",
+     "direction": "bullish", "reliability": "strong",
+     "signifies": "One session completely undoes the last. Buyers took control "
+                  "of a range sellers owned the day before.",
+     "shape": [(7.6, 8.0, 6.6, 6.8), (6.4, 8.6, 6.2, 8.4)]},
+    {"name": "Bearish Engulfing", "group": "Two candles — reversal",
+     "direction": "bearish", "reliability": "strong",
+     "signifies": "Sellers erase a full session of gains in a single day.",
+     "shape": [(6.8, 8.0, 6.6, 7.6), (8.4, 8.6, 6.2, 6.4)]},
+    {"name": "Piercing", "group": "Two candles — reversal", "direction": "bullish",
+     "reliability": "moderate",
+     "signifies": "It opened WORSE than the previous close and still finished "
+                  "above the midpoint of that session's body.",
+     "shape": [(8.6, 8.8, 6.4, 6.6), (6.0, 8.2, 5.8, 7.8)]},
+    {"name": "Dark Cloud Cover", "group": "Two candles — reversal",
+     "direction": "bearish", "reliability": "moderate",
+     "signifies": "A gap up was sold all day, closing below the midpoint of the "
+                  "prior body. The buyers who paid the gap are underwater.",
+     "shape": [(6.4, 8.8, 6.2, 8.6), (9.0, 9.2, 6.8, 7.2)]},
+    {"name": "Bullish Counterattack", "group": "Two candles — reversal",
+     "direction": "bullish", "reliability": "weak",
+     "signifies": "A heavy down session recovered in full the next day, though "
+                  "without reclaiming its range — weaker than a piercing line.",
+     "shape": [(8.8, 9.0, 6.4, 6.6), (5.4, 6.8, 5.2, 6.6)]},
+
+    {"name": "Three Outside Up", "group": "Three candles — reversal",
+     "direction": "bullish", "reliability": "strong",
+     "signifies": "A bullish engulfing whose third session closed higher still. "
+                  "The confirmation is inside the pattern.",
+     "shape": [(7.4, 7.8, 6.8, 7.0), (6.6, 8.4, 6.4, 8.2), (8.2, 9.4, 8.0, 9.2)]},
+    {"name": "Three Outside Down", "group": "Three candles — reversal",
+     "direction": "bearish", "reliability": "strong",
+     "signifies": "A bearish engulfing already confirmed by its third session.",
+     "shape": [(7.0, 7.8, 6.8, 7.4), (8.2, 8.4, 6.4, 6.6), (6.6, 6.8, 5.4, 5.6)]},
+    {"name": "Three Inside Up", "group": "Three candles — reversal",
+     "direction": "bullish", "reliability": "strong",
+     "signifies": "Heavy selling, then a small session held INSIDE it — "
+                  "pressure stopped — then buyers took the level out.",
+     "shape": [(9.0, 9.2, 6.2, 6.4), (7.0, 7.6, 6.8, 7.6), (7.6, 9.6, 7.4, 9.4)]},
+    {"name": "Three Inside Down", "group": "Three candles — reversal",
+     "direction": "bearish", "reliability": "strong",
+     "signifies": "Heavy buying, then a small session contained inside it, then "
+                  "sellers took out the level the rally started from.",
+     "shape": [(6.4, 9.2, 6.2, 9.0), (7.6, 7.8, 7.0, 7.0), (7.0, 7.2, 5.4, 5.6)]},
+
+    {"name": "Rising Window", "group": "Continuation", "direction": "bullish",
+     "reliability": "moderate",
+     "signifies": "A gap with no overlap at all: today's LOW is above "
+                  "yesterday's HIGH. The gap is expected to act as support.",
+     "shape": [(6.2, 7.0, 6.0, 6.8), (7.8, 8.8, 7.6, 8.6)]},
+    {"name": "Falling Window", "group": "Continuation", "direction": "bearish",
+     "reliability": "moderate",
+     "signifies": "The mirror image: today's HIGH is below yesterday's LOW, and "
+                  "the gap is expected to act as resistance.",
+     "shape": [(8.6, 8.8, 7.6, 7.8), (6.8, 7.0, 6.0, 6.2)]},
+    {"name": "On-Neck", "group": "Continuation", "direction": "bearish",
+     "reliability": "moderate",
+     "signifies": "The pattern that looks bullish and is not. A bounce dies "
+                  "exactly at the previous close — the downtrend continues.",
+     "shape": [(9.0, 9.2, 6.2, 6.4), (5.8, 6.5, 5.6, 6.4)]},
+
+    {"name": "High Wave", "group": "Indecision", "direction": "neutral",
+     "reliability": "n/a",
+     "signifies": "A small body with long shadows BOTH ways. Neither side won, "
+                  "and a trend that has stopped trending is the message.",
+     "shape": [(7.4, 9.6, 5.4, 7.6)]},
+]
+
+
+def catalogue_by_group() -> "Dict[str, List[Dict[str, Any]]]":
+    """The catalogue, grouped and in GROUP_ORDER, for rendering a reference."""
+    out: Dict[str, List[Dict[str, Any]]] = {g: [] for g in GROUP_ORDER}
+    for row in CATALOGUE:
+        out.setdefault(row["group"], []).append(row)
+    return {g: rows for g, rows in out.items() if rows}

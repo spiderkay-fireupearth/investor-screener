@@ -4205,6 +4205,74 @@ def test_munger_full_framework():
           len(rows[0]["mun_readings"]) >= 2, True)
 
 
+def test_candle_reference():
+    """The reference that makes a pattern marker mean something."""
+    from src import candles as cd
+
+    names_det = set()
+    import re as _re
+    for m in _re.finditer(r'"name": "([^"]+)"', open("src/candles.py").read()):
+        names_det.add(m.group(1))
+    names_cat = {r["name"] for r in cd.CATALOGUE}
+    # The prose lives in the detectors and the grouping lives in the
+    # catalogue. They will drift the moment nothing checks them.
+    check("every detected pattern is documented", names_det - names_cat, set())
+    check("and nothing is documented that cannot be detected",
+          names_cat - names_det, set())
+    check("all 17 are covered", len(names_cat), 17)
+
+    for r in cd.CATALOGUE:
+        check(f"{r['name']} states what it signifies",
+              len(r["signifies"]) > 30, True)
+        check(f"{r['name']} has a direction",
+              r["direction"] in ("bullish", "bearish", "neutral"), True)
+        check(f"{r['name']} has a drawable shape", len(r["shape"]) >= 1, True)
+        for o, h, l, c in r["shape"]:
+            check(f"{r['name']}: high is the highest point",
+                  h >= max(o, c) and h >= l, True)
+            check(f"{r['name']}: low is the lowest point",
+                  l <= min(o, c), True)
+        check(f"{r['name']} is in a known group",
+              r["group"] in cd.GROUP_ORDER, True)
+
+    # The pairs that teach the lesson: identical shape, opposite meaning.
+    byname = {r["name"]: r for r in cd.CATALOGUE}
+    check("Hammer and Hanging Man are drawn identically, because they ARE "
+          "identical — only the prior trend differs",
+          byname["Hammer"]["shape"], byname["Hanging Man"]["shape"])
+    check("and they carry opposite directions",
+          (byname["Hammer"]["direction"], byname["Hanging Man"]["direction"]),
+          ("bullish", "bearish"))
+    check("On-Neck is filed as continuation, not reversal",
+          byname["On-Neck"]["group"], "Continuation")
+    check("even though it is bearish and ends on a green candle",
+          byname["On-Neck"]["direction"], "bearish")
+    check("the three-candle group is the reliable one",
+          all(byname[n]["reliability"] == "strong" for n in
+              ("Three Outside Up", "Three Outside Down",
+               "Three Inside Up", "Three Inside Down")), True)
+
+    # --- it reaches the page --------------------------------------------------
+    html = rn._candle_legend()
+    check("the legend renders", "signifies" in html, True)
+    for n in sorted(names_cat):
+        check(f"{n} appears in the reference", n in html, True)
+    for g in cd.GROUP_ORDER:
+        check(f"the {g} group is shown", g in html, True)
+    check("each pattern is drawn, not only described",
+          html.count("<svg class=\"cglyph\""), 17)
+    check("the glyph uses the same hollow-up rule as the chart",
+          "var(--panel2)" in html, True)
+    check("it names the three things that decide whether to act",
+          "The trend before it" in html and "The session after it" in html
+          and "The invalidation level" in html, True)
+    check("and repeats that this is timing, not valuation",
+          "never as the reason to own it" in html, True)
+    check("it is collapsed by default, so it informs without crowding",
+          html.startswith("<details"), True)
+    check("the page includes it", "cnd_html" in open("src/render.py").read(), True)
+
+
 def test_biotech_healthcare_category():
     """A category that spans seven markets, built two ways so it cannot rot."""
     from src import run as R
@@ -5062,6 +5130,7 @@ if __name__ == "__main__":
     test_rsi_reading()
     test_display_metric_contract()
     test_malaysia_market()
+    test_candle_reference()
     test_biotech_healthcare_category()
     test_nasdaq_coverage()
     test_synopsis()

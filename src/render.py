@@ -645,6 +645,26 @@ tr.detail>td{background:var(--panel);padding:0;border-bottom:2px solid var(--lin
 .kmet div{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:7px 9px}
 .kmet .kl{font-size:9.5px;color:var(--tx3);text-transform:uppercase;letter-spacing:.05em}
 .kmet .kv{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.cleg summary{cursor:pointer;font-size:13px}
+.cleg .cgh{margin:14px 0 3px;font-size:11px;letter-spacing:.06em;
+text-transform:uppercase;color:var(--tx2)}
+.cleg .cgn{font-size:11.5px;color:var(--tx3);line-height:1.5;margin-bottom:6px}
+.cleg .ctab{width:100%;border-collapse:collapse}
+.cleg .ctab td{padding:7px 0;border-top:1px solid var(--line);
+vertical-align:top;font-size:12px}
+.cleg .cgx{width:80px}
+/* Height fixed, width free: the viewBox already carries the aspect
+   ratio, so letting width follow it keeps every candle the same
+   thickness whether the pattern has one candle or three. */
+.cleg .cglyph{height:40px;width:auto;display:block}
+.cleg .cgs{color:var(--tx3);font-size:11.5px;line-height:1.5;margin-top:2px}
+.cleg .cdir,.cleg .crel{font-size:9.5px;font-weight:700;letter-spacing:.03em;
+text-transform:uppercase;padding:1px 5px;border-radius:4px;margin-left:6px;
+border:1px solid var(--line);white-space:nowrap}
+.cleg .ok{color:var(--ok);border-color:rgba(63,191,127,.4)}
+.cleg .bad{color:var(--bad);border-color:rgba(226,88,94,.4)}
+.cleg .warn{color:var(--warn);border-color:rgba(201,162,39,.4)}
+.cleg .muted{color:var(--tx3)}
 .cand{display:flex;flex-direction:column;gap:7px}
 .cand .sig{display:grid;grid-template-columns:82px 1fr auto;gap:9px;align-items:start;
 font-size:11.5px;padding-bottom:6px;border-bottom:1px solid var(--line)}
@@ -1919,6 +1939,105 @@ def _dislocation_panel(summary: Dict[str, Any]) -> str:
         'this screen just measured are, in those cases, fiction.</div>'
         '</div></details>')
 
+def _candle_glyph(shape, w=None, h=40) -> str:
+    """A tiny picture of a pattern, drawn from its shape spec.
+
+    Words describe these badly — "small real body at the top with a lower
+    shadow more than twice the body" is a sentence you have to decode, and a
+    two-centimetre drawing you simply recognise. Same hollow-up / filled-down
+    convention as the chart, so the reference teaches the chart.
+    """
+    if not shape:
+        return ""
+    # Width follows the candle COUNT. A fixed box squeezes a three-candle
+    # pattern into the space a single candle needs, and the three-candle
+    # patterns are the most reliable ones in the book — the worst group to
+    # render as an unreadable smudge.
+    if w is None:
+        w = 20 * len(shape) + 8
+    lows = [c[2] for c in shape]
+    highs = [c[1] for c in shape]
+    lo, hi = min(lows), max(highs)
+    span = (hi - lo) or 1.0
+    pad = span * 0.10
+    lo, hi = lo - pad, hi + pad
+    n = len(shape)
+    step = w / n
+    bw = min(9.0, step * 0.55)
+
+    def Y(v):
+        return h - (v - lo) / (hi - lo) * h
+
+    out = []
+    for k, (o, hh, ll, c) in enumerate(shape):
+        x = step * (k + 0.5)
+        up = c >= o
+        col = "var(--ok)" if up else "var(--bad)"
+        top = min(Y(o), Y(c))
+        body = max(1.2, abs(Y(c) - Y(o)))
+        out.append(
+            f'<line x1="{x:.1f}" y1="{Y(hh):.1f}" x2="{x:.1f}" y2="{Y(ll):.1f}" '
+            f'stroke="{col}" stroke-width="1"/>'
+            f'<rect x="{x - bw / 2:.1f}" y="{top:.1f}" width="{bw:.1f}" '
+            f'height="{body:.1f}" fill="{"var(--panel2)" if up else col}" '
+            f'stroke="{col}" stroke-width="1.2"/>')
+    return (f'<svg class="cglyph" viewBox="0 0 {w} {h}" role="img" '
+            f'aria-hidden="true">{"".join(out)}</svg>')
+
+
+def _candle_legend() -> str:
+    """What each candlestick pattern signifies — the reference the chart needs.
+
+    A marker reading "Dark Cloud Cover" is only useful to someone who already
+    knows what a dark cloud cover means. The per-signal card explains a pattern
+    WHEN IT FIRES; this explains all seventeen whether or not any of them has,
+    which is what makes the chart legible the first time someone opens it.
+
+    Grouped by the job a pattern does rather than by how many candles it has,
+    because that is the distinction that changes what you do: a continuation
+    pattern and a reversal pattern with the same colour mean opposite things.
+    """
+    from . import candles as cd
+    groups = cd.catalogue_by_group()
+    rel_cls = {"strong": "ok", "moderate": "warn", "weak": "bad", "n/a": "muted"}
+    body = ""
+    for gname, rows in groups.items():
+        note = cd.GROUP_NOTES.get(gname, "")
+        body += (f'<h5 class="cgh">{e_attr(gname)}</h5>'
+                 f'<div class="cgn">{e_attr(note)}</div>'
+                 '<table class="ctab"><tbody>')
+        for r in rows:
+            d = r["direction"]
+            dcls = {"bullish": "ok", "bearish": "bad"}.get(d, "muted")
+            body += (
+                f'<tr><td class="cgx">{_candle_glyph(r["shape"])}</td>'
+                f'<td><b>{e_attr(r["name"])}</b>'
+                f'<span class="cdir {dcls}">{e_attr(d)}</span>'
+                f'<span class="crel {rel_cls.get(r["reliability"], "muted")}">'
+                f'{e_attr(r["reliability"])}</span>'
+                f'<div class="cgs">{e_attr(r["signifies"])}</div></td></tr>')
+        body += "</tbody></table>"
+    return (
+        '<details class="dcard cleg"><summary><b>What each candlestick pattern '
+        'signifies</b> &mdash; the 17 the scanner looks for, grouped by what '
+        'they do</summary>'
+        '<div class="cgn" style="margin-top:10px">Three things decide whether '
+        'any of these is worth acting on, and none of them is the shape. '
+        '<b>The trend before it</b> &mdash; the identical candle is a Hammer '
+        'after a fall and a Hanging Man after a rise, and those mean opposite '
+        'things. <b>The session after it</b> &mdash; the book enters only if '
+        'the next candle agrees, so a pattern on the latest bar cannot be '
+        'confirmed yet. <b>The invalidation level</b> &mdash; the low of a '
+        'bullish pattern, the high of a bearish one; a close through it is the '
+        'signal saying it was wrong. The reliability column is how much '
+        'confirmation the book asks for before acting.</div>'
+        + body +
+        '<div class="cgn">These are a TIMING tool measured in days. Every other '
+        'screen in this app is measured in years. Use a pattern to choose an '
+        'entry into a company the frameworks already justify &mdash; never as '
+        'the reason to own it.</div></details>')
+
+
 def _reflexive_legend(census: Dict[str, int]) -> str:
     """The stage key, what each one means for a buyer, and the census.
 
@@ -2888,6 +3007,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     debt_html = _dalio_panel(screened.get("debt_cycle") or {})
     cmd_html = _commodity_panel(screened.get("commodity_board") or {})
     rfx_html = _reflexive_legend(screened.get("reflexive_census") or {})
+    cnd_html = _candle_legend()
     dis_html = _dislocation_panel(screened.get("dislocation_summary") or {})
     sen_html = _sentiment_panel(screened.get("sentiment") or {})
     mf_html = _magic_formula_panel(screened.get("magic_formula") or {})
@@ -2950,7 +3070,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__COVERAGE__", coverage)
             .replace("__GATE__", debt_html + sen_html + mf_html + buf_html
                      + mun_html + cmd_html
-                     + lyn_html + rfx_html + dis_html + cycle_html + gate)
+                     + lyn_html + rfx_html + cnd_html + dis_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
             .replace("__SERIES__", ", ".join(
