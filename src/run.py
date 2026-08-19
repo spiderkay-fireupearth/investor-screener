@@ -413,6 +413,31 @@ def theme_map(universe_cfg: Dict) -> Dict[str, List[str]]:
     return out
 
 
+def sector_themes(universe_cfg: Dict) -> Dict[str, List[str]]:
+    """theme name -> the sectors that join it automatically.
+
+    A hand-maintained ticker list is the right tool for pulling names INTO the
+    universe that no index supplies. It is the wrong tool for deciding who
+    belongs to a category, because it rots: checking the healthcare list on
+    2026-08-19 found six names already acquired or taken private. A sector
+    rule cannot rot — it reads what the company is, every run.
+    """
+    out: Dict[str, List[str]] = {}
+    for name, block in (universe_cfg.get("themes") or {}).items():
+        secs = [str(x).strip().lower() for x in (block.get("sectors") or [])]
+        if secs:
+            out[name] = secs
+    return out
+
+
+def auto_themes(rec: CompanyRecord, rules: Dict[str, List[str]]) -> List[str]:
+    """Theme tags a record earns from its own sector, beyond any hand list."""
+    sec = (getattr(rec, "sector", None) or "").strip().lower()
+    if not sec:
+        return []
+    return [name for name, secs in rules.items() if sec in secs]
+
+
 def merge_themes(universe_cfg: Dict, resolved: Dict[str, List[str]],
                  markets: List[str]) -> Dict[str, List[str]]:
     """Union thematic tickers into whichever market they list on.
@@ -769,6 +794,10 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
                                        sorted(_lcounts.items(), key=lambda kv: -kv[1])))
 
     themes_by_ticker = theme_map(universe_cfg)
+    sector_rules = sector_themes(universe_cfg)
+    if sector_rules:
+        log.info("Sector-joined themes: %s", ", ".join(
+            f"{k} <- {'/'.join(v)}" for k, v in sector_rules.items()))
     fund_tickers = {str(t).upper() for t in (universe_cfg.get("etfs") or [])}
 
     # State the universe up front. A run that quietly covers 20 names instead of
@@ -834,7 +863,13 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
                                    fundamentals_max_age_days=fund_max_age,
                                    fundamentals_jitter_days=fund_jitter)
                 if rec:
-                    rec.themes = themes_by_ticker.get(t.upper(), [])
+                    # Hand list first, then anything the company earns from
+                    # its own sector. Deduplicated, order preserved, so a name
+                    # on both routes is tagged once.
+                    rec.themes = list(themes_by_ticker.get(t.upper(), []))
+                    for _auto in auto_themes(rec, sector_rules):
+                        if _auto not in rec.themes:
+                            rec.themes.append(_auto)
                     rec.listing = listing_by_ticker.get(t.upper())
                     # Trust the config's ETF list over Yahoo's quoteType, which
                     # is occasionally absent; fall back to it when not listed.

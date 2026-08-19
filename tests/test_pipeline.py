@@ -4205,6 +4205,76 @@ def test_munger_full_framework():
           len(rows[0]["mun_readings"]) >= 2, True)
 
 
+def test_biotech_healthcare_category():
+    """A category that spans seven markets, built two ways so it cannot rot."""
+    from src import run as R
+    uni = yaml.safe_load(open("config/universe.yml"))
+    th = uni["themes"]["Biotech & healthcare"]
+    tick = [str(t).upper() for t in th["tickers"]]
+
+    check("the category exists", bool(th), True)
+    check("the two names that started this are in it",
+          "CRSP" in tick and "NVCR" in tick, True)
+    check("no ticker is listed twice", len(tick), len(set(tick)))
+
+    # Every requested market is actually represented — the ask named six.
+    SUF = {".T": "JP", ".SI": "SG", ".HK": "HK", ".BK": "TH", ".KL": "MY"}
+    def mkt(t):
+        for suf, m in SUF.items():
+            if t.endswith(suf):
+                return m
+        return "US"
+    by = {}
+    for t in tick:
+        by[mkt(t)] = by.get(mkt(t), 0) + 1
+    for m in ("US", "JP", "HK", "SG", "TH", "MY"):
+        check(f"{m} is represented", by.get(m, 0) >= 10, True)
+
+    # Every suffix used must be one the pipeline can route to a market, or the
+    # name is fetched into nowhere.
+    for t in tick:
+        if "." in t:
+            check(f"{t} has a routable suffix",
+                  ("." + t.split(".")[-1]).upper() in
+                  {k.upper() for k in R.SUFFIX_MARKET}, True)
+
+    # The delistings a from-memory list would have carried. Each was confirmed
+    # acquired or taken private during research, and each would have cost a
+    # failed fetch every run.
+    for gone, who in (("VERV", "Lilly"), ("EXAS", "Abbott"),
+                      ("APLS", "Biogen"), ("FOLD", "BioMarin"),
+                      ("HOLX", "Blackstone/TPG")):
+        check(f"{gone} is absent — acquired by {who}", gone in tick, False)
+    # And the three that are NYSE rather than Nasdaq, so they were never part
+    # of the Nasdaq-listed group they are usually filed under.
+    for nyse in ("PEN", "INSP", "QGEN"):
+        check(f"{nyse} is not miscategorised as Nasdaq", nyse in tick, False)
+
+    # --- the half that cannot go stale ---------------------------------------
+    rules = R.sector_themes(uni)
+    check("the category also joins on sector",
+          "Healthcare" in [x.title() for x in
+                           rules.get("Biotech & healthcare", [])], True)
+
+    class _Rec:
+        def __init__(self, sector): self.sector = sector
+    check("a healthcare name not on the list still joins",
+          R.auto_themes(_Rec("Healthcare"), rules), ["Biotech & healthcare"])
+    check("matching is case-insensitive",
+          R.auto_themes(_Rec("healthcare"), rules), ["Biotech & healthcare"])
+    check("a bank does not", R.auto_themes(_Rec("Financial Services"), rules), [])
+    check("and a missing sector is not a match, rather than an error",
+          R.auto_themes(_Rec(None), rules), [])
+    check("themes without a sectors: block are unaffected",
+          "AI infrastructure" in rules, False)
+
+    src = open("src/run.py").read()
+    check("the run applies both routes to each record",
+          "for _auto in auto_themes(rec, sector_rules):" in src, True)
+    check("without tagging a name twice when it is on both",
+          "if _auto not in rec.themes:" in src, True)
+
+
 def test_nasdaq_coverage():
     """Nasdaq beyond the Nasdaq-100, with no overlap and no alphabetical slice."""
     from src import run as R
@@ -4992,6 +5062,7 @@ if __name__ == "__main__":
     test_rsi_reading()
     test_display_metric_contract()
     test_malaysia_market()
+    test_biotech_healthcare_category()
     test_nasdaq_coverage()
     test_synopsis()
     test_lynch_categories()

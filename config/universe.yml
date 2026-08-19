@@ -727,6 +727,190 @@ themes:
       - QBTS       # Commerce / CHIPS, May 2026
       - RGTI       # Commerce / CHIPS, May 2026
       - CCJ        # participation interest, ~20% of distributions, Oct 2025
+  # -------------------------------------------------------------------------
+  # Biotechnology & healthcare, across all seven markets.
+  #
+  # This category is built TWO ways, on purpose:
+  #
+  #   1. The curated list below, which pulls names into the universe that no
+  #      index would have brought in — Asian hospital groups, glove makers and
+  #      clinical-stage biotech that sit outside the S&P 500, Nikkei 225, Hang
+  #      Seng, STI, SET50 and KLCI.
+  #   2. The `sectors` rule, which tags ANY company already in the universe
+  #      whose sector is Healthcare. That half needs no maintenance and cannot
+  #      go stale.
+  #
+  # The second exists because the first always rots. Verified 2026-08-19, and
+  # in checking it six names that a from-memory list would have carried were
+  # already gone: Verve (Lilly), Exact Sciences (Abbott), Apellis (Biogen),
+  # Amicus (BioMarin), Avidity (Novartis) and Hologic (Blackstone/TPG). Three
+  # more — Penumbra, Inspire Medical, Qiagen — are NYSE rather than Nasdaq.
+  "Biotech & healthcare":
+    as_of: "2026-08-19"
+    description: >
+      Drug developers, medical devices, diagnostics, hospitals and healthcare
+      distribution, across the US, Japan, Hong Kong, Singapore, Thailand and
+      Malaysia. Anything the pipeline already classifies as Healthcare joins
+      automatically; the list below reaches names no index would have supplied.
+    # Auto-join rule: any company whose sector matches is tagged, whether or
+    # not it appears in the list below.
+    sectors:
+      - Healthcare
+    tickers:
+      # --- US: S&P 500 healthcare majors (already in the universe; these only
+      # gain the tag, nothing extra is fetched) --------------------------------
+      - LLY         # Eli Lilly — incretin/obesity and diabetes
+      - JNJ         # Johnson & Johnson — pharma and medtech
+      - ABBV        # AbbVie — immunology, aesthetics, neuroscience
+      - UNH         # UnitedHealth — largest US health insurer
+      - MRK         # Merck & Co — oncology and vaccines
+      - AMGN        # Amgen — large-cap biologics
+      - TMO         # Thermo Fisher — life science tools
+      - ABT         # Abbott — devices, diagnostics, nutrition
+      - GILD        # Gilead — HIV and virology
+      - PFE         # Pfizer
+      - DHR         # Danaher — bioprocessing and diagnostics
+      - ISRG        # Intuitive Surgical — robotic surgery
+      - BMY         # Bristol Myers Squibb
+      - VRTX        # Vertex — cystic fibrosis, pain
+      - SYK         # Stryker — orthopaedic and surgical devices
+      - CVS         # CVS Health — pharmacy, PBM, insurance
+      - MDT         # Medtronic
+      - MCK         # McKesson — pharmaceutical wholesale
+      - HCA         # HCA Healthcare — largest US hospital operator
+      - ELV         # Elevance Health
+      - REGN        # Regeneron
+      - CI          # Cigna
+      - BSX         # Boston Scientific
+      - COR         # Cencora — pharmaceutical distribution
+      - CAH         # Cardinal Health
+      - EW          # Edwards Lifesciences
+      - BDX         # Becton Dickinson
+      - IDXX        # IDEXX — veterinary diagnostics
+      - IQV         # IQVIA — clinical trials and data
+      - DXCM        # DexCom — continuous glucose monitoring (Nasdaq, S&P 500)
+      - GEHC        # GE HealthCare
+      - RMD         # ResMed
+      - BIIB        # Biogen
+      - ZTS         # Zoetis — animal health
+      - MRNA        # Moderna
+      - INCY        # Incyte (Nasdaq, S&P 500)
+      - CRL         # Charles River — preclinical services
+      - A           # Agilent
+
+      # --- US: Nasdaq-listed, NOT in the S&P 500 ------------------------------
+      # The group this whole exercise started from. Verified Nasdaq, not NYSE.
+      - CRSP        # CRISPR Therapeutics — gene editing, sickle cell
+      - NVCR        # NovoCure — tumour treating fields
+      - NTLA        # Intellia — in vivo CRISPR
+      - BEAM        # Beam Therapeutics — base editing
+      - EDIT        # Editas Medicine — CRISPR
+      - SRPT        # Sarepta — Duchenne gene therapy
+      - KRYS        # Krystal Biotech — redosable gene therapy
+      - ALNY        # Alnylam — RNAi, ATTR amyloidosis
+      - IONS        # Ionis — antisense oligonucleotides
+      - ARWR        # Arrowhead — RNAi gene silencing
+      - BMRN        # BioMarin — rare genetic disease
+      - RARE        # Ultragenyx — ultra-rare disease
+      - PTCT        # PTC Therapeutics
+      - ASND        # Ascendis Pharma — endocrine rare disease
+      - INSM        # Insmed — rare pulmonary disease
+      - NBIX        # Neurocrine — neuroendocrine and CNS
+      - CYTK        # Cytokinetics — cardiac myosin modulators
+      - XENE        # Xenon — ion channel epilepsy
+      - MDGL        # Madrigal — MASH liver disease
+      - ALKS        # Alkermes — sleep and CNS
+      - ARGX        # argenx — FcRn autoimmune antibodies
+      - CORT        # Corcept — cortisol modulators
+      - EXEL        # Exelixis — oncology small molecules
+      - IOVA        # Iovance — TIL cell therapy
+      - LNTH        # Lantheus — radiopharmaceuticals
+      - UTHR        # United Therapeutics — pulmonary hypertension
+      - JAZZ        # Jazz Pharmaceuticals
+      - HALO        # Halozyme — subcutaneous drug delivery
+      - NTRA        # Natera — cell-free DNA diagnostics
+      - PODD        # Insulet — Omnipod insulin pumps
+      - TNDM        # Tandem Diabetes Care
+      - ILMN        # Illumina — DNA sequencing
+      - RGEN        # Repligen — bioprocessing
+      - TWST        # Twist Bioscience — synthetic DNA
+
+      # --- Japan (Nikkei 225 healthcare constituents) -------------------------
+      - 4502.T      # Takeda — Japan's largest global pharma
+      - 4503.T      # Astellas — oncology and urology
+      - 4568.T      # Daiichi Sankyo — antibody-drug conjugates
+      - 4523.T      # Eisai — Alzheimer's and oncology
+      - 4519.T      # Chugai — Roche-affiliated biologics
+      - 4507.T      # Shionogi — anti-infectives
+      - 4578.T      # Otsuka Holdings — CNS pharma, nutraceuticals
+      - 4151.T      # Kyowa Kirin — antibody biotech
+      - 4506.T      # Sumitomo Pharma — regenerative medicine
+      - 4543.T      # Terumo — cardiovascular devices
+      - 7733.T      # Olympus — endoscopes and surgical devices
+      - 2413.T      # M3 — online medical information platform
+
+      # --- Hong Kong (HKEX) ---------------------------------------------------
+      - 6160.HK     # BeOne Medicines (ex-BeiGene) — global oncology
+      - 2269.HK     # WuXi Biologics — biologics CDMO
+      - 1801.HK     # Innovent Biologics — oncology and metabolic
+      - 2359.HK     # WuXi AppTec — pharma R&D outsourcing
+      - 9926.HK     # Akeso — bispecific antibodies
+      - 1093.HK     # CSPC Pharmaceutical
+      - 1177.HK     # Sino Biopharmaceutical
+      - 3692.HK     # Hansoh Pharmaceutical
+      - 6618.HK     # JD Health — online pharmacy
+      - 1530.HK     # 3SBio — recombinant proteins
+      - 9688.HK     # Zai Lab — in-licensed oncology
+      - 0241.HK     # Alibaba Health
+      - 1099.HK     # Sinopharm — pharmaceutical distribution
+      - 2196.HK     # Fosun Pharma — diversified pharma and devices
+      - 1548.HK     # Genscript Biotech — life-science services
+
+      # --- Singapore (SGX) ----------------------------------------------------
+      # Thin secondary listings (Top Glove BVA, Sri Trang STG, China Medical
+      # System 8A8) are deliberately excluded — the codes are right but SGX
+      # volume is near zero, and they would arrive as empty price series.
+      - Q0F.SI      # IHH Healthcare — pan-Asian private hospitals
+      - BSL.SI      # Raffles Medical — Singapore hospitals and clinics
+      - A50.SI      # Thomson Medical — women's and children's hospitals
+      - QC7.SI      # Q&M Dental
+      - AP4.SI      # Riverstone — cleanroom and medical gloves
+      - C2PU.SI     # Parkway Life REIT — hospital property
+      - 5WA.SI      # OUE Healthcare
+      - P8A.SI      # Cordlife — cord blood banking
+      - 1J5.SI      # Hyphens Pharma — specialty pharma distribution
+      - 40T.SI      # ISEC Healthcare — eye care
+      - 1B1.SI      # HC Surgical Specialists — endoscopy
+
+      # --- Thailand (SET) -----------------------------------------------------
+      - BDMS.BK     # Bangkok Dusit Medical — largest private hospital group
+      - BH.BK       # Bumrungrad Hospital — premium international
+      - BCH.BK      # Bangkok Chain Hospital
+      - RAM.BK      # Ramkhamhaeng Hospital
+      - VIBHA.BK    # Vibhavadi Medical Center
+      - CHG.BK      # Chularat Hospital
+      - SKR.BK      # Sikarin
+      - PR9.BK      # Praram 9 Hospital
+      - THG.BK      # Thonburi Healthcare
+      - MEGA.BK     # Mega Lifesciences — nutraceuticals and distribution
+      - PRINC.BK    # Principal Capital — regional hospitals
+      - NTV.BK      # Nonthavej Hospital
+      - TNH.BK      # Thai Nakarin Hospital
+      - EKH.BK      # Ekachai Medical Care
+
+      # --- Malaysia (Bursa) ---------------------------------------------------
+      - 5225.KL     # IHH Healthcare — pan-Asian private hospitals
+      - 5878.KL     # KPJ Healthcare — Malaysia's largest hospital network
+      - 5555.KL     # Sunway Healthcare — IPO Mar 2026, short history
+      - 5168.KL     # Hartalega — nitrile examination gloves
+      - 7113.KL     # Top Glove — world's largest glove maker
+      - 7153.KL     # Kossan Rubber — medical gloves
+      - 7106.KL     # Supermax — glove manufacturing
+      - 7148.KL     # Duopharma Biotech — generics and biosimilars
+      - 7081.KL     # Pharmaniaga — pharma manufacturing and distribution
+      - 7090.KL     # Apex Healthcare — pharmaceutical distribution
+      - 0002.KL     # Kotra Industries — vitamins and pharmaceuticals
+      - 0222.KL     # Optimax Holdings — eye specialist centres
   "AI infrastructure":
     description: >
       The supply chain powering AI build-out — silicon, interconnect, servers,
