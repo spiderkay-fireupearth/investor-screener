@@ -2840,6 +2840,20 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                     "<code>fetch_budget_minutes</code> and the workflow timeout "
                     "to cover it all in one pass.")
 
+    # Pinned names, answered directly. Someone adds a ticker to
+    # always_include because they are looking for that company; the page
+    # should say whether it is here without them having to search for it.
+    _pin = screened.get("pinned") or {}
+    if _pin.get("missing"):
+        cov_note += ("<br><b>Pinned but not screened: "
+                     + ", ".join(e_attr(t) for t in _pin["missing"])
+                     + "</b> — listed in <code>always_include</code> but they "
+                     "did not reach the screens this run. Check the run log "
+                     "for the line beginning ALWAYS_INCLUDE.")
+    elif _pin.get("present"):
+        cov_note += ("<br>Pinned names present: "
+                     + ", ".join(e_attr(t) for t in _pin["present"]) + ".")
+
     _drop = (screened.get("nasdaq_dropped") or 0)
     nas_note = ""
     if _drop:

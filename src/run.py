@@ -980,6 +980,28 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         "budget_minutes": budget_min,
         "by_market": {k: len(v) for k, v in tickers_by_market.items()},
     }
+    # Close the loop on always_include. A name can be admitted to the universe
+    # and still not reach the screens — no price history, a failed fetch — and
+    # the whole point of pinning it was that someone is looking for it. Say
+    # plainly whether it is there.
+    _pins = [str(x).upper() for x in
+             ((universe_cfg.get("markets", {}).get("US") or {})
+              .get("nasdaq_listed") or {}).get("always_include") or []]
+    if _pins:
+        _got = {r.ticker.upper() for r in records}
+        _have_pins = [p for p in _pins if p in _got]
+        _lost_pins = [p for p in _pins if p not in _got]
+        screened["pinned"] = {"asked": _pins, "present": _have_pins,
+                              "missing": _lost_pins}
+        if _lost_pins:
+            log.error("ALWAYS_INCLUDE: %s did NOT reach the screens. Look for "
+                      "the ticker in the lines above — it was either absent "
+                      "from the Nasdaq directory, or its price/fundamentals "
+                      "fetch failed.", ", ".join(_lost_pins))
+        else:
+            log.info("ALWAYS_INCLUDE: all %d pinned names reached the screens "
+                     "(%s)", len(_pins), ", ".join(_have_pins))
+
     if missed:
         log.warning("COVERAGE: %d of %d names did not reach the screens. "
                     "First few: %s", len(missed), total_universe,

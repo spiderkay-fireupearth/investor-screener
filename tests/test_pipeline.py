@@ -4504,6 +4504,80 @@ def test_nasdaq_coverage():
     check("and the run's own budget stops before it",
           uni_all["fetch_budget_minutes"] < _tmo, True)
 
+    # --- END TO END: the two names the user could not find --------------------
+    # Every earlier fix was argued from the parts. This drives the whole
+    # Nasdaq path with both names present in the directory and each hitting a
+    # DIFFERENT reason it used to be dropped, and asserts they come out.
+    e2e = "\n".join([
+        "Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares",
+        # CRSP: top tier, but thin enough to sit below the turnover line.
+        "CRSP|CRISPR Therapeutics AG - Common Shares|Q|N|N|100|N|N",
+        # NVCR: Global Market tier, which the old ["Q"]-only config excluded
+        # outright no matter how the ranking went.
+        "NVCR|NovoCure Limited - Ordinary Shares|G|N|N|100|N|N",
+        # Busy names that would have filled a cap ahead of both of them.
+        "BUSY|Busy Co - Common Stock|Q|N|N|100|N|N",
+        "BSYB|Busier Co - Common Stock|Q|N|N|100|N|N",
+        # And a warrant, which must never be admitted by any route.
+        "CRSPW|CRISPR Therapeutics AG - Warrants|Q|N|N|100|N|N",
+    ])
+    live_cfg = yaml.safe_load(open("config/universe.yml"))["markets"]["US"]["nasdaq_listed"]
+
+    class E2EYahoo:
+        """CRSP below the floor, NVCR above it, the busy names far above."""
+        TURNOVER = {"BUSY": 900e6, "BSYB": 800e6, "NVCR": 40e6, "CRSP": 5e6}
+        def prices_batch(self, syms, period="6mo"):
+            out = {}
+            for sm in syms:
+                t = self.TURNOVER.get(sm, 1e6)
+                out[sm] = pd.DataFrame(
+                    {"Close": [100.0] * 60, "Volume": [t / 100.0] * 60},
+                    index=pd.date_range("2025-01-01", periods=60, freq="B"))
+            return out
+
+    with _mock.patch.object(R, "_http_get", return_value=e2e):
+        e2e_cands = R.nasdaq_listed(live_cfg)
+    check("the live config admits CRSP", "CRSP" in e2e_cands, True)
+    check("and NVCR, which sits on the Global Market tier",
+          "NVCR" in e2e_cands, True)
+    check("but never the warrant that shares CRSP's name",
+          "CRSPW" in e2e_cands, False)
+
+    e2e_kept = R.rank_by_liquidity(E2EYahoo(), e2e_cands, live_cfg)
+    check("NVCR survives the liquidity pass on its own merits",
+          "NVCR" in e2e_kept, True)
+    check("and CRSP survives it despite trading below the floor, because it "
+          "is on always_include", "CRSP" in e2e_kept, True)
+    check("the busy names are not displaced",
+          all(x in e2e_kept for x in ("BUSY", "BSYB")), True)
+    check("nothing was dropped, because the live config has no cap",
+          getattr(R.rank_by_liquidity, "last_dropped", -1), 0)
+
+    # The same path with the OLD settings, to prove these are the settings
+    # that mattered rather than a coincidence.
+    old_cfg = {"market_categories": ["Q"], "max_names": 2,
+               "min_median_turnover_usd": 20_000_000}
+    with _mock.patch.object(R, "_http_get", return_value=e2e):
+        old_cands = R.nasdaq_listed(old_cfg)
+    old_kept = R.rank_by_liquidity(E2EYahoo(), old_cands, old_cfg)
+    check("under the old tier filter NVCR was unreachable at any cap",
+          "NVCR" in old_cands, False)
+    check("and under the old cap CRSP lost to busier names",
+          "CRSP" in old_kept, False)
+
+    # A pinned name can be admitted to the universe and STILL not reach the
+    # screens — a failed price fetch is enough. Since the only reason to pin a
+    # name is that someone is looking for it, the run says so either way.
+    check("the run checks its pinned names actually arrived",
+          'screened["pinned"]' in src, True)
+    check("and shouts when one did not",
+          "ALWAYS_INCLUDE: %s did NOT reach the screens" in src, True)
+    rsrc2 = open("src/render.py").read()
+    check("the page answers it too, without needing a search",
+          "Pinned but not screened:" in rsrc2, True)
+    check("and confirms them when they are present",
+          "Pinned names present:" in rsrc2, True)
+
     check("the Nasdaq layer never aborts the run",
           "Nasdaq extra coverage failed, continuing without it" in src, True)
     check("and reports the new universe size",
