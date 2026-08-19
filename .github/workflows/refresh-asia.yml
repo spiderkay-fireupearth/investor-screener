@@ -5,7 +5,9 @@ name: Refresh Asia (18:30 SGT)
 #
 # Why 18:30: HKEX closes 16:00 SGT, IDX ~17:00, SGX 17:00, SET 17:30. Running
 # at 18:30 means all four Asian closes are settled and Yahoo has published
-# adjusted bars.
+# adjusted bars. Running at 00:00 SGT as originally planned would still catch
+# these four, but would read a US session that hadn't closed yet — which is why
+# the US job is separate.
 on:
   schedule:
     - cron: '30 10 * * 1-5'
@@ -16,7 +18,7 @@ on:
         required: false
 
 concurrency:
-  group: screener-refresh
+  group: screener-refresh          # never let the two region jobs race the DB
   cancel-in-progress: false
 
 permissions:
@@ -27,7 +29,9 @@ permissions:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Headroom for a cold cache; the run's own fetch budget stops it long
+    # before this, and publishes what it reached.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -39,9 +43,7 @@ jobs:
       - run: pip install -r requirements.txt
 
       # The store is what makes a Yahoo outage cost one day of freshness
-      # rather than the whole history. Restore before the run, save after.
-      # run_attempt is in the key so a re-run can save instead of colliding
-      # with the cache its own first attempt already wrote.
+      # rather than the whole history. Restore it before the run, save after.
       - name: Restore data store
         uses: actions/cache/restore@v4
         with:
