@@ -745,6 +745,7 @@ padding:11px 15px;margin:14px 0;font-size:13px;color:var(--tx2)}
 .ddhint{font-size:11.5px;color:var(--tx3)}
 .dd{color:var(--acc);font-size:11px;margin-left:5px}
 .empty{text-align:center;padding:50px;color:var(--tx3)}
+.foot .miss{color:var(--tx3);font-size:11px;word-break:break-word}
 .foot{color:var(--tx3);font-size:12px;margin-top:32px;padding-top:14px;border-top:1px solid var(--line)}
 </style></head><body><div class="wrap">
 
@@ -2806,6 +2807,39 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     # A screener that quietly drops several hundred qualifying companies looks
     # identical to one that covers everything, right up until someone searches
     # for a stock they own and finds nothing.
+    # The coverage ledger. A screener that covers 940 of 1,000 names looks
+    # exactly like one that covers all 1,000 unless it says so; this is the
+    # line that makes "nothing missed" a checkable claim rather than a hope.
+    _cov = screened.get("coverage") or {}
+    cov_note = ""
+    if _cov:
+        _uni, _scr = _cov.get("universe", 0), _cov.get("screened", 0)
+        _miss = _cov.get("missed") or []
+        if _uni and not _miss:
+            cov_note = (f"<br>Coverage: <b>all {_uni} names</b> in the universe "
+                        "reached the screens this run.")
+        elif _uni:
+            _by: Dict[str, int] = {}
+            for _m in _miss:
+                _r = _m.get("reason", "unknown")
+                _by[_r] = _by.get(_r, 0) + 1
+            _rs = "; ".join(f"{v}× {e_attr(k)}" for k, v in
+                            sorted(_by.items(), key=lambda kv: -kv[1])[:4])
+            _names = ", ".join(e_attr(m["ticker"]) for m in _miss[:40])
+            cov_note = (
+                f"<br>Coverage: <b>{_scr} of {_uni}</b> names reached the "
+                f"screens. <b>{len(_miss)}</b> did not — {_rs}."
+                + (f"<br><span class='miss'>Not screened: {_names}"
+                   + (f" &hellip; and {len(_miss) - 40} more" if len(_miss) > 40 else "")
+                   + "</span>"))
+            if _cov.get("budget_spent"):
+                cov_note += (
+                    f"<br>The {_cov.get('budget_minutes')}-minute fetch budget "
+                    "was spent before the universe was finished. Fundamentals "
+                    "are cached, so the next run starts further along; raise "
+                    "<code>fetch_budget_minutes</code> and the workflow timeout "
+                    "to cover it all in one pass.")
+
     _drop = (screened.get("nasdaq_dropped") or 0)
     nas_note = ""
     if _drop:
@@ -2908,7 +2942,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__SERIES__", ", ".join(
                 f"{MARKET_LABELS.get(k, k)} {v}"
                 for k, v in sorted(series_counts.items())) or "none written")
-            .replace("__NASNOTE__", nas_note)
+            .replace("__NASNOTE__", nas_note + cov_note)
             .replace("__TS__", datetime.now(timezone.utc)
                      .strftime("%Y-%m-%d %H:%M UTC")))
 

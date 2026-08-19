@@ -328,7 +328,12 @@ def rank_by_liquidity(yahoo: YahooProvider, symbols: List[str],
     """
     if not symbols:
         return []
-    want = int(cfg.get("max_names", 150))
+    # max_names may be null, meaning "no cap — keep everything that clears the
+    # floor". int(None) raises, and the raise happens inside the caller's
+    # try/except, so the whole Nasdaq layer would have silently switched off:
+    # the exact failure mode this config value was set to null to escape.
+    _cap = cfg.get("max_names")
+    want = int(_cap) if _cap else len(symbols)
     floor = float(cfg.get("min_median_turnover_usd", 5_000_000))
     log.info("Ranking %d Nasdaq candidates by liquidity (keeping %d above "
              "USD %s median daily turnover)", len(symbols), want, f"{floor:,.0f}")
@@ -559,10 +564,23 @@ def refresh_fx(yahoo: YahooProvider, store: Store, fx_pairs: Dict[str, Optional[
             log.warning("FX %s fetch failed; using cached %s", ccy, cached)
 
 
+def _stable_jitter(ticker: str, spread: int) -> int:
+    """A per-ticker offset that is the same on every run.
+
+    Deliberately not random: the point is that a given company refreshes on a
+    predictable day, so the load spreads out and stays spread out.
+    """
+    if spread <= 0:
+        return 0
+    return sum(ord(c) for c in ticker) % (spread + 1)
+
+
 def build_record(ticker: str, market_cfg: Dict, market_key: str,
                  store: Store, yahoo: YahooProvider, edgar: Optional[EdgarProvider],
                  index_df, fx_to_usd: Optional[float],
-                 refresh_fundamentals: bool = True) -> Optional[CompanyRecord]:
+                 refresh_fundamentals: bool = True,
+                 fundamentals_max_age_days: int = 0,
+                 fundamentals_jitter_days: int = 0) -> Optional[CompanyRecord]:
     ccy = market_cfg.get("currency", "USD")
     rec = CompanyRecord(ticker=ticker, market=market_key, currency=ccy,
                         standard="us-gaap" if market_key == "US" else "ifrs")
@@ -612,7 +630,26 @@ def build_record(ticker: str, market_cfg: Dict, market_key: str,
     # ---- fundamentals: EDGAR for US (audited), Yahoo for Asia (only option)
     years: List[FundamentalYear] = []
     source = market_cfg.get("fundamentals_provider", "yahoo")
-    if refresh_fundamentals:
+
+    # Is the cached copy still good? Company filings change quarterly, so
+    # re-downloading twelve years of XBRL for every name every day was pure
+    # waste — and it was the waste that made full coverage look unaffordable
+    # and justified the cap that hid the names the user was looking for.
+    #
+    # The age limit is jittered per ticker so a full first run does not create
+    # a herd that all expires on the same later day and stalls one run badly.
+    fresh_enough = False
+    if refresh_fundamentals and fundamentals_max_age_days:
+        try:
+            age = store.fundamentals_age_days(ticker)
+            if age is not None:
+                jitter = _stable_jitter(ticker, fundamentals_jitter_days)
+                if age < (fundamentals_max_age_days + jitter):
+                    fresh_enough = True
+        except Exception:                              # noqa: BLE001
+            fresh_enough = False
+
+    if refresh_fundamentals and not fresh_enough:
         if source == "edgar" and edgar is not None:
             years = edgar.fetch(ticker, years=12)
             if not years:
@@ -628,7 +665,17 @@ def build_record(ticker: str, market_cfg: Dict, market_key: str,
         cached = store.load_fundamentals(ticker)
         if cached:
             age = store.fundamentals_age_days(ticker)
-            rec.warnings.append(f"fundamentals fetch failed; using cache ({age}d old)")
+            # A deliberate skip is NOT a failure, and must not be reported as
+            # one — a page full of "fetch failed" warnings on a healthy run
+            # teaches the reader to ignore the warnings that matter.
+            if fresh_enough:
+                rec.warnings.append(
+                    f"fundamentals read from cache ({age}d old, refreshed "
+                    f"every {fundamentals_max_age_days}d — filings are "
+                    f"quarterly, prices below are today's)")
+            else:
+                rec.warnings.append(
+                    f"fundamentals fetch failed; using cache ({age}d old)")
             for c in cached:
                 fy = FundamentalYear(
                     ticker=ticker, fiscal_year=c["fiscal_year"],
@@ -736,6 +783,16 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
 
     records: List[CompanyRecord] = []
     ok = fail = 0
+    # Every name that does not make it into the screens, with the reason. The
+    # whole point of removing the cap was "nothing missed"; the only way to
+    # keep that promise honest is to publish the exceptions rather than let a
+    # smaller number quietly come out the other end.
+    missed: List[Dict[str, str]] = []
+    fund_max_age = int(universe_cfg.get("fundamentals_max_age_days") or 0)
+    fund_jitter = int(universe_cfg.get("fundamentals_jitter_days") or 0)
+    budget_min = float(universe_cfg.get("fetch_budget_minutes") or 0)
+    deadline = (time.time() + budget_min * 60) if budget_min else None
+    out_of_time = False
 
     for mkt in markets:
         mcfg = universe_cfg["markets"][mkt]
@@ -754,9 +811,28 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         fx = store.latest_fx(mcfg.get("currency", "USD"))
 
         for i, t in enumerate(tickers, 1):
+            # Out of time: stop FETCHING, but still screen and publish what we
+            # have. Being killed by the workflow timeout deploys nothing at
+            # all, which is strictly worse than a run that covered most of the
+            # universe and said which names it did not reach.
+            if deadline and time.time() > deadline:
+                if not out_of_time:
+                    log.error("FETCH BUDGET of %g minutes is spent. Screening "
+                              "what has been fetched and reporting the rest as "
+                              "not reached. Raise fetch_budget_minutes (and the "
+                              "workflow timeout) to cover more in one run — the "
+                              "fundamentals cache means each run gets further.",
+                              budget_min)
+                    out_of_time = True
+                missed.append({"ticker": t, "market": mkt,
+                               "reason": "not reached — fetch budget spent"})
+                fail += 1
+                continue
             try:
                 rec = build_record(t, mcfg, mkt, store, yahoo, edgar, idx_df, fx,
-                                   refresh_fundamentals=not skip_fundamentals)
+                                   refresh_fundamentals=not skip_fundamentals,
+                                   fundamentals_max_age_days=fund_max_age,
+                                   fundamentals_jitter_days=fund_jitter)
                 if rec:
                     rec.themes = themes_by_ticker.get(t.upper(), [])
                     rec.listing = listing_by_ticker.get(t.upper())
@@ -767,9 +843,13 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
                     records.append(rec)
                     ok += 1
                 else:
+                    missed.append({"ticker": t, "market": mkt,
+                                   "reason": "no price history available"})
                     fail += 1
             except Exception as e:                     # noqa: BLE001
                 log.exception("%s failed: %s", t, e)
+                missed.append({"ticker": t, "market": mkt,
+                               "reason": f"{type(e).__name__}: {e}"[:160]})
                 fail += 1
             if i % 25 == 0:
                 log.info("  %s: %d/%d", mkt, i, len(tickers))
@@ -890,6 +970,24 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     # Carried to the page so the cap's effect is visible to a reader, not only
     # to whoever opens the Actions log.
     screened["nasdaq_dropped"] = nasdaq_dropped
+    # The coverage ledger: what was asked for, what came out, and every name
+    # in between with its reason.
+    screened["coverage"] = {
+        "universe": total_universe,
+        "screened": len(records),
+        "missed": missed,
+        "budget_spent": out_of_time,
+        "budget_minutes": budget_min,
+        "by_market": {k: len(v) for k, v in tickers_by_market.items()},
+    }
+    if missed:
+        log.warning("COVERAGE: %d of %d names did not reach the screens. "
+                    "First few: %s", len(missed), total_universe,
+                    ", ".join(f"{m['ticker']} ({m['reason']})"
+                              for m in missed[:8]))
+    else:
+        log.info("COVERAGE: all %d names in the universe were screened",
+                 total_universe)
 
     # ---- market psychology --------------------------------------------------
     # Six gauges of what the crowd is doing, all contrarian in application. Any

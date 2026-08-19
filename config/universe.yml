@@ -7,6 +7,22 @@
 # Refresh these lists ~quarterly; `python -m src.run --check-universe` reports
 # tickers that have stopped returning data (a proxy for delisting/removal).
 
+# How long a cached set of company fundamentals stays good. Filings are
+# quarterly, so re-downloading twelve years of XBRL for every name every day
+# bought nothing and cost most of the run. Prices and technicals are ALWAYS
+# refreshed — only the accounts are cached.
+#
+# The jitter spreads expiry so a full first run does not create a herd that
+# all comes due on the same later day.
+fundamentals_max_age_days: 14
+fundamentals_jitter_days: 6
+
+# A wall-clock budget for the fetch phase, in minutes. When it is spent the
+# run stops fetching, screens what it has, and reports the rest as not
+# reached — rather than being killed by the workflow timeout, which produces
+# nothing at all and deploys nothing. Set to 0 to disable.
+fetch_budget_minutes: 240
+
 markets:
   US:
     name: United States
@@ -88,9 +104,12 @@ markets:
       market_categories: ["Q", "G"]
       exclude_etfs: true
       normal_status_only: true
-      # The dial that trades coverage against run time. At ~1.5s per name a US
-      # run of ~1,040 names lands near 26 minutes against a 60-minute limit.
-      max_names: 500
+      # No cap: every Nasdaq name above the turnover floor is screened. What
+      # makes that affordable is the fundamentals cache below — company
+      # filings change quarterly, so re-downloading twelve years of XBRL for
+      # every name every day was most of the old run time. Set an integer here
+      # to re-impose a cap; the page reports whatever a cap discards.
+      max_names: null
       min_median_turnover_usd: 20000000
       # Names that bypass the liquidity ranking entirely. The ranking answers
       # "what is worth screening in general"; this answers "what do I actually
@@ -99,6 +118,7 @@ markets:
       # that ranked below the cap, it does not invent one.
       always_include:
         - CRSP
+        - NVCR
     seed_fallback:
       - AAPL
       - MSFT

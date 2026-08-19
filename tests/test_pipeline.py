@@ -4215,11 +4215,15 @@ def test_nasdaq_coverage():
           "nasdaqtrader.com" in cfg["url"], True)
     check("starting at the Global Select tier",
           cfg["market_categories"][0], "Q")
-    check("with a cap on how many names it may add", cfg["max_names"], 500)
+    # No cap: "screen everything above the floor". The cap was what hid CRSP
+    # and NVCR — real companies that simply ranked below an arbitrary line.
+    check("there is no cap on how many names it may add",
+          cfg["max_names"], None)
     check("covering Global Select AND Global Market, so mid-caps are reachable",
           cfg["market_categories"], ["Q", "G"])
-    check("and a way to admit a specific holding regardless of its rank",
-          "CRSP" in (cfg.get("always_include") or []), True)
+    for _t in ("CRSP", "NVCR"):
+        check(f"{_t} is pinned in regardless of rank",
+              _t in (cfg.get("always_include") or []), True)
     check("and a turnover floor beneath it",
           cfg["min_median_turnover_usd"] > 0, True)
 
@@ -4398,6 +4402,16 @@ def test_nasdaq_coverage():
     check("and records how many it threw away",
           getattr(R.rank_by_liquidity, "last_dropped", 0), 7)
 
+    # A null cap means "keep everything above the floor". int(None) raises,
+    # and that raise happens inside the caller's try/except — so the entire
+    # Nasdaq layer would have switched itself off silently, which is precisely
+    # what setting the cap to null was meant to escape.
+    uncapped = R.rank_by_liquidity(RankYahoo(), syms,
+                                   {"max_names": None,
+                                    "min_median_turnover_usd": 1.0})
+    check("a null cap keeps every name above the floor", len(uncapped), len(syms))
+    check("and drops nothing", getattr(R.rank_by_liquidity, "last_dropped", -1), 0)
+
     forced = R.rank_by_liquidity(RankYahoo(), syms,
                                  {**small, "always_include": ["S008"]})
     check("a name on always_include is admitted past the ranking",
@@ -4434,6 +4448,61 @@ def test_nasdaq_coverage():
     check("and the page says so in the footer, not only the run log",
           "further Nasdaq" in rsrc0 and "__NASNOTE__" in rsrc0, True)
     check("naming the knob that widens it", "max_names" in rsrc0, True)
+
+    # --- what makes uncapped coverage affordable -----------------------------
+    # Company filings change quarterly. Re-downloading twelve years of XBRL
+    # for every name every day was most of the run time, and it was that cost
+    # which justified the cap that hid CRSP and NVCR in the first place.
+    uni_all = yaml.safe_load(open("config/universe.yml"))
+    check("fundamentals are cached between runs",
+          uni_all["fundamentals_max_age_days"] > 0, True)
+    check("with a jitter, so a full first run does not create a herd that all "
+          "expires on one later day",
+          uni_all["fundamentals_jitter_days"] > 0, True)
+    check("the jitter is stable per ticker, not random — a company should "
+          "refresh on a predictable day",
+          R._stable_jitter("AAPL", 6), R._stable_jitter("AAPL", 6))
+    check("and stays inside the spread",
+          all(0 <= R._stable_jitter(t, 6) <= 6
+              for t in ("AAPL", "CRSP", "NVCR", "Z")), True)
+    check("a zero spread means no jitter", R._stable_jitter("AAPL", 0), 0)
+    check("prices are still fetched every run — only the accounts are cached",
+          'yahoo.prices(ticker, period="10y")' in src, True)
+    check("a deliberate cache read is not reported as a failure",
+          "fundamentals read from cache" in src, True)
+
+    # A run that exceeds the workflow timeout deploys NOTHING. Stopping early
+    # and publishing what was reached is strictly better, provided it says so.
+    check("there is a fetch budget", uni_all["fetch_budget_minutes"] > 0, True)
+    check("which stops fetching rather than being killed",
+          "FETCH BUDGET of %g minutes is spent" in src, True)
+    check("and records the unreached names rather than dropping them quietly",
+          '"reason": "not reached — fetch budget spent"' in src, True)
+
+    # --- the ledger ----------------------------------------------------------
+    check("every miss is recorded with a reason",
+          'missed.append({"ticker": t' in src, True)
+    check("including a name with no price history",
+          '"reason": "no price history available"' in src, True)
+    check("and one that raised", '"reason": f"{type(e).__name__}' in src, True)
+    check("the ledger reaches the page", 'screened["coverage"]' in src, True)
+    rsrc1 = open("src/render.py").read()
+    check("which states the full count when nothing was missed",
+          "reached the screens this run" in rsrc1, True)
+    check("and NAMES the misses when there were any",
+          "Not screened:" in rsrc1, True)
+    check("saying so is the point — a screener covering 940 of 1000 looks "
+          "identical to one covering all of them",
+          "names reached the "  in rsrc1, True)
+
+    # The run's budget only helps if the job itself lives long enough to hit
+    # it. A 60-minute timeout against an uncapped first run would be killed
+    # mid-fetch, and a killed job deploys nothing at all.
+    wf = open(".github/workflows/refresh-us.yml").read()
+    _tmo = int(re.search(r"timeout-minutes:\s*(\d+)", wf).group(1))
+    check("the US workflow has room for a cold uncapped run", _tmo >= 240, True)
+    check("and the run's own budget stops before it",
+          uni_all["fetch_budget_minutes"] < _tmo, True)
 
     check("the Nasdaq layer never aborts the run",
           "Nasdaq extra coverage failed, continuing without it" in src, True)
