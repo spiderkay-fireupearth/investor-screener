@@ -158,7 +158,20 @@ def sparkline(df: pd.DataFrame, points: int = SPARK_POINTS,
         # also exactly what the pattern scanner looks at, so the chart and the
         # verdict can never disagree about which bars they are describing.
         "ohlc": candle_series(df),
+        # The Bollinger lines over the same window as the candles, so the two
+        # charts in the drawer describe the same sixty sessions.
+        "bb": _band_series(df),
     }
+
+
+def _band_series(df: pd.DataFrame) -> Optional[Dict[str, Any]]:
+    """The Bollinger lines for the chart, or nothing if they cannot be drawn."""
+    try:
+        from . import bollinger as _bb
+        b = _bb.compute(df)
+        return b.get("series") if b.get("available") else None
+    except Exception:                                  # noqa: BLE001
+        return None
 
 
 def candle_series(df: pd.DataFrame, bars: int = CANDLE_BARS
@@ -353,6 +366,39 @@ def compute(df: pd.DataFrame,
         out["candle_action"] = None
         out["candle_why"] = f"pattern scan failed: {e}"
         out["candle_signals"] = []
+    # Bollinger Bands. Kept to the verdict plus the handful of readings the
+    # panel shows; the band series itself rides along in the sparkline payload
+    # rather than in the row, for the same reason the candles do.
+    try:
+        from . import bollinger as _bb
+        _b = _bb.compute(df)
+        _v = _bb.evaluate(_b)
+        if _v.get("available"):
+            out["bb_action"] = _v["action"]
+            out["bb_strategy"] = _v["strategy"]
+            out["bb_regime"] = _v["regime"]
+            out["bb_regime_why"] = _v["regime_why"]
+            out["bb_why"] = _v["why"]
+            out["bb_action_note"] = _v["action_note"]
+            out["bb_stop"] = _v["stop"]
+            out["bb_bias"] = _v["bias"]
+            out["bb_notes"] = _v["notes"]
+            out["bb_squeeze"] = _v["squeeze"]
+            out["bb_riding"] = _v["riding"]
+            out["bb_caveat"] = _v["caveat"]
+            out["bb_upper"] = _b.get("upper")
+            out["bb_middle"] = _b.get("middle")
+            out["bb_lower"] = _b.get("lower")
+            out["bb_bandwidth"] = _b.get("bandwidth")
+            out["bb_percent_b"] = _b.get("percent_b")
+            out["bb_pctile"] = _b.get("bandwidth_pctile")
+        else:
+            out["bb_action"] = None
+            out["bb_why"] = _v.get("reason") or _b.get("reason")
+    except Exception as e:                        # noqa: BLE001
+        out["bb_action"] = None
+        out["bb_why"] = f"Bollinger computation failed: {e}"
+
     # The price five years ago, for Buffett's one-dollar test: what the market
     # capitalisation was then is half of "did a dollar retained become a dollar
     # of value?" and nothing else on the page carries it.

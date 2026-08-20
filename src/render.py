@@ -97,6 +97,10 @@ DISPLAY_METRICS = (
     # published page for rows nobody is reviewing (see build_payload), because
     # 900 series is a megabyte of JSON on a phone.
     "spark", "return_1m", "macd_histogram", "vol20_over_vol50",
+    "bb_action", "bb_strategy", "bb_regime", "bb_regime_why", "bb_why",
+    "bb_action_note", "bb_stop", "bb_bias", "bb_notes", "bb_squeeze",
+    "bb_riding", "bb_caveat", "bb_upper", "bb_middle", "bb_lower",
+    "bb_bandwidth", "bb_percent_b", "bb_pctile",
     "candle_action", "candle_why", "candle_trend", "candle_stop",
     "candle_bullish", "candle_bearish", "candle_signals", "candle_caveat",
     "atr_pct", "max_drawdown_1y", "max_drawdown_5y",
@@ -269,6 +273,23 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 "macd": m.get("macd_histogram"),
                 "vol": m.get("vol20_over_vol50"),
                 "rs": m.get("rs_vs_market_index_6m"),
+            },
+            "bb": {
+                "action": m.get("bb_action"),
+                "strategy": m.get("bb_strategy"),
+                "regime": m.get("bb_regime"),
+                "regime_why": m.get("bb_regime_why"),
+                "why": m.get("bb_why"),
+                "note": m.get("bb_action_note"),
+                "stop": m.get("bb_stop"),
+                "bias": m.get("bb_bias"),
+                "readings": m.get("bb_notes"),
+                "squeeze": m.get("bb_squeeze"),
+                "riding": m.get("bb_riding"),
+                "caveat": m.get("bb_caveat"),
+                "u": m.get("bb_upper"), "mid": m.get("bb_middle"),
+                "lo": m.get("bb_lower"), "w": m.get("bb_bandwidth"),
+                "pb": m.get("bb_percent_b"), "pctile": m.get("bb_pctile"),
             },
             "candles": {
                 "action": m.get("candle_action"),
@@ -652,6 +673,9 @@ text-transform:uppercase;color:var(--tx2)}
 .cleg .ctab{width:100%;border-collapse:collapse}
 .cleg .ctab td{padding:7px 0;border-top:1px solid var(--line);
 vertical-align:top;font-size:12px}
+.bleg .ctab th{text-align:left;font-size:10px;letter-spacing:.06em;
+text-transform:uppercase;color:var(--tx3);font-weight:600;padding-bottom:4px}
+.bleg .ctab td{padding-right:14px}
 .cleg .cgx{width:80px}
 /* Height fixed, width free: the viewBox already carries the aspect
    ratio, so letting width follow it keeps every candle the same
@@ -665,6 +689,8 @@ border:1px solid var(--line);white-space:nowrap}
 .cleg .bad{color:var(--bad);border-color:rgba(226,88,94,.4)}
 .cleg .warn{color:var(--warn);border-color:rgba(201,162,39,.4)}
 .cleg .muted{color:var(--tx3)}
+.bchart svg{width:100%;height:auto;display:block}
+.verdict .tchip.t-sq{color:var(--warn);border-color:rgba(201,162,39,.5)}
 .cand{display:flex;flex-direction:column;gap:7px}
 .cand .sig{display:grid;grid-template-columns:82px 1fr auto;gap:9px;align-items:start;
 font-size:11.5px;padding-bottom:6px;border-bottom:1px solid var(--line)}
@@ -1031,6 +1057,14 @@ function fillPriceCharts(root){
       slot.innerHTML = priceChart(sp, row.currency);
       // The candlestick view lives in its own slot in the same card fetch, so
       // opening a drawer costs one request rather than two.
+      const bslot = card.parentElement
+        && card.parentElement.querySelector('[data-bb-for="' + t + '"] .bslot');
+      if(bslot){
+        const bh = sp.bb ? bbChart(sp.bb, row.currency) : '';
+        bslot.innerHTML = bh || '<div class="cap">The band series has not been '
+          + 'written for this row yet &mdash; it needs twenty sessions and is '
+          + 'produced by the same refresh as the price series above.</div>';
+      }
       const cslot = card.parentElement
         && card.parentElement.querySelector('[data-candles-for="' + t + '"] .cslot');
       if(cslot){
@@ -1143,6 +1177,133 @@ function priceChart(sp, ccy){
 // band that is only legal WITH a second, non-colour encoding. Hollow-up and
 // filled-down is that encoding, and it happens to be the original Japanese
 // convention, so it costs a reader nothing to learn.
+// The Bollinger chart: price inside its own volatility envelope, with the
+// BandWidth strip beneath it. Two panels rather than one because they answer
+// different questions — WHERE price sits, and HOW WIDE the envelope has become
+// — and overlaying a ratio on a price axis would be the dual-axis mistake.
+function bbChart(b, ccy){
+  if(!b || !b.c || b.c.length < 10) return '';
+  const n=b.c.length;
+  const all=[].concat(b.c,b.u,b.l,b.m,b.t||[]).filter(isNum);
+  if(!all.length) return '';
+  let lo=Math.min.apply(null,all), hi=Math.max.apply(null,all);
+  const span=(hi-lo)||1; lo-=span*0.06; hi+=span*0.08;
+  const W=880,H=250,padL=8,padR=78,padT=14,padB=22;
+  const pw=W-padL-padR, ph=H-padT-padB;
+  const X=i=>padL+i*pw/Math.max(n-1,1);
+  const Y=v=>padT+ph-(v-lo)/(hi-lo)*ph;
+
+  let grid='';
+  for(let k=0;k<4;k++){
+    const v=lo+(hi-lo)*k/3, y=Y(v);
+    grid+=`<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(padL+pw).toFixed(1)}"
+      y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+      <text x="${(padL+pw+6).toFixed(1)}" y="${(y+3.5).toFixed(1)}" font-size="10.5"
+        fill="var(--tx3)">${fmtPx(v)}</text>`;
+  }
+
+  function path(vals){
+    let d='', pen=false;
+    vals.forEach((v,i)=>{ if(!isNum(v)){pen=false;return;}
+      d+=(pen?'L':'M')+X(i).toFixed(1)+','+Y(v).toFixed(1)+' '; pen=true; });
+    return d.trim();
+  }
+  // The envelope as a filled band, not two lines. The thing being read is the
+  // WIDTH between them, and a filled area states that directly where two
+  // strokes leave the reader to measure the gap by eye.
+  let area='';
+  const ok=[];
+  for(let i=0;i<n;i++) if(isNum(b.u[i])&&isNum(b.l[i])) ok.push(i);
+  if(ok.length>1){
+    let d='M';
+    ok.forEach((i,k)=>{ d+=(k?'L':'')+X(i).toFixed(1)+','+Y(b.u[i]).toFixed(1)+' '; });
+    for(let k=ok.length-1;k>=0;k--){ const i=ok[k];
+      d+='L'+X(i).toFixed(1)+','+Y(b.l[i]).toFixed(1)+' '; }
+    area=`<path d="${d}Z" fill="var(--series-1)" opacity=".10"/>`;
+  }
+
+  let lines=area;
+  lines+=`<path d="${path(b.u)}" fill="none" stroke="var(--series-1)"
+    stroke-width="1.2" opacity=".75"/>`;
+  lines+=`<path d="${path(b.l)}" fill="none" stroke="var(--series-1)"
+    stroke-width="1.2" opacity=".75"/>`;
+  lines+=`<path d="${path(b.m)}" fill="none" stroke="var(--series-2)"
+    stroke-width="1.6" stroke-dasharray="4 3"/>`;
+  if((b.t||[]).some(isNum))
+    lines+=`<path d="${path(b.t)}" fill="none" stroke="var(--series-3)"
+      stroke-width="1.6"/>`;
+  lines+=`<path d="${path(b.c)}" fill="none" stroke="var(--tx)"
+    stroke-width="2" stroke-linejoin="round"/>`;
+
+  // --- the BandWidth strip. This is where a squeeze is visible AS a squeeze.
+  let wpanel='';
+  const wv=(b.w||[]).filter(isNum);
+  if(wv.length>2){
+    const wh=52, wpT=8, wpB=6;
+    let wlo=Math.min.apply(null,wv), whi=Math.max.apply(null,wv);
+    const ws=(whi-wlo)||1; wlo-=ws*0.12; whi+=ws*0.12;
+    const WY=v=>wpT+(wh-wpT-wpB)-(v-wlo)/(whi-wlo)*(wh-wpT-wpB);
+    let wd='', pen=false;
+    b.w.forEach((v,i)=>{ if(!isNum(v)){pen=false;return;}
+      wd+=(pen?'L':'M')+X(i).toFixed(1)+','+WY(v).toFixed(1)+' '; pen=true; });
+    // The lowest BandWidth in the window, marked. A squeeze is a RELATIVE
+    // statement — "narrow for this stock" — so the reference line has to be
+    // this stock's own recent floor rather than an absolute number.
+    const minw=Math.min.apply(null,wv);
+    wpanel=`<svg viewBox="0 0 ${W} ${wh}" role="img"
+      aria-label="BandWidth over the same window" style="margin-top:2px">
+      <line x1="${padL}" y1="${WY(minw).toFixed(1)}" x2="${(padL+pw).toFixed(1)}"
+        y2="${WY(minw).toFixed(1)}" stroke="var(--warn)" stroke-width="1"
+        stroke-dasharray="4 3"/>
+      <text x="${(padL+pw+6).toFixed(1)}" y="${(WY(minw)+3.5).toFixed(1)}"
+        font-size="10" fill="var(--warn)">low ${(minw*100).toFixed(1)}%</text>
+      <path d="${wd.trim()}" fill="none" stroke="var(--series-2)" stroke-width="1.6"/>
+      </svg>
+      <div class="cap" style="margin:2px 0 0">BandWidth &mdash; narrow means
+        coiled. A squeeze precedes a large move without saying which way, and
+        the dashed line is this stock's own recent floor, because "narrow" is
+        only ever relative to the name's own volatility.</div>`;
+  }
+
+  let xlab='';
+  const dt=k=>{ const base=Date.parse(b.d0);
+    return isNaN(base)?'':new Date(base+((b.dx||[])[k]||0)*864e5).toISOString().slice(0,10); };
+  [[0,'start'],[Math.floor((n-1)/2),'middle'],[n-1,'end']].forEach(t=>{
+    const v=dt(t[0]); if(!v) return;
+    xlab+=`<text x="${X(t[0]).toFixed(1)}" y="${H-6}" font-size="10.5"
+      fill="var(--tx3)" text-anchor="${t[1]}">${esc(v)}</text>`;
+  });
+
+  return `<div class="bchart"><svg viewBox="0 0 ${W} ${H}" role="img"
+    aria-label="Price with its 20-day Bollinger envelope">
+    ${grid}${lines}${xlab}</svg>${wpanel}</div>`;
+}
+
+function bbCard(r){
+  const b=r.bb||{};
+  if(!b.action)
+    return `<div class="chart wide"><h5>Bollinger Bands</h5>
+      <div class="cap">${esc(b.why||'not computed for this row')}</div></div>`;
+  const cls=b.action==='buy'?'buy':(b.action==='sell'?'sell':'wait');
+  return `<div class="chart wide" data-bb-for="${esc(r.ticker)}">
+    <h5>Bollinger Bands &mdash; 20-day, 2&sigma;
+      <span>${esc(b.readings||'')}</span></h5>
+    <div class="verdict"><span class="big ${cls}">${esc((b.action||'').toUpperCase())}</span>
+      <span class="tchip">${esc(b.regime||'')}</span>
+      ${b.squeeze?'<span class="tchip t-sq">squeeze</span>':''}
+      ${b.bias?`<span class="tchip">${esc(b.bias)}</span>`:''}
+      <span class="muted-ink">${esc(b.strategy||'')}</span></div>
+    <div class="bslot"><div class="cap">loading bands&hellip;</div></div>
+    <div class="lgd"><i><b style="background:var(--tx)"></b>close</i>
+      <i><b style="background:var(--series-1)"></b>upper / lower band (2&sigma;)</i>
+      <i><b style="background:var(--series-2)"></b>20-day middle</i>
+      <i><b style="background:var(--series-3)"></b>200-day trend filter</i></div>
+    <div class="cap" style="margin-top:8px"><b>Why:</b> ${esc(b.why||'')}</div>
+    ${b.regime_why?`<div class="cap"><b>Regime:</b> ${esc(b.regime_why)}</div>`:''}
+    ${b.note?`<div class="cap"><b>What to do:</b> ${esc(b.note)}</div>`:''}
+    <div class="cap">${esc(b.caveat||'')}</div></div>`;
+}
+
 function candleChart(o, ccy){
   if(!o || !o.c || o.c.length < 10) return '';
   const n=o.c.length;
@@ -1572,6 +1733,7 @@ function technicalPanel(r){
       <i><b class="ck tri"></b>pattern found &mdash; solid marker means the next
       session confirmed it, outlined means it did not</i></div></div>`;
   }
+  cards+=bbCard(r);
   cards+=candleCard(r);
   cards+=`<div class="chart wide"><h5>Tests against their thresholds
     <span>${esc(d.summary||'')}</span></h5>${testBars(d.tests||[])}
@@ -2036,6 +2198,64 @@ def _candle_legend() -> str:
         'screen in this app is measured in years. Use a pattern to choose an '
         'entry into a company the frameworks already justify &mdash; never as '
         'the reason to own it.</div></details>')
+
+
+def _bollinger_legend() -> str:
+    """The three strategies, and the regime each one belongs to.
+
+    Written as a table with the REGIME first because that is the order the
+    decision is actually made in. Presented strategy-first — as most
+    explanations do — it reads as three interchangeable options, which is
+    exactly the misunderstanding that makes people fade strong trends.
+    """
+    rows = [
+        ("Range-bound", "Mean Reversion", "buy / sell",
+         "Price tags an outer band and is rejected there.",
+         "The 20-day middle band, then the opposite band.",
+         "Only here. A range is the one regime where a band tag means the "
+         "move is stretched rather than strong."),
+        ("Strong trend", "Trend Riding &amp; Scaling", "hold / add",
+         "Price rides a band while the 20-day average advances.",
+         "A daily close back across the 20-day middle band.",
+         "The case most often got backwards. Riding the upper band is "
+         "momentum, NOT an overbought sell — fading it is a run of stop-outs."),
+        ("Low volatility", "The Volatility Squeeze", "wait",
+         "BandWidth at a multi-month low; the bands have coiled.",
+         "Trail the 20-day middle band once the break runs.",
+         "A squeeze predicts the SIZE of the coming move and nothing about "
+         "its direction, so it can never be a buy or a sell on its own."),
+    ]
+    body = ""
+    for regime, strat, verdict, entry, exit_, note in rows:
+        body += (f'<tr><td><b>{regime}</b><div class="cgs">{note}</div></td>'
+                 f'<td>{strat}<div class="cgs">verdict: <b>{verdict}</b></div></td>'
+                 f'<td class="cgs">{entry}</td><td class="cgs">{exit_}</td></tr>')
+    return (
+        '<details class="dcard cleg bleg"><summary><b>How the Bollinger verdict '
+        'is decided</b> &mdash; the regime picks the strategy, not the other '
+        'way round</summary>'
+        '<div class="cgn" style="margin-top:10px">A 20-day average with a '
+        '&plusmn;2&sigma; envelope. <b>A band tag is not a signal.</b> Closing '
+        'outside a band says the move is strong, and whether that is an '
+        'opportunity or a warning depends entirely on the regime it happened '
+        'in &mdash; which is why the regime is classified first and only then '
+        'does one strategy apply. The same upper-band tag is a sell in a range '
+        'and a hold in an uptrend; that is not a contradiction, it is the '
+        'method.</div>'
+        '<table class="ctab"><thead><tr><th>Regime</th><th>Strategy</th>'
+        '<th>Entry</th><th>Exit</th></tr></thead><tbody>'
+        + body + '</tbody></table>'
+        '<div class="cgn"><b>Over all of it sits the 200-day filter:</b> long '
+        'setups only above it, short only below, and an open idea is '
+        'invalidated when price crosses back through. <b>BandWidth</b> is '
+        '(upper &minus; lower) &divide; middle, and <b>%B</b> is where price '
+        'sits in the envelope &mdash; 0 at the lower band, 1 at the upper, '
+        'outside that range when price has closed beyond it.</div>'
+        '<div class="cgn">Like the candlestick patterns, this is a TIMING tool '
+        'measured in days against a screener whose other work is measured in '
+        'years. And avoid acting on a squeeze immediately before scheduled '
+        'earnings or a macro release &mdash; the move it predicts then turns '
+        'on the announcement rather than on the chart.</div></details>')
 
 
 def _reflexive_legend(census: Dict[str, int]) -> str:
@@ -3008,6 +3228,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     cmd_html = _commodity_panel(screened.get("commodity_board") or {})
     rfx_html = _reflexive_legend(screened.get("reflexive_census") or {})
     cnd_html = _candle_legend()
+    bol_html = _bollinger_legend()
     dis_html = _dislocation_panel(screened.get("dislocation_summary") or {})
     sen_html = _sentiment_panel(screened.get("sentiment") or {})
     mf_html = _magic_formula_panel(screened.get("magic_formula") or {})
@@ -3070,7 +3291,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__COVERAGE__", coverage)
             .replace("__GATE__", debt_html + sen_html + mf_html + buf_html
                      + mun_html + cmd_html
-                     + lyn_html + rfx_html + cnd_html + dis_html + cycle_html + gate)
+                     + lyn_html + rfx_html + bol_html + cnd_html + dis_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
             .replace("__SERIES__", ", ".join(

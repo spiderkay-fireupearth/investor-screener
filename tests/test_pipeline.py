@@ -4205,6 +4205,146 @@ def test_munger_full_framework():
           len(rows[0]["mun_readings"]) >= 2, True)
 
 
+def test_bollinger_bands():
+    """Bands are arithmetic; the regime gate is the part that has to be right."""
+    from src import bollinger as bo
+
+    def frame(px):
+        idx = pd.date_range("2024-01-01", periods=len(px), freq="B")
+        c = pd.Series(px, index=idx)
+        return pd.DataFrame({"Open": c * 0.999, "High": c * 1.01,
+                             "Low": c * 0.99, "Close": c, "Volume": 1e6})
+
+    # --- the arithmetic ------------------------------------------------------
+    flat = frame([100.0] * 260)
+    f = bo.compute(flat)
+    check("a flat series has zero-width bands", round(f["bandwidth"], 9), 0.0)
+    check("with the middle band on the price", round(f["middle"], 6), 100.0)
+
+    # Population sigma, not sample. On a 20-period window the difference is
+    # about 2.6% of band width — visible on a chart, and wrong against every
+    # other package if we used the pandas default.
+    px = [100 + (i % 7) for i in range(260)]
+    b = bo.compute(frame(px))
+    tail = pd.Series(px[-20:])
+    check("bands use POPULATION sigma, as Bollinger specifies",
+          round(b["upper"] - b["middle"], 6),
+          round(2.0 * float(tail.std(ddof=0)), 6))
+    check("and not the sample sigma pandas defaults to",
+          round(b["upper"] - b["middle"], 6) ==
+          round(2.0 * float(tail.std(ddof=1)), 6), False)
+    check("%B is 0.5 at the middle band",
+          round((b["middle"] - b["lower"]) / (b["upper"] - b["lower"]), 6), 0.5)
+    check("BandWidth is (upper-lower)/middle",
+          round(b["bandwidth"], 9),
+          round((b["upper"] - b["lower"]) / b["middle"], 9))
+
+    # --- THE TEST THAT MATTERS ----------------------------------------------
+    # An upper-band tag in a strong uptrend is NOT a sell. An implementation
+    # that reads band penetration as a signal shorts every strong stock it
+    # covers, which is the single most common way to get this indicator wrong.
+    up = bo.compute(frame([100 * (1.006 ** i) for i in range(300)]))
+    vup = bo.evaluate(up)
+    check("a relentless uptrend is classified as riding the upper band",
+          up["riding"], "upper")
+    check("and the verdict is HOLD, not sell", vup["action"], "hold")
+    check("under the trend-riding strategy",
+          vup["strategy"], "Trend Riding & Scaling")
+    check("the card says so in as many words",
+          "momentum, NOT an overbought sell" in vup["why"], True)
+    check("and points the entry at the middle band rather than chasing",
+          "Add on pullbacks" in vup["action_note"], True)
+
+    # The mirror: riding the LOWER band is not a bargain.
+    dn = bo.compute(frame([200 * (0.993 ** i) for i in range(300)]))
+    vdn = bo.evaluate(dn)
+    check("riding the lower band is detected", dn["riding"], "lower")
+    check("and reads as sell, not as a dip to buy", vdn["action"], "sell")
+    check("naming the mistake it prevents",
+          "stopped out repeatedly" in vdn["why"], True)
+    # A quiet trend can post a bandwidth low; that is not a squeeze.
+    check("a trending name can look narrow", dn["squeeze"], True)
+    check("but riding a band beats a squeeze — pinned price is directional, "
+          "and calling it consolidation would stand the reader aside from the "
+          "cleanest trend on the page",
+          vdn["strategy"], "Trend Riding & Scaling")
+
+    # --- mean reversion, and the regime that permits it ----------------------
+    rng = np.random.default_rng(4)
+    quiet = [100 + 2.0 * np.sin(i / 26) + rng.normal(0, 0.25) for i in range(300)]
+    rb = bo.compute(frame(quiet))
+    vrb = bo.evaluate(rb)
+    check("a slow oscillation is classified range-bound", rb["regime"], "range-bound")
+    check("and a band tag there DOES produce a mean-reversion verdict",
+          vrb["strategy"], "Mean Reversion (Range)")
+    check("the same upper-band tag that was a hold in a trend is a sell here",
+          vrb["action"], "sell")
+    check("which the panel explains rather than leaving as a contradiction",
+          "ONLY in a range" in vrb["why"], True)
+
+    # --- squeeze: magnitude, never direction ---------------------------------
+    sq = bo.compute(frame([100 + 10 * np.sin(i / 7) for i in range(200)]
+                          + [150 + 0.005 * i for i in range(60)]))
+    vsq = bo.evaluate(sq)
+    check("a collapse in volatility is detected as a squeeze", sq["squeeze"], True)
+    check("and produces WAIT — never a buy or a sell", vsq["action"], "wait")
+    check("because it predicts size, not direction",
+          "nothing about the DIRECTION" in vsq["why"], True)
+    check("while naming the levels that resolve it",
+          "close above" in vsq["action_note"], True)
+
+    # --- the macro filter ----------------------------------------------------
+    # A long setup below the 200-day average is refused, not taken.
+    # The bounce has to stay BELOW the long average or the filter correctly
+    # permits a long and the test is checking nothing.
+    down_then_pop = ([200 * (0.995 ** i) for i in range(260)]
+                     + [54 + 1.0 * i for i in range(14)])
+    mf = bo.compute(frame(down_then_pop))
+    vmf = bo.evaluate(mf)
+    check("price below the long average sets a short-only bias",
+          mf["bias"], "short only")
+    check("and no long verdict is issued under it", vmf["action"] != "buy", True)
+
+    # --- refusal -------------------------------------------------------------
+    short = bo.compute(frame([100.0] * 25))
+    check("too little history refuses", short["available"], False)
+    check("and says what it needed", "needs at least" in short["reason"], True)
+    check("evaluate passes the refusal through",
+          bo.evaluate(short)["available"], False)
+
+    # --- it reaches the page --------------------------------------------------
+    t = ta.compute(frame([100 * (1.004 ** i) for i in range(300)]))
+    for k in ("bb_action", "bb_regime", "bb_strategy", "bb_stop"):
+        check(f"{k} is computed", k in t, True)
+        check(f"{k} is persisted", k in rn.DISPLAY_METRICS, True)
+    sp = ta.sparkline(frame([100 * (1.004 ** i) for i in range(300)]))
+    check("the band series rides along with the sparkline", bool(sp["bb"]), True)
+    for k in ("u", "m", "l", "w", "t", "c"):
+        check(f"the series carries {k}", len(sp["bb"][k]), 60)
+
+    html = rn.TEMPLATE
+    check("the drawer draws the bands", "function bbChart(" in html, True)
+    check("with the envelope as a filled area, so the WIDTH is what is read",
+          'fill="var(--series-1)" opacity=".10"' in html, True)
+    check("and a separate BandWidth strip rather than a second y-axis",
+          "BandWidth &mdash; narrow means" in html, True)
+    check("the verdict card is wired in", "cards+=bbCard(r);" in html, True)
+    check("the regime is shown beside the verdict",
+          'class="tchip">${esc(b.regime' in html, True)
+    ref = rn._bollinger_legend()
+    check("the reference explains the regime-first rule",
+          "the regime is classified first" in ref, True)
+    check("and states plainly that a band tag is not a signal",
+          "A band tag is not a signal" in ref, True)
+    check("it lists all three strategies",
+          all(x in ref for x in ("Mean Reversion", "Trend Riding",
+                                 "The Volatility Squeeze")), True)
+    check("and the 200-day filter that sits over them",
+          "200-day filter" in ref, True)
+    check("the synopsis mentions the band verdict",
+          "on the Bollinger bands it is" in open("src/synopsis.py").read(), True)
+
+
 def test_candle_reference():
     """The reference that makes a pattern marker mean something."""
     from src import candles as cd
@@ -5130,6 +5270,7 @@ if __name__ == "__main__":
     test_rsi_reading()
     test_display_metric_contract()
     test_malaysia_market()
+    test_bollinger_bands()
     test_candle_reference()
     test_biotech_healthcare_category()
     test_nasdaq_coverage()

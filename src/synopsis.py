@@ -54,6 +54,7 @@ SYNOPSIS_FIELDS = (
     "munger_inversion_score", "munger_inversion_reading",
     "munger_bucket", "munger_bucket_label", "pricing_power",
     "pricing_power_reading", "candle_action", "candle_why",
+    "bb_action", "bb_regime", "bb_strategy",
 )
 
 MAX_DESCRIPTION_CHARS = 260
@@ -247,6 +248,11 @@ def _price_action(m: Dict[str, Any]) -> str:
         reg = _g(m, "rsi_regime")
         if reg:
             s += f" in a {reg} tape"
+    bba = _g(m, "bb_action")
+    if bba:
+        s += (f"; on the Bollinger bands it is {bba} — the market is "
+              + (_g(m, "bb_regime") or "in an unclassified regime")
+              + f", so the {_g(m, 'bb_strategy') or 'relevant'} rule applies")
     act = _g(m, "candle_action")
     if act and act not in ("no signal",):
         s += (f"; on the candles the recent reading is {act} — "
