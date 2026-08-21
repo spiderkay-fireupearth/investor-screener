@@ -511,10 +511,10 @@ TEMPLATE = """<!DOCTYPE html>
    steps are chosen for the dark background, not derived from the light ones
    by inversion. The same three hues the deep-dive report uses, so the two
    views of one stock never need re-learning. */
---series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;}
+--series-1:#3987e5;--series-2:#d95926;--series-3:#199e70;--series-4:#c98500;}
 @media(prefers-color-scheme:light){:root{--bg:#f7f8fa;--panel:#fff;--panel2:#f0f2f6;
 --line:#dfe3ea;--tx:#12151b;--tx2:#4d5567;--tx3:#798193;--acc:#1f6feb;--warn:#8a6d10;
---series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;}}
+--series-1:#2a78d6;--series-2:#eb6834;--series-3:#1baf7a;--series-4:#eda100;}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.55 ui-sans-serif,
 -apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
@@ -1080,8 +1080,8 @@ function fillPriceCharts(root){
 
 function priceChart(sp, ccy){
   if(!sp || !sp.px || sp.px.length < 8) return '';
-  const px=sp.px, m50=sp.ma50||[], m200=sp.ma||[];
-  const all=px.concat(m50.filter(isNum)).concat(m200.filter(isNum));
+  const px=sp.px, m20=sp.ma20||[], m50=sp.ma50||[], m200=sp.ma||[];
+  const all=px.concat(m20.filter(isNum)).concat(m50.filter(isNum)).concat(m200.filter(isNum));
   let lo=Math.min.apply(null,all), hi=Math.max.apply(null,all);
   const span=(hi-lo)||1; lo-=span*0.06; hi+=span*0.06;
   const W=880,H=300,padL=8,padR=78,padT=14,padB=26;
@@ -1113,11 +1113,13 @@ function priceChart(sp, ccy){
     return null;
   }
 
-  const SER=[[px,1,'Close'],[m50,2,'50-day'],[m200,3,'200-day']];
+  const SER=[[px,1,'Close'],[m20,4,'20-day'],[m50,2,'50-day'],[m200,3,'200-day']];
   let lines='', labels='';
   // Drawn slowest-first so the close, which is the thing being read, is never
-  // buried under a moving average.
-  [[m200,3,'200-day'],[m50,2,'50-day'],[px,1,'Close']].forEach(s=>{
+  // buried under a moving average. The 20-day is the most reactive of the
+  // three averages — it hugs price closest — so it is drawn just before the
+  // close, on top of the slower 50- and 200-day lines.
+  [[m200,3,'200-day'],[m50,2,'50-day'],[m20,4,'20-day'],[px,1,'Close']].forEach(s=>{
     lines+=`<path d="${path(s[0])}" fill="none" stroke="var(--series-${s[1]})"
       stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
   });
@@ -1150,11 +1152,11 @@ function priceChart(sp, ccy){
   // The hover layer. A line chart without one makes the reader guess at values
   // between the three axis labels, which is exactly the guess the chart exists
   // to remove.
-  const data=JSON.stringify({px:px,m50:m50,m200:m200,first:sp.first,
+  const data=JSON.stringify({px:px,m20:m20,m50:m50,m200:m200,first:sp.first,
     d0:sp.d0,d1:sp.d1,ccy:ccy||''});
   return `<div class="pchart"><svg viewBox="0 0 ${W} ${H}" role="img"
     data-series='${data.replace(/'/g,"&#39;")}'
-    aria-label="Close with 50-day and 200-day moving averages over ${sp.years} years">
+    aria-label="Close with 20-day, 50-day and 200-day moving averages over ${sp.years} years">
     ${grid}${lines}${labels}${xlab}
     <g class="cross" style="display:none">
       <line y1="${padT}" y2="${padT+ph}" stroke="var(--tx3)" stroke-width="1"
@@ -1527,6 +1529,7 @@ document.addEventListener('mousemove', function(ev){
   }
   const tip=wrap.querySelector('.ptip');
   tip.innerHTML=`<b>${when}${esc(d.ccy)} ${real(d.px[i])}</b>`
+    +`<span><i style="background:var(--series-4)"></i>20-day ${real((d.m20||[])[i])}</span>`
     +`<span><i style="background:var(--series-2)"></i>50-day ${real(d.m50[i])}</span>`
     +`<span><i style="background:var(--series-3)"></i>200-day ${real(d.m200[i])}</span>`;
   tip.style.display='';
@@ -1688,12 +1691,25 @@ function technicalPanel(r){
   // layout does not jump when the data arrives.
   if(r.has_series){
     cards+=`<div class="chart wide" data-series-for="${esc(r.ticker)}"
-      data-market="${esc(r.market||'')}"><h5>Close, 50-day and 200-day averages
+      data-market="${esc(r.market||'')}"><h5>Close, 20-day, 50-day and 200-day averages
       <span class="phead"></span></h5>
       <div class="pslot"><div class="cap">loading price history&hellip;</div></div>
       <div class="lgd"><i><b style="background:var(--series-1)"></b>Close</i>
+      <i><b style="background:var(--series-4)"></b>20-day</i>
       <i><b style="background:var(--series-2)"></b>50-day</i>
-      <i><b style="background:var(--series-3)"></b>200-day</i></div></div>`;
+      <i><b style="background:var(--series-3)"></b>200-day</i></div>
+      <div class="cap">Three lenses on the same trend, fast to slow. The
+      <b>20-day</b> tracks the last month of trading and is the first to turn
+      &mdash; a swing trader's line, useful for spotting a stall or a fresh
+      push before the 50-day reacts, but noisy enough to whipsaw in a
+      sideways market. The <b>50-day</b> is the intermediate read most
+      often used to judge whether a pullback is still healthy. The
+      <b>200-day</b> is the slow line that defines the primary trend; price
+      or the 50-day crossing it (a golden or death cross) is the
+      longest-horizon signal on this chart. Watch the order of the three:
+      20 above 50 above 200 is a market accelerating with the trend; 20
+      below 50 below 200 is one accelerating against it; a tangle of all
+      three is indecision, not yet a trend.</div></div>`;
   } else {
     cards+=`<div class="chart wide"><h5>Price</h5><div class="cap">This company
       has too little price history to chart &mdash; the series needs at least

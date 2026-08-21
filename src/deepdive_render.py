@@ -61,17 +61,18 @@ def _scale(vals, lo, hi, out_lo, out_hi):
 
 
 def price_chart(series: Dict[str, Any], w=880, h=300) -> str:
-    """Close with 50- and 200-day averages. Three series, direct-labelled."""
+    """Close with 20-, 50- and 200-day averages. Four series, direct-labelled."""
     close = series.get("close") or []
     if len(close) < 30:
         return '<p class="muted">Not enough history to chart.</p>'
+    sma20 = series.get("sma20") or []
     sma50 = series.get("sma50") or []
     sma200 = series.get("sma200") or []
     dates = series.get("dates") or []
 
     pad_l, pad_r, pad_t, pad_b = 8, 74, 14, 24
     plot_w, plot_h = w - pad_l - pad_r, h - pad_t - pad_b
-    allv = [v for v in close + sma50 + sma200 if _n(v)]
+    allv = [v for v in close + sma20 + sma50 + sma200 if _n(v)]
     lo, hi = min(allv), max(allv)
     span = (hi - lo) or 1
     lo -= span * 0.06
@@ -106,8 +107,8 @@ def price_chart(series: Dict[str, Any], w=880, h=300) -> str:
                  f'class="axis">{f(v)}</text>')
 
     labels = ""
-    for vals, cls, name in ((close, "s1", "Close"), (sma50, "s2", "50-day"),
-                            (sma200, "s3", "200-day")):
+    for vals, cls, name in ((close, "s1", "Close"), (sma20, "s4", "20-day"),
+                            (sma50, "s2", "50-day"), (sma200, "s3", "200-day")):
         ep = endpoint(vals)
         if ep:
             x, y, _v = ep
@@ -124,10 +125,11 @@ def price_chart(series: Dict[str, Any], w=880, h=300) -> str:
                          f'text-anchor="{anchor}">{e(dates[i][:7])}</text>')
 
     return f'''<svg viewBox="0 0 {w} {h}" class="chart" role="img"
-  aria-label="Closing price with 50-day and 200-day moving averages">
+  aria-label="Closing price with 20-day, 50-day and 200-day moving averages">
   {grid}
   <path d="{path(sma200)}" class="line s3" fill="none"/>
   <path d="{path(sma50)}" class="line s2" fill="none"/>
+  <path d="{path(sma20)}" class="line s4" fill="none"/>
   <path d="{path(close)}" class="line s1" fill="none"/>
   {labels}{xlab}
 </svg>'''
@@ -237,7 +239,7 @@ TEMPLATE = """<!DOCTYPE html>
   --surface-1:#fcfcfb; --plane:#f9f9f7;
   --text-primary:#0b0b0b; --text-secondary:#52514e; --muted:#898781;
   --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
-  --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a;
+  --series-1:#2a78d6; --series-2:#eb6834; --series-3:#1baf7a; --series-4:#eda100;
   --seq-200:#9ec5f4; --seq-350:#5598e7; --seq-450:#2a78d6;
   --good:#0ca30c; --warning:#fab219; --critical:#d03b3b;
 }
@@ -246,7 +248,7 @@ TEMPLATE = """<!DOCTYPE html>
   --surface-1:#1a1a19; --plane:#0d0d0d;
   --text-primary:#fff; --text-secondary:#c3c2b7; --muted:#898781;
   --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
-  --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70;
+  --series-1:#3987e5; --series-2:#d95926; --series-3:#199e70; --series-4:#c98500;
   --seq-200:#184f95; --seq-350:#256abf; --seq-450:#3987e5;
 }}
 *{box-sizing:border-box}
@@ -293,15 +295,15 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 .chart{width:100%;height:auto;background:var(--surface-1);border:1px solid var(--border);
  border-radius:10px;padding:6px}
 .line{stroke-width:2;fill:none;stroke-linejoin:round;stroke-linecap:round}
-.s1{stroke:var(--series-1)} .s2{stroke:var(--series-2)} .s3{stroke:var(--series-3)}
-.dot.s1{fill:var(--series-1)}.dot.s2{fill:var(--series-2)}.dot.s3{fill:var(--series-3)}
+.s1{stroke:var(--series-1)} .s2{stroke:var(--series-2)} .s3{stroke:var(--series-3)} .s4{stroke:var(--series-4)}
+.dot.s1{fill:var(--series-1)}.dot.s2{fill:var(--series-2)}.dot.s3{fill:var(--series-3)}.dot.s4{fill:var(--series-4)}
 .line.med{stroke:var(--seq-450)}
 .band{stroke:none}.b1{fill:var(--seq-200);opacity:.55}.b2{fill:var(--seq-350);opacity:.55}
 .grid{stroke:var(--grid);stroke-width:1}
 .spot{stroke:var(--axis);stroke-width:1.5;stroke-dasharray:4 3}
 .axis{fill:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}
 .dlabel{font-size:10.5px;font-weight:600}
-.dlabel.s1{fill:var(--series-1)}.dlabel.s2{fill:var(--series-2)}.dlabel.s3{fill:var(--series-3)}
+.dlabel.s1{fill:var(--series-1)}.dlabel.s2{fill:var(--series-2)}.dlabel.s3{fill:var(--series-3)}.dlabel.s4{fill:var(--series-4)}
 .dlabel.med-ink{fill:var(--seq-450)}
 .note{background:var(--surface-1);border-left:3px solid var(--series-1);border-radius:0 8px 8px 0;
  padding:11px 15px;margin:12px 0;font-size:13px;color:var(--text-secondary)}
@@ -456,6 +458,16 @@ def render_deepdive(d: Dict[str, Any], out_dir: str) -> str:
     # ---------- 4. Technicals
     b.append('<h2>4 · Technical analysis</h2>')
     b.append(price_chart(d.get("price_series", {})))
+    b.append('<p class="muted">Fast to slow: the <b>20-day</b> average is the '
+              'first to turn and marks the most recent month of trading, useful '
+              'for spotting a stall or a fresh push early but prone to whipsaw '
+              'in a sideways market. The <b>50-day</b> is the intermediate line '
+              'used to judge whether a pullback is still healthy. The '
+              '<b>200-day</b> defines the primary trend, and price or the '
+              '50-day crossing it is the longest-horizon signal here (a golden '
+              'or death cross). Twenty above fifty above two-hundred is a '
+              'trend accelerating; the reverse order is one accelerating '
+              'against it; a tangle of all three is indecision.</p>')
     trows = [
         ("Price vs 200-day", "above" if m.get("price_above_sma200") else "below"),
         ("50-day vs 200-day", "golden-cross regime" if m.get("sma50_above_sma200") else "death-cross regime"),

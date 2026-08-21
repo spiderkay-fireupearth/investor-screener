@@ -3623,6 +3623,7 @@ def test_technical_charts():
     check("the 200-day line has the same number of points",
           len(sp["ma"]), len(sp["px"]))
     check("and so does the 50-day", len(sp["ma50"]), len(sp["px"]))
+    check("and so does the 20-day", len(sp["ma20"]), len(sp["px"]))
     check("three date labels ride along for the axis",
           all(len(sp[k]) == 10 for k in ("d0", "dmid", "d1")), True)
     check("in order", sp["d0"] < sp["dmid"] < sp["d1"], True)
@@ -3635,8 +3636,11 @@ def test_technical_charts():
     daily_50 = float(close.rolling(50).mean().iloc[-1])
     check("the 50-day likewise",
           abs(sp["ma50"][-1] - daily_50 / sp["first"] * 100.0) < 0.2, True)
-    check("and the two averages are genuinely different lines",
-          sp["ma50"][-1] != sp["ma"][-1], True)
+    daily_20 = float(close.rolling(20).mean().iloc[-1])
+    check("and the 20-day likewise",
+          abs(sp["ma20"][-1] - daily_20 / sp["first"] * 100.0) < 0.2, True)
+    check("and the three averages are genuinely different lines",
+          len({sp["ma20"][-1], sp["ma50"][-1], sp["ma"][-1]}), 3)
     check("a short history yields no chart rather than a misleading one",
           ta.sparkline(df.iloc[-30:]), None)
     check("and neither does an empty frame",

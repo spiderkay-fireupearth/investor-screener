@@ -386,6 +386,8 @@ def analyse(ticker: str, cfg_dir: str = "config", out_dir: str = "out",
         "price_series": {
             "dates": [d.date().isoformat() for d in px.index[-504:]],
             "close": [float(v) for v in px["Close"].iloc[-504:]],
+            "sma20": [None if pd.isna(v) else float(v)
+                      for v in px["Close"].rolling(20).mean().iloc[-504:]],
             "sma50": [None if pd.isna(v) else float(v)
                       for v in px["Close"].rolling(50).mean().iloc[-504:]],
             "sma200": [None if pd.isna(v) else float(v)

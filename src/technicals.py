@@ -88,7 +88,7 @@ CANDLE_BARS = 60
 
 def sparkline(df: pd.DataFrame, points: int = SPARK_POINTS,
               years: int = SPARK_YEARS) -> Optional[Dict[str, Any]]:
-    """A compact price series with its 50- and 200-day averages.
+    """A compact price series with its 20-, 50- and 200-day averages.
 
     Three decisions here are about PAYLOAD, not about analysis, and they are
     worth stating because they are the difference between a page that loads on
@@ -111,6 +111,7 @@ def sparkline(df: pd.DataFrame, points: int = SPARK_POINTS,
     if len(close) < 60:
         return None
     window = close.iloc[-(years * 252):]
+    sma20 = close.rolling(20).mean().iloc[-(years * 252):]
     sma50 = close.rolling(50).mean().iloc[-(years * 252):]
     sma200 = close.rolling(200).mean().iloc[-(years * 252):]
     # Ceiling, not floor: a floored step overshoots the cap (504 bars // 100 is
@@ -138,7 +139,7 @@ def sparkline(df: pd.DataFrame, points: int = SPARK_POINTS,
         except Exception:                             # noqa: BLE001
             dates.append("")
     return {
-        "px": px, "ma50": _norm(sma50), "ma": _norm(sma200),
+        "px": px, "ma20": _norm(sma20), "ma50": _norm(sma50), "ma": _norm(sma200),
         # Only three date labels are kept, not one hundred. The axis shows
         # three ticks, and a hover tooltip reads its date from these plus the
         # index — carrying every date would double the series payload to
