@@ -1,0 +1,124 @@
+name: Market sentiment report (on demand)
+
+# Same one-click pattern as the deep-dive trigger: a static page cannot hold a
+# token, but it can link to a pre-filled new-issue form, and GitHub can run a
+# workflow when an issue opens. Open an issue titled "sentiment:" and this job
+# writes a dated report, comments the link, and closes the issue.
+#
+# WHY THIS IS NOT ON A SCHEDULE. The report has a narrative half that reads the
+# news. News-reading has a cost per run and a shelf life measured in days, so a
+# cron would spend money producing reports nobody asked for and leave the newest
+# one looking authoritative long after it stopped being current. On demand, the
+# date on the report is the date you asked for it.
+#
+# WHAT IT NEEDS. ANTHROPIC_API_KEY as a repository secret, for the narrative
+# half only. Without it the job still runs and still produces every computed
+# indicator — it just says, on the report itself, that the written analysis was
+# skipped. A report with no opinion is useful; one with an invented opinion is
+# worse than none, so there is no fallback that guesses.
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      no_model:
+        description: 'Computed indicators only, skip the narrative (true/false)'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: sentiment-report
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  report:
+    # Ignore every issue that is not one of ours. Without this guard the job
+    # would fire on bug reports, which on a public repo means anyone can spend
+    # the API budget.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.issue.title, 'sentiment:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install anthropic
+
+      # The report restates what a refresh measured; it never gathers data
+      # itself. If the facts file is missing, the run has not produced one yet.
+      - name: Check the facts file exists
+        id: facts
+        run: |
+          if [ ! -f out/sentiment_facts.json ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::out/sentiment_facts.json is missing — run a refresh first."
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "Facts as at: $(python -c "import json;print(json.load(open('out/sentiment_facts.json')).get('asof'))")"
+          fi
+
+      - name: Generate the report
+        if: steps.facts.outputs.found == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          STAMP=$(date -u +%Y-%m-%d)
+          ARGS=""
+          if [ "${{ github.event.inputs.no_model }}" = "true" ]; then
+            ARGS="--no-model"
+          fi
+          mkdir -p out/sentiment
+          python -m tools.sentiment_report \
+            --facts out/sentiment_facts.json \
+            --out "out/sentiment/${STAMP}.md" $ARGS
+          cp "out/sentiment/${STAMP}.md" out/sentiment/latest.md
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+
+      - name: Commit the report
+        if: steps.facts.outputs.found == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add out/sentiment/
+          if git diff --cached --quiet; then
+            echo "Nothing new to commit."
+          else
+            git commit -m "Market sentiment report ${STAMP}"
+            git push
+          fi
+
+      - name: Reply on the issue and close it
+        if: github.event_name == 'issues'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const found = '${{ steps.facts.outputs.found }}' === 'true';
+            const stamp = process.env.STAMP;
+            const repo = `${context.repo.owner}/${context.repo.repo}`;
+            const body = found
+              ? `Report generated: [\`out/sentiment/${stamp}.md\`](https://github.com/${repo}/blob/main/out/sentiment/${stamp}.md)\n\n` +
+                `Every computed indicator in it comes from this repository's own price and volume data. ` +
+                `If the narrative section is missing, \`ANTHROPIC_API_KEY\` is not set as a repository secret — ` +
+                `the computed half is unaffected either way.`
+              : `Could not generate: \`out/sentiment_facts.json\` does not exist yet. ` +
+                `Run **Refresh US** once and try again — the report restates what a refresh measured, ` +
+                `it does not gather data itself.`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, body });
+            await github.rest.issues.update({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, state: 'closed' });
