@@ -278,79 +278,79 @@ owners:
         source: company disclosure
         note: long-term stake in the five Japanese trading houses
     stake_filings:
-    - form: SC 13D/A
-      filed: '2024-11-25'
-      accession: 0001193125-24-265100
+    - form: SCHEDULE 13G/A
+      filed: '2026-08-14'
+      accession: 0001193125-26-352910
+      subject: DELTA AIR LINES, INC.
+      subject_cik: 0000027904
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526352910/0001193125-26-352910-index.htm
+    - form: SCHEDULE 13G
+      filed: '2026-08-14'
+      accession: 0001193125-26-352904
+      subject: LENNAR CORP /NEW/
+      subject_cik: 0000920760
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526352904/0001193125-26-352904-index.htm
+    - form: SCHEDULE 13D/A
+      filed: '2026-07-15'
+      accession: 0001193125-26-304838
       subject: BERKSHIRE HATHAWAY INC
       subject_cik: 0001067983
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524265100/0001193125-24-265100-index.htm
-    - form: SC 13G
-      filed: '2024-11-14'
-      accession: 0001193125-24-258561
-      subject: Chubb Ltd
-      subject_cik: 0000896159
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524258561/0001193125-24-258561-index.htm
-    - form: SC 13G/A
-      filed: '2024-11-14'
-      accession: 0001193125-24-258557
-      subject: BANK OF AMERICA CORP /DE/
-      subject_cik: 0000070858
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524258557/0001193125-24-258557-index.htm
-    - form: SC 13G/A
-      filed: '2024-11-14'
-      accession: 0001193125-24-258555
-      subject: LOUISIANA-PACIFIC CORP
-      subject_cik: 0000060519
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524258555/0001193125-24-258555-index.htm
-    - form: SC 13G/A
-      filed: '2024-09-26'
-      accession: 0001193125-24-226917
-      subject: LIBERTY MEDIA CORPORATION
-      subject_cik: 0000869614
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524226917/0001193125-24-226917-index.htm
-    - form: SC 13G/A
-      filed: '2024-09-26'
-      accession: 0001193125-24-226916
-      subject: LIBERTY MEDIA CORPORATION
-      subject_cik: 0000869614
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524226916/0001193125-24-226916-index.htm
-    - form: SC 13D/A
-      filed: '2024-08-08'
-      accession: 0001193125-24-197170
-      subject: DAVITA INC.
-      subject_cik: 0000927066
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524197170/0001193125-24-197170-index.htm
-    - form: SC 13D/A
-      filed: '2024-06-28'
-      accession: 0001193125-24-172349
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526304838/0001193125-26-304838-index.htm
+    - form: SCHEDULE 13G/A
+      filed: '2026-05-15'
+      accession: 0001193125-26-227203
+      subject: Liberty Latin America Ltd.
+      subject_cik: 0001712184
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526227203/0001193125-26-227203-index.htm
+    - form: SCHEDULE 13G
+      filed: '2026-05-15'
+      accession: 0001193125-26-227126
+      subject: NEW YORK TIMES CO
+      subject_cik: 0000071691
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526227126/0001193125-26-227126-index.htm
+    - form: SCHEDULE 13G/A
+      filed: '2026-05-15'
+      accession: 0001193125-26-227122
+      subject: CONSTELLATION BRANDS, INC.
+      subject_cik: 0000016918
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526227122/0001193125-26-227122-index.htm
+    - form: SCHEDULE 13G/A
+      filed: '2026-05-15'
+      accession: 0001193125-26-227107
+      subject: POOL CORP
+      subject_cik: 0000945841
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526227107/0001193125-26-227107-index.htm
+    - form: SCHEDULE 13G/A
+      filed: '2026-05-15'
+      accession: 0001193125-26-227102
+      subject: CHEVRON CORP
+      subject_cik: 0000093410
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526227102/0001193125-26-227102-index.htm
+    - form: SCHEDULE 13G/A
+      filed: '2026-05-15'
+      accession: 0001193125-26-227100
+      subject: DOMINOS PIZZA INC
+      subject_cik: 0001286681
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526227100/0001193125-26-227100-index.htm
+    - form: SCHEDULE 13G
+      filed: '2026-05-15'
+      accession: 0001193125-26-227087
+      subject: DELTA AIR LINES, INC.
+      subject_cik: 0000027904
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526227087/0001193125-26-227087-index.htm
+    - form: SCHEDULE 13G
+      filed: '2026-04-29'
+      accession: 0002100119-26-000227
       subject: BERKSHIRE HATHAWAY INC
       subject_cik: 0001067983
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524172349/0001193125-24-172349-index.htm
-    - form: SC 13G/A
-      filed: '2024-04-08'
-      accession: 0001193125-24-089047
-      subject: LIBERTY MEDIA CORPORATION
-      subject_cik: 0000869614
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524089047/0001193125-24-089047-index.htm
-    - form: SC 13G/A
-      filed: '2024-04-08'
-      accession: 0001193125-24-089033
-      subject: LIBERTY MEDIA CORPORATION
-      subject_cik: 0000869614
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524089033/0001193125-24-089033-index.htm
-    - form: SC 13D/A
-      filed: '2024-02-16'
-      accession: 0001193125-24-038549
-      subject: DAVITA INC.
-      subject_cik: 0000927066
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524038549/0001193125-24-038549-index.htm
-    - form: SC 13G
-      filed: '2024-02-14'
-      accession: 0001193125-24-036540
-      subject: LIBERTY MEDIA CORPORATION
-      subject_cik: 0000869614
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312524036540/0001193125-24-036540-index.htm
-    updated_utc: '2026-08-22T10:23:33Z'
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000210011926000227/0002100119-26-000227-index.htm
+    - form: SCHEDULE 13G/A
+      filed: '2026-03-26'
+      accession: 0000102909-26-000775
+      subject: BERKSHIRE HATHAWAY INC
+      subject_cik: 0001067983
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000010290926000775/0000102909-26-000775-index.htm
+    updated_utc: '2026-08-22T10:31:35Z'
   OT:
     name: Oaktree
     long_name: Oaktree Capital Management, L.P.
@@ -734,6 +734,48 @@ owners:
         note: PDD Holdings, exited
     manual: {}
     stake_filings:
+    - form: SCHEDULE 13G
+      filed: '2026-08-10'
+      accession: 0001140361-26-032030
+      subject: MATTHEWS INTERNATIONAL CORP
+      subject_cik: 0000063296
+      url: https://www.sec.gov/Archives/edgar/data/949509/000114036126032030/0001140361-26-032030-index.htm
+    - form: SCHEDULE 13G/A
+      filed: '2026-08-10'
+      accession: 0001140361-26-032029
+      subject: SharonAI Holdings Inc.
+      subject_cik: 0002068385
+      url: https://www.sec.gov/Archives/edgar/data/949509/000114036126032029/0001140361-26-032029-index.htm
+    - form: SCHEDULE 13G
+      filed: '2026-08-10'
+      accession: 0001140361-26-032027
+      subject: QUANTUM CORP /DE/
+      subject_cik: 0000709283
+      url: https://www.sec.gov/Archives/edgar/data/949509/000114036126032027/0001140361-26-032027-index.htm
+    - form: SCHEDULE 13G
+      filed: '2026-05-14'
+      accession: 0001140361-26-021313
+      subject: SharonAI Holdings Inc.
+      subject_cik: 0002068385
+      url: https://www.sec.gov/Archives/edgar/data/949509/000114036126021313/0001140361-26-021313-index.htm
+    - form: SCHEDULE 13G
+      filed: '2026-02-17'
+      accession: 0001140361-26-005754
+      subject: Rice Acquisition Corp 3
+      subject_cik: 0002074872
+      url: https://www.sec.gov/Archives/edgar/data/949509/000114036126005754/0001140361-26-005754-index.htm
+    - form: SCHEDULE 13D/A
+      filed: '2025-08-21'
+      accession: 0000950170-25-110783
+      subject: Sitio Royalties Corp.
+      subject_cik: 0001949543
+      url: https://www.sec.gov/Archives/edgar/data/949509/000095017025110783/0000950170-25-110783-index.htm
+    - form: SCHEDULE 13D/A
+      filed: '2025-06-04'
+      accession: 0000950170-25-081969
+      subject: Sitio Royalties Corp.
+      subject_cik: 0001949543
+      url: https://www.sec.gov/Archives/edgar/data/949509/000095017025081969/0000950170-25-081969-index.htm
     - form: SC 13D/A
       filed: '2023-08-07'
       accession: 0001193125-23-204958
@@ -764,46 +806,4 @@ owners:
       subject: Garrett Motion Inc.
       subject_cik: '0001735707'
       url: https://www.sec.gov/Archives/edgar/data/949509/000119312523163894/0001193125-23-163894-index.htm
-    - form: SC 13G
-      filed: '2023-05-15'
-      accession: 0000950142-23-001456
-      subject: MAGNACHIP SEMICONDUCTOR Corp
-      subject_cik: '0001325702'
-      url: https://www.sec.gov/Archives/edgar/data/949509/000095014223001456/0000950142-23-001456-index.htm
-    - form: SC 13D/A
-      filed: '2023-04-17'
-      accession: 0001193125-23-103725
-      subject: Garrett Motion Inc.
-      subject_cik: '0001735707'
-      url: https://www.sec.gov/Archives/edgar/data/949509/000119312523103725/0001193125-23-103725-index.htm
-    - form: SC 13G/A
-      filed: '2023-02-14'
-      accession: 0000950142-23-000416
-      subject: NMI Holdings, Inc.
-      subject_cik: 0001547903
-      url: https://www.sec.gov/Archives/edgar/data/949509/000095014223000416/0000950142-23-000416-index.htm
-    - form: SC 13G/A
-      filed: '2023-02-14'
-      accession: 0000950142-23-000414
-      subject: Berry Corp (bry)
-      subject_cik: 0001705873
-      url: https://www.sec.gov/Archives/edgar/data/949509/000095014223000414/0000950142-23-000414-index.htm
-    - form: SC 13D/A
-      filed: '2023-02-01'
-      accession: 0001193125-23-020607
-      subject: Oaktree Specialty Lending Corp
-      subject_cik: 0001414932
-      url: https://www.sec.gov/Archives/edgar/data/949509/000119312523020607/0001193125-23-020607-index.htm
-    - form: SC 13D
-      filed: '2023-01-13'
-      accession: 0000950142-23-000112
-      subject: Sitio Royalties Corp.
-      subject_cik: 0001949543
-      url: https://www.sec.gov/Archives/edgar/data/949509/000095014223000112/0000950142-23-000112-index.htm
-    - form: SC 13D/A
-      filed: '2023-01-09'
-      accession: 0001193125-23-004802
-      subject: Oaktree Specialty Lending Corp
-      subject_cik: 0001414932
-      url: https://www.sec.gov/Archives/edgar/data/949509/000119312523004802/0001193125-23-004802-index.htm
-    updated_utc: '2026-08-22T10:23:38Z'
+    updated_utc: '2026-08-22T10:31:40Z'
