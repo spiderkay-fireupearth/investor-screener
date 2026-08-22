@@ -4782,6 +4782,84 @@ def test_owner_auto_update():
               bool(block.get("cik")), True)
 
 
+def test_owner_verify_gate():
+    """The gate that stands between an unattended EDGAR write and the live page."""
+    import copy
+    from tools import verify_owners as vf
+
+    check("the shipped config passes", vf.verify("config/owners.yml"), [])
+
+    base = yaml.safe_load(open("config/owners.yml"))
+
+    def bad(mutate):
+        d = copy.deepcopy(base)
+        mutate(d["owners"])
+        p = "/tmp/_verify_case.yml"
+        with open(p, "w") as f:
+            yaml.safe_dump(d, f, sort_keys=False)
+        return vf.verify(p)
+
+    # Each of these is a way an automated write could corrupt the page. The
+    # feature commits without human review, so every one has to be caught here
+    # or it reaches production.
+    cases = [
+        ("a failed parse leaving no positions",
+         lambda o: o["BK"].update(positions={}, manual={})),
+        ("a change value the renderer cannot draw",
+         lambda o: o["OT"]["positions"]["TRMD"].update(change="bought")),
+        ("a negative share count",
+         lambda o: o["BK"]["positions"]["AAPL"].update(shares=-5)),
+        ("a negative value",
+         lambda o: o["BK"]["positions"]["AAPL"].update(value=-1)),
+        ("one position claiming most of the book",
+         lambda o: o["BK"]["positions"]["KO"].update(pct=95.0)),
+        ("weights that sum past 100% — a wrong denominator",
+         lambda o: [r.update(pct=20.0) for r in o["OT"]["positions"].values()]),
+        ("a badged ticker with no CUSIP behind it",
+         lambda o: o["OT"]["positions"].update(
+             FAKE={"shares": 1, "value": 1, "pct": 0.1, "change": "new"})),
+        ("a holding with no filing to cite",
+         lambda o: o["BK"].pop("accession")),
+        ("a position that is both held and exited",
+         lambda o: o["BK"].setdefault("exited", {}).update(
+             AAPL={"shares_prior": 1})),
+        ("a manual entry duplicating a filed one",
+         lambda o: o["BK"].setdefault("manual", {}).update(AAPL={"name": "x"})),
+        ("an owner block that is not a mapping at all",
+         lambda o: o.update(OT="not a mapping")),
+    ]
+    for label, mutate in cases:
+        check(f"caught: {label}", bool(bad(mutate)), True)
+
+    check("a missing file is caught rather than passing vacuously",
+          bool(vf.verify("/tmp/does-not-exist-at-all.yml")), True)
+
+    # The silent-drop case deserves its own assertion. src/owners.py discards
+    # unrenderable rows on purpose; that is right at render time and wrong at
+    # verification time, because a file that quietly lost thirty positions
+    # still "loads" perfectly well.
+    probs = bad(lambda o: [r.update(change="?")
+                           for r in list(o["OT"]["positions"].values())[:9]])
+    check("and it says HOW MANY rows the loader threw away",
+          any("discarded 9 position" in p for p in probs), True)
+
+    # --- the dependency constraint -------------------------------------------
+    # The first version of this gate ran pytest, which pulls in numpy and
+    # pandas at import time, and the workflow installs neither. The job failed
+    # on libraries it had no use for. Assert the constraint so it cannot
+    # silently come back.
+    import subprocess
+    src = ("import sys;"
+           "sys.modules['pandas']=None; sys.modules['numpy']=None;"
+           "sys.path.insert(0,'.');"
+           "from tools import verify_owners as v;"
+           "print('PROBLEMS' if v.verify('config/owners.yml') else 'CLEAN')")
+    r = subprocess.run([sys.executable, "-c", src], capture_output=True,
+                       text=True, cwd=os.getcwd())
+    check("the gate runs with pandas and numpy unavailable, as the workflow "
+          "has them", r.stdout.strip().endswith("CLEAN"), True)
+
+
 def test_biotech_healthcare_category():
     """A category that spans seven markets, built two ways so it cannot rot."""
     from src import run as R
@@ -5644,6 +5722,7 @@ if __name__ == "__main__":
     test_biotech_healthcare_category()
     test_owner_badges()
     test_owner_auto_update()
+    test_owner_verify_gate()
     test_nasdaq_coverage()
     test_synopsis()
     test_lynch_categories()
