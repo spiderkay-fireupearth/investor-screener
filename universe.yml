@@ -1,0 +1,1064 @@
+# Investable universe — index constituents only.
+# Rationale: Yahoo's fundamentals quality degrades sharply on Asian small caps,
+# and deep-value screens (Schloss/Klarman) otherwise fill with illiquid
+# controlling-shareholder value traps. Index membership is the liquidity filter.
+#
+# Constituent lists are reviewed semi-annually by the index providers.
+# Refresh these lists ~quarterly; `python -m src.run --check-universe` reports
+# tickers that have stopped returning data (a proxy for delisting/removal).
+
+# How long a cached set of company fundamentals stays good. Filings are
+# quarterly, so re-downloading twelve years of XBRL for every name every day
+# bought nothing and cost most of the run. Prices and technicals are ALWAYS
+# refreshed — only the accounts are cached.
+#
+# The jitter spreads expiry so a full first run does not create a herd that
+# all comes due on the same later day.
+fundamentals_max_age_days: 14
+fundamentals_jitter_days: 6
+
+# A wall-clock budget for the fetch phase, in minutes. When it is spent the
+# run stops fetching, screens what it has, and reports the rest as not
+# reached — rather than being killed by the workflow timeout, which produces
+# nothing at all and deploys nothing. Set to 0 to disable.
+fetch_budget_minutes: 240
+
+markets:
+  US:
+    name: United States
+    index_ticker: "^GSPC"
+    index_name: S&P 500
+    currency: USD
+    timezone: America/New_York
+    close_local: "16:00"
+    fundamentals_provider: edgar     # audited filings, free, permanent
+    price_provider: yahoo
+    # S&P 500 constituents are fetched dynamically (500 names is impractical to
+    # pin here and membership churns). seed_fallback is used only if the fetch fails.
+    constituents_source: dynamic
+    # Additional US indices unioned in and deduplicated. Most of the Nasdaq-100
+    # already sits in the S&P 500; the value here is the ~25 names the S&P
+    # cannot hold because they are foreign-domiciled — PDD, MELI, ARM, AZN,
+    # BIDU, JD, NTES — plus recent listings not yet added.
+    extra_indices:
+      - name: Nasdaq-100
+        url: "https://en.wikipedia.org/wiki/Nasdaq-100"
+        min_expected: 80
+        seed_fallback:
+          - PDD
+          - MELI
+          - ARM
+          - AZN
+          - BIDU
+          - JD
+          - NTES
+          - ASML
+          - CCEP
+          - GFS
+          - ZS
+          - TEAM
+          - MDB
+          - DDOG
+          - SMCI
+          - APP
+          - TTD
+          - AXON
+          - MSTR
+          - PLTR
+          - ILMN
+          - BIIB
+          - MRNA
+          - SIRI
+          - WBD
+          - LCID
+          - CSGP
+          - "ON"          # quoted: bare ON is the YAML boolean true
+          - ANSS
+          - DXCM
+    # Nasdaq coverage BEYOND the Nasdaq-100, deduplicated against everything
+    # already in the universe. The directory carries ~4,000 securities, which
+    # is far more than this pipeline can fetch fundamentals for, so the
+    # narrowing is explicit:
+    #
+    #   market_categories  Q = Global Select (the top tier, ~1,400 names),
+    #                      G = Global Market, S = Capital Market. Add G or S to
+    #                      go further down the size scale.
+    #   max_names          how many survive the liquidity ranking. Each name
+    #                      costs one EDGAR fundamentals call and one price
+    #                      history on every US run, so this is the dial that
+    #                      trades coverage against run time.
+    #   min_median_turnover_usd
+    #                      the floor a candidate must trade above to be worth
+    #                      screening at all.
+    #
+    # Ranked on median dollar turnover rather than alphabetically, because the
+    # directory has no market cap and an alphabetical cut of 4,000 names is a
+    # universe of companies beginning with A.
+    nasdaq_listed:
+      enabled: true
+      url: "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqlisted.txt"
+      # Q = Global Select (top tier), G = Global Market. Global Market holds a
+      # great many legitimate mid-caps, and restricting to Q alone made them
+      # unreachable no matter how high max_names went. S (Capital Market) is
+      # still excluded — that tier is genuinely small and speculative.
+      market_categories: ["Q", "G"]
+      exclude_etfs: true
+      normal_status_only: true
+      # No cap: every Nasdaq name above the turnover floor is screened. What
+      # makes that affordable is the fundamentals cache below — company
+      # filings change quarterly, so re-downloading twelve years of XBRL for
+      # every name every day was most of the old run time. Set an integer here
+      # to re-impose a cap; the page reports whatever a cap discards.
+      max_names: null
+      min_median_turnover_usd: 20000000
+      # Names that bypass the liquidity ranking entirely. The ranking answers
+      # "what is worth screening in general"; this answers "what do I actually
+      # hold", which no turnover cut can know. They must still exist in the
+      # directory and pass the structural filters — this admits a real company
+      # that ranked below the cap, it does not invent one.
+      always_include:
+        - CRSP
+        - NVCR
+
+    # NYSE and NYSE American, from the same publisher's other half of the
+    # symbol directory. Without this the US universe was S&P 500 + Nasdaq,
+    # which reads as complete and is not: every NYSE company outside the S&P
+    # 500 had no route in at all. Alibaba is the obvious case, and 21 of
+    # Oaktree's 49 disclosed holdings were unreachable for the same reason.
+    other_listed:
+      enabled: true
+      url: "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt"
+      # N = NYSE, A = NYSE American. P (NYSE Arca) and Z (Cboe) are almost
+      # entirely ETFs, which are excluded anyway, so including them would cost
+      # fetch time for nothing.
+      exchanges: ["N", "A"]
+      exclude_etfs: true
+      max_names: null
+      # FIVE TIMES the Nasdaq floor, and that is deliberate. The NYSE lists
+      # some 2,200 common stocks; at $20m/day roughly 600-800 clear, which
+      # would about double the US universe and push the run past the fetch
+      # budget this pipeline has already been tuned once to respect. At $100m
+      # the layer admits the few hundred genuinely liquid names that were
+      # missing — Alibaba, Itau, Sea, AngloGold, Embraer and the like — for a
+      # fraction of the time. Lower it if you would rather have the small caps,
+      # and raise fetch_budget_minutes and the workflow timeout to match.
+      min_median_turnover_usd: 100000000
+      # Admitted whatever their turnover, exactly as on the Nasdaq side. These
+      # are the NYSE American microcaps in the Oaktree book that a $100m floor
+      # would otherwise exclude.
+      always_include:
+        - BABA
+        - MINE
+        - BATL
+
+    seed_fallback:
+      - AAPL
+      - MSFT
+      - GOOGL
+      - AMZN
+      - NVDA
+      - META
+      - BRK-B
+      - JPM
+      - JNJ
+      - PG
+      - XOM
+      - UNH
+      - HD
+      - CVX
+      - KO
+      - PEP
+      - ABBV
+      - MRK
+      - COST
+      - WMT
+
+  JP:
+    name: Japan
+    index_ticker: "^N225"
+    index_name: Nikkei 225
+    currency: JPY
+    timezone: Asia/Tokyo
+    close_local: "15:30"        # TSE extended the cash close to 15:30 JST in Nov 2024
+    fundamentals_provider: yahoo
+    price_provider: yahoo
+    # 225 names churn on the September and March reviews, so fetch rather than
+    # pin. seed_fallback below is used only if the fetch fails, and the run logs
+    # loudly when that happens.
+    constituents_source: wikipedia
+    constituents_url: "https://en.wikipedia.org/wiki/Nikkei_225"
+    ticker_suffix: ".T"
+    ticker_pad: 4               # Yahoo wants 4-digit TSE codes: 7203.T not 7203
+    min_expected: 150
+    seed_fallback:
+      # Autos and suppliers
+      - 7203.T   # Toyota
+      - 7267.T   # Honda
+      - 7269.T   # Suzuki
+      - 7270.T   # Subaru
+      - 7201.T   # Nissan
+      - 7202.T   # Isuzu
+      - 7261.T   # Mazda
+      - 6902.T   # Denso
+      - 7259.T   # Aisin
+      - 5108.T   # Bridgestone
+      - 7276.T   # Koito
+      - 7272.T   # Yamaha Motor
+      # Electronics, semis and equipment
+      - 6758.T   # Sony
+      - 6501.T   # Hitachi
+      - 6503.T   # Mitsubishi Electric
+      - 6702.T   # Fujitsu
+      - 6752.T   # Panasonic
+      - 6954.T   # Fanuc
+      - 6857.T   # Advantest
+      - 8035.T   # Tokyo Electron
+      - 6146.T   # Disco
+      - 6920.T   # Lasertec
+      - 7735.T   # SCREEN Holdings
+      - 6723.T   # Renesas
+      - 6963.T   # Rohm
+      - 6762.T   # TDK
+      - 6971.T   # Kyocera
+      - 6981.T   # Murata
+      - 4062.T   # Ibiden
+      - 6506.T   # Yaskawa
+      - 6645.T   # Omron
+      - 6479.T   # Nidec
+      - 7751.T   # Canon
+      - 7752.T   # Ricoh
+      - 4901.T   # Fujifilm
+      - 4902.T   # Konica Minolta
+      - 6841.T   # Yokogawa
+      - 6988.T   # Nitto Denko
+      # Industrials and machinery
+      - 6301.T   # Komatsu
+      - 6326.T   # Kubota
+      - 6367.T   # Daikin
+      - 6273.T   # SMC
+      - 7011.T   # Mitsubishi Heavy
+      - 7012.T   # Kawasaki Heavy
+      - 7013.T   # IHI
+      - 6305.T   # Hitachi Construction Machinery
+      - 6113.T   # Amada
+      - 5631.T   # Japan Steel Works
+      # Telecoms, internet and games
+      - 9432.T   # NTT
+      - 9433.T   # KDDI
+      - 9434.T   # SoftBank Corp
+      - 9984.T   # SoftBank Group
+      - 9613.T   # NTT Data
+      - 6098.T   # Recruit
+      - 4689.T   # LY Corporation
+      - 4704.T   # Trend Micro
+      - 4751.T   # CyberAgent
+      - 7974.T   # Nintendo
+      - 9766.T   # Konami
+      - 9697.T   # Capcom
+      - 7832.T   # Bandai Namco
+      - 3659.T   # Nexon
+      - 2432.T   # DeNA
+      # Banks, insurers and brokers
+      - 8306.T   # Mitsubishi UFJ
+      - 8316.T   # Sumitomo Mitsui
+      - 8411.T   # Mizuho
+      - 8308.T   # Resona
+      - 8309.T   # Sumitomo Mitsui Trust
+      - 8591.T   # ORIX
+      - 8601.T   # Daiwa Securities
+      - 8604.T   # Nomura Holdings
+      - 8630.T   # Sompo
+      - 8725.T   # MS&AD
+      - 8750.T   # Dai-ichi Life
+      - 8766.T   # Tokio Marine
+      - 8697.T   # Japan Exchange Group
+      - 7182.T   # Japan Post Bank
+      # Trading houses
+      - 8058.T   # Mitsubishi Corporation
+      - 8031.T   # Mitsui & Co
+      - 8053.T   # Sumitomo Corporation
+      - 8001.T   # Itochu
+      - 8002.T   # Marubeni
+      - 2768.T   # Sojitz
+      # Pharma, chemicals and materials
+      - 4502.T   # Takeda
+      - 4503.T   # Astellas
+      - 4507.T   # Shionogi
+      - 4519.T   # Chugai
+      - 4523.T   # Eisai
+      - 4568.T   # Daiichi Sankyo
+      - 4578.T   # Otsuka
+      - 4151.T   # Kyowa Kirin
+      - 4063.T   # Shin-Etsu Chemical
+      - 4005.T   # Sumitomo Chemical
+      - 4021.T   # Nissan Chemical
+      - 4183.T   # Mitsui Chemicals
+      - 3407.T   # Asahi Kasei
+      - 3402.T   # Toray
+      - 3405.T   # Kuraray
+      - 4452.T   # Kao
+      - 4911.T   # Shiseido
+      - 5201.T   # AGC
+      - 5333.T   # NGK Insulators
+      # Steel, mining and energy
+      - 5401.T   # Nippon Steel
+      - 5411.T   # JFE Holdings
+      - 5406.T   # Kobe Steel
+      - 5713.T   # Sumitomo Metal Mining
+      - 5711.T   # Mitsubishi Materials
+      - 1605.T   # INPEX
+      - 5020.T   # ENEOS
+      - 5019.T   # Idemitsu Kosan
+      # Utilities
+      - 9501.T   # TEPCO
+      - 9502.T   # Chubu Electric
+      - 9503.T   # Kansai Electric
+      - 9531.T   # Tokyo Gas
+      - 9532.T   # Osaka Gas
+      # Transport and logistics
+      - 9020.T   # JR East
+      - 9021.T   # JR West
+      - 9022.T   # JR Central
+      - 9101.T   # Nippon Yusen
+      - 9104.T   # Mitsui O.S.K. Lines
+      - 9107.T   # Kawasaki Kisen
+      - 9201.T   # Japan Airlines
+      - 9202.T   # ANA Holdings
+      - 9064.T   # Yamato Holdings
+      - 9147.T   # NX Holdings
+      # Construction and real estate
+      - 1801.T   # Taisei
+      - 1802.T   # Obayashi
+      - 1803.T   # Shimizu
+      - 1812.T   # Kajima
+      - 1925.T   # Daiwa House
+      - 1928.T   # Sekisui House
+      - 1963.T   # JGC
+      - 8801.T   # Mitsui Fudosan
+      - 8802.T   # Mitsubishi Estate
+      - 8830.T   # Sumitomo Realty
+      # Food, retail and consumer
+      - 2502.T   # Asahi Group
+      - 2503.T   # Kirin
+      - 2801.T   # Kikkoman
+      - 2802.T   # Ajinomoto
+      - 2871.T   # Nichirei
+      - 2914.T   # Japan Tobacco
+      - 2269.T   # Meiji
+      - 3382.T   # Seven & i
+      - 8267.T   # Aeon
+      - 9843.T   # Nitori
+      - 9983.T   # Fast Retailing
+      - 7532.T   # Pan Pacific International
+      # Services and other
+      - 4324.T   # Dentsu
+      - 9735.T   # Secom
+      - 4661.T   # Oriental Land
+      - 7912.T   # Dai Nippon Printing
+      - 7911.T   # TOPPAN
+      - 3861.T   # Oji Holdings
+
+  SG:
+    name: Singapore
+    index_ticker: "^STI"
+    index_name: Straits Times Index
+    currency: SGD
+    timezone: Asia/Singapore
+    close_local: "17:00"
+    fundamentals_provider: yahoo
+    price_provider: yahoo
+    constituents_source: static
+    constituents:
+      - D05.SI      # DBS Group
+      - O39.SI      # OCBC
+      - U11.SI      # UOB
+      - Z74.SI      # Singtel
+      - C6L.SI      # Singapore Airlines
+      - C38U.SI     # CapitaLand Integrated Commercial Trust
+      - A17U.SI     # CapitaLand Ascendas REIT
+      - ME8U.SI     # Mapletree Industrial Trust
+      - M44U.SI     # Mapletree Logistics Trust
+      - N2IU.SI     # Mapletree Pan Asia Commercial Trust
+      - 9CI.SI      # CapitaLand Investment
+      - C09.SI      # City Developments
+      - U96.SI      # Sembcorp Industries
+      - S63.SI      # ST Engineering
+      - S68.SI      # Singapore Exchange
+      - BN4.SI      # Keppel
+      - F34.SI      # Wilmar International
+      - H78.SI      # Hongkong Land
+      - J36.SI      # Jardine Matheson
+      - C07.SI      # Jardine Cycle & Carriage
+      - G13.SI      # Genting Singapore
+      - Y92.SI      # Thai Beverage
+      - V03.SI      # Venture Corporation
+      - U14.SI      # UOL Group
+      - S58.SI      # SATS
+      - BS6.SI      # Yangzijiang Shipbuilding
+      - AJBU.SI     # Keppel DC REIT
+      - CJLU.SI     # NetLink NBN Trust
+      - OV8.SI      # Sheng Siong
+      - EMI.SI      # Emperador
+
+  HK:
+    name: Hong Kong
+    index_ticker: "^HSI"
+    index_name: Hang Seng Index + HSCEI
+    currency: HKD
+    timezone: Asia/Hong_Kong
+    close_local: "16:00"
+    fundamentals_provider: yahoo
+    price_provider: yahoo
+    constituents_source: static
+    constituents:
+      - 0700.HK     # Tencent
+      - 9988.HK     # Alibaba
+      - 0939.HK     # China Construction Bank
+      - 1299.HK     # AIA
+      - 0941.HK     # China Mobile
+      - 3690.HK     # Meituan
+      - 1810.HK     # Xiaomi
+      - 0388.HK     # HKEX
+      - 1398.HK     # ICBC
+      - 3988.HK     # Bank of China
+      - 2318.HK     # Ping An
+      - 0005.HK     # HSBC
+      - 0883.HK     # CNOOC
+      - 0857.HK     # PetroChina
+      - 0386.HK     # Sinopec
+      - 2628.HK     # China Life
+      - 1211.HK     # BYD
+      - 9618.HK     # JD.com
+      - 9999.HK     # NetEase
+      - 2020.HK     # Anta Sports
+      - 0288.HK     # WH Group
+      - 0016.HK     # Sun Hung Kai Properties
+      - 0001.HK     # CK Hutchison
+      - 0011.HK     # Hang Seng Bank
+      - 0002.HK     # CLP Holdings
+      - 0003.HK     # HK & China Gas
+      - 0006.HK     # Power Assets
+      - 0012.HK     # Henderson Land
+      - 0017.HK     # New World Development
+      - 0027.HK     # Galaxy Entertainment
+      - 0066.HK     # MTR Corporation
+      - 0101.HK     # Hang Lung Properties
+      - 0175.HK     # Geely Automobile
+      - 0267.HK     # CITIC
+      - 0669.HK     # Techtronic Industries
+      - 0688.HK     # China Overseas Land
+      - 0762.HK     # China Unicom
+      - 0823.HK     # Link REIT
+      - 0868.HK     # Xinyi Glass
+      - 0960.HK     # Longfor
+      - 0968.HK     # Xinyi Solar
+      - 1038.HK     # CK Infrastructure
+      - 1044.HK     # Hengan International
+      - 1093.HK     # CSPC Pharmaceutical
+      - 1109.HK     # China Resources Land
+      - 1113.HK     # CK Asset
+      - 1177.HK     # Sino Biopharmaceutical
+      - 1088.HK     # China Shenhua
+      - 1928.HK     # Sands China
+      - 1997.HK     # Wharf REIC
+      - 2269.HK     # WuXi Biologics
+      - 2313.HK     # Shenzhou International
+      - 2331.HK     # Li Ning
+      - 2382.HK     # Sunny Optical
+      - 2388.HK     # BOC Hong Kong
+      - 2688.HK     # ENN Energy
+      - 3968.HK     # China Merchants Bank
+      - 6862.HK     # Haidilao
+      - 9633.HK     # Nongfu Spring
+      - 9888.HK     # Baidu
+      - 9961.HK     # Trip.com
+      - 1024.HK     # Kuaishou
+      - 0291.HK     # China Resources Beer
+      - 1876.HK     # Budweiser APAC
+      - 2359.HK     # WuXi AppTec
+      - 2015.HK     # Li Auto
+      - 9868.HK     # XPeng
+      - 6690.HK     # Haier Smart Home
+
+  MY:
+    name: Malaysia
+    index_ticker: "^KLSE"
+    index_name: FTSE Bursa Malaysia KLCI
+    currency: MYR
+    timezone: Asia/Kuala_Lumpur
+    close_local: "17:00"        # Bursa's afternoon session ends 17:00 MYT
+    fundamentals_provider: yahoo
+    price_provider: yahoo
+    # The Wikipedia table heads its ticker column "Stock Code" rather than
+    # "Code" or "Symbol", which the generic fetcher now accepts. Only 30
+    # constituents, so min_expected is set accordingly.
+    constituents_source: wikipedia
+    constituents_url: "https://en.wikipedia.org/wiki/FTSE_Bursa_Malaysia_KLCI"
+    ticker_suffix: ".KL"
+    ticker_pad: 4               # Bursa codes are 4 digits: 1155.KL, not 1155
+    min_expected: 25
+    seed_fallback:
+      # Banks and financials
+      - 1155.KL   # Malayan Banking (Maybank)
+      - 1295.KL   # Public Bank
+      - 1023.KL   # CIMB Group
+      - 1066.KL   # RHB Bank
+      - 5819.KL   # Hong Leong Bank
+      - 1082.KL   # Hong Leong Financial Group
+      # Telecoms and media
+      - 6888.KL   # Axiata Group
+      - 6947.KL   # CelcomDigi
+      - 6012.KL   # Maxis
+      - 4863.KL   # Telekom Malaysia
+      # Utilities and energy
+      - 5347.KL   # Tenaga Nasional
+      - 6033.KL   # Petronas Gas
+      - 5681.KL   # Petronas Dagangan
+      - 5183.KL   # Petronas Chemicals
+      - 4677.KL   # YTL Corporation
+      - 6742.KL   # YTL Power International
+      # Plantations and agriculture
+      - 1961.KL   # IOI Corporation
+      - 2445.KL   # Kuala Lumpur Kepong
+      - 5285.KL   # SD Guthrie
+      - 4197.KL   # Sime Darby
+      - 4065.KL   # PPB Group
+      - 7084.KL   # QL Resources
+      # Industrials, construction and materials
+      - 5398.KL   # Gamuda
+      - 8869.KL   # Press Metal Aluminium
+      - 5211.KL   # Sunway
+      - 3816.KL   # MISC
+      # Consumer and healthcare
+      - 4707.KL   # Nestle Malaysia
+      - 5296.KL   # Mr D.I.Y. Group
+      - 5326.KL   # 99 Speed Mart Retail
+      - 5225.KL   # IHH Healthcare
+
+  TH:
+    name: Thailand
+    index_ticker: "^SET.BK"
+    index_name: SET50
+    currency: THB
+    timezone: Asia/Bangkok
+    close_local: "16:30"
+    fundamentals_provider: yahoo
+    price_provider: yahoo
+    constituents_source: static
+    constituents:
+      - PTT.BK
+      - AOT.BK
+      - CPALL.BK
+      - ADVANC.BK
+      - SCB.BK
+      - KBANK.BK
+      - BBL.BK
+      - KTB.BK
+      - PTTEP.BK
+      - SCC.BK
+      - GULF.BK
+      - BDMS.BK
+      - CPN.BK
+      - MINT.BK
+      - TRUE.BK
+      - INTUCH.BK
+      - OR.BK
+      - TOP.BK
+      - IVL.BK
+      - BH.BK
+      - CRC.BK
+      - HMPRO.BK
+      - GPSC.BK
+      - EGCO.BK
+      - RATCH.BK
+      - BGRIM.BK
+      - TU.BK
+      - CBG.BK
+      - OSP.BK
+      - MTC.BK
+      - SAWAD.BK
+      - TIDLOR.BK
+      - TISCO.BK
+      - TTB.BK
+      - KKP.BK
+      - BANPU.BK
+      - PTTGC.BK
+      - SCGP.BK
+      - DELTA.BK
+      - KCE.BK
+      - COM7.BK
+      - GLOBAL.BK
+      - CPF.BK
+      - BJC.BK
+      - AWC.BK
+      - CENTEL.BK
+      - WHA.BK
+      - LH.BK
+      - AP.BK
+      - BEM.BK
+
+  ID:
+    name: Indonesia
+    index_ticker: "^JKSE"
+    index_name: LQ45
+    currency: IDR
+    timezone: Asia/Jakarta
+    close_local: "16:00"
+    fundamentals_provider: yahoo
+    price_provider: yahoo
+    constituents_source: static
+    constituents:
+      - BBCA.JK
+      - BBRI.JK
+      - BMRI.JK
+      - BBNI.JK
+      - TLKM.JK
+      - ASII.JK
+      - UNVR.JK
+      - ICBP.JK
+      - INDF.JK
+      - KLBF.JK
+      - GGRM.JK
+      - ADRO.JK
+      - PTBA.JK
+      - ITMG.JK
+      - UNTR.JK
+      - ANTM.JK
+      - INCO.JK
+      - MDKA.JK
+      - TINS.JK
+      - SMGR.JK
+      - INTP.JK
+      - CPIN.JK
+      - JPFA.JK
+      - AKRA.JK
+      - PGAS.JK
+      - EXCL.JK
+      - ISAT.JK
+      - TOWR.JK
+      - TBIG.JK
+      - MIKA.JK
+      - SIDO.JK
+      - ACES.JK
+      - MAPI.JK
+      - ERAA.JK
+      - BSDE.JK
+      - CTRA.JK
+      - PWON.JK
+      - SMRA.JK
+      - BRPT.JK
+      - TPIA.JK
+      - ESSA.JK
+      - MEDC.JK
+      - HRUM.JK
+      - AMRT.JK
+      - BRIS.JK
+
+# Yahoo FX tickers used to normalise every figure to USD before cross-market ranking.
+# The first four are trading currencies. The rest are REPORTING currencies that
+# appear in this universe without being any market's trading currency — many
+# HKEX-listed mainland issuers report in CNY while trading in HKD, and several
+# SGX names report in USD. Without a rate for the reporting currency, every
+# valuation ratio for those companies is wrong by the exchange rate.
+fx_pairs:
+  SGD: "SGDUSD=X"
+  HKD: "HKDUSD=X"
+  THB: "THBUSD=X"
+  IDR: "IDRUSD=X"
+  CNY: "CNYUSD=X"
+  CAD: "CADUSD=X"          # Cameco, NexGen, Denison and Teck file in CAD
+  TWD: "TWDUSD=X"          # TSMC files in New Taiwan dollars, trades as a USD ADR
+  EUR: "EURUSD=X"
+  GBP: "GBPUSD=X"
+  JPY: "JPYUSD=X"
+  MYR: "MYRUSD=X"
+  USD: null
+
+# FRED series for the Soros macro/regime overlay. Free API key required.
+macro_series:
+  us_10y: DGS10
+  us_2y: DGS2
+  us_3m: DTB3
+  hy_credit_spread: BAMLH0A0HYM2
+  ig_credit_spread: BAMLC0A0CM
+  usd_broad_index: DTWEXBGS
+  vix: VIXCLS
+  # Lynch's Rule of 20 needs an inflation rate. This is the index LEVEL; the
+  # run converts it to a year-on-year rate before using it, because adding a
+  # CPI level of 320 to a P/E of 22 would be arithmetic without meaning.
+  us_cpi: CPIAUCSL
+  # Three-month VIX, for the term structure. Spot above three-month means the
+  # curve is backwardated, which is what a real panic looks like as distinct
+  # from ordinary nervousness — and a single VIX level cannot tell them apart.
+  vix_3m: VXVCLS
+
+
+# ---------------------------------------------------------------------------
+# Market psychology. Everything here is CONTRARIAN in application and none of
+# it is a timing signal on its own: sentiment describes positioning, never
+# value. Feeds that are absent report themselves absent rather than falling
+# back to a proxy.
+sentiment:
+  vix_calm: 15.0
+  vix_panic: 30.0
+  rsi_hot: 70.0
+  rsi_cold: 30.0
+  pcr_fear: 1.00
+  pcr_greed: 0.60
+  # Put/call ratio. There is no free, stable, machine-readable daily feed for
+  # this that does not change shape every few months, so it is OFF by default
+  # and the composite runs on the remaining six factors, saying so. Point this
+  # at a CSV whose last column is the daily total put/call ratio and it fills
+  # in; leave it empty and nothing breaks.
+  put_call_url: ""
+  # Commitments of Traders. Contract CODES, not names: the CFTC's market names
+  # are long and inconsistent, the codes are stable.
+  cot_contracts:
+    "E-mini S&P 500": "13874A"
+    "Gold": "088691"
+    "Copper": "085692"
+    "Crude oil (WTI)": "067651"
+  cot_weeks: 160
+
+
+# ---------------------------------------------------------------------------
+# Thematic tags. These names are unioned into their listing market (all US
+# here) and deduplicated — a name already in the S&P 500 or Nasdaq-100 simply
+# gains a tag rather than being fetched twice. Themes filter independently of
+# markets in the UI, so "Uranium + Greenblatt" or "Copper + Technical pass" work.
+#
+# A ticker may appear in several themes; tags are a list, not a single value.
+themes:
+  # -------------------------------------------------------------------------
+  # US government equity stakes. HAND-MAINTAINED — there is no machine-readable
+  # source, because there is no consolidated federal register. The stakes sit
+  # across at least four agencies (Commerce, Defense, the Development Finance
+  # Corporation and Energy), and the two most careful public trackers disagree
+  # on both the count and the total: CFR says 37 deals worth $27.6bn, Fortune
+  # says $26.7bn with a different split by agency. That disagreement is itself
+  # the evidence that no register exists.
+  #
+  # Only LISTED companies can appear here. Several stakes are in private firms
+  # (xLight, Vulcan Elements, Westinghouse) which file nothing and cannot be
+  # screened at all.
+  #
+  # as_of: 2026-08-17 — RE-CHECK THIS LIST BEFORE RELYING ON IT. It will go
+  # stale silently, because nothing upstream will tell you when it does.
+  US government stake:
+    as_of: "2026-08-17"
+    source: "CFR deal tracker plus press reporting; no official register exists"
+    tickers:
+      - INTC       # Commerce, 9.9% plus warrants, Aug 2025
+      - MP         # Defense, 15%, Jul 2025
+      - USAR       # 8-16% including warrants, Jan 2026
+      - LAC        # Energy, 5% plus a 5% JV stake
+      - TMQ        # 10%
+      - LHX        # Pentagon, converts at a subsidiary IPO, Dec 2025
+      - IBM        # Commerce / CHIPS, May 2026
+      - GFS        # Commerce / CHIPS, May 2026
+      - QBTS       # Commerce / CHIPS, May 2026
+      - RGTI       # Commerce / CHIPS, May 2026
+      - CCJ        # participation interest, ~20% of distributions, Oct 2025
+  # -------------------------------------------------------------------------
+  # Biotechnology & healthcare, across all seven markets.
+  #
+  # This category is built TWO ways, on purpose:
+  #
+  #   1. The curated list below, which pulls names into the universe that no
+  #      index would have brought in — Asian hospital groups, glove makers and
+  #      clinical-stage biotech that sit outside the S&P 500, Nikkei 225, Hang
+  #      Seng, STI, SET50 and KLCI.
+  #   2. The `sectors` rule, which tags ANY company already in the universe
+  #      whose sector is Healthcare. That half needs no maintenance and cannot
+  #      go stale.
+  #
+  # The second exists because the first always rots. Verified 2026-08-19, and
+  # in checking it six names that a from-memory list would have carried were
+  # already gone: Verve (Lilly), Exact Sciences (Abbott), Apellis (Biogen),
+  # Amicus (BioMarin), Avidity (Novartis) and Hologic (Blackstone/TPG). Three
+  # more — Penumbra, Inspire Medical, Qiagen — are NYSE rather than Nasdaq.
+  "Biotech & healthcare":
+    as_of: "2026-08-19"
+    description: >
+      Drug developers, medical devices, diagnostics, hospitals and healthcare
+      distribution, across the US, Japan, Hong Kong, Singapore, Thailand and
+      Malaysia. Anything the pipeline already classifies as Healthcare joins
+      automatically; the list below reaches names no index would have supplied.
+    # Auto-join rule: any company whose sector matches is tagged, whether or
+    # not it appears in the list below.
+    sectors:
+      - Healthcare
+    tickers:
+      # --- US: S&P 500 healthcare majors (already in the universe; these only
+      # gain the tag, nothing extra is fetched) --------------------------------
+      - LLY         # Eli Lilly — incretin/obesity and diabetes
+      - JNJ         # Johnson & Johnson — pharma and medtech
+      - ABBV        # AbbVie — immunology, aesthetics, neuroscience
+      - UNH         # UnitedHealth — largest US health insurer
+      - MRK         # Merck & Co — oncology and vaccines
+      - AMGN        # Amgen — large-cap biologics
+      - TMO         # Thermo Fisher — life science tools
+      - ABT         # Abbott — devices, diagnostics, nutrition
+      - GILD        # Gilead — HIV and virology
+      - PFE         # Pfizer
+      - DHR         # Danaher — bioprocessing and diagnostics
+      - ISRG        # Intuitive Surgical — robotic surgery
+      - BMY         # Bristol Myers Squibb
+      - VRTX        # Vertex — cystic fibrosis, pain
+      - SYK         # Stryker — orthopaedic and surgical devices
+      - CVS         # CVS Health — pharmacy, PBM, insurance
+      - MDT         # Medtronic
+      - MCK         # McKesson — pharmaceutical wholesale
+      - HCA         # HCA Healthcare — largest US hospital operator
+      - ELV         # Elevance Health
+      - REGN        # Regeneron
+      - CI          # Cigna
+      - BSX         # Boston Scientific
+      - COR         # Cencora — pharmaceutical distribution
+      - CAH         # Cardinal Health
+      - EW          # Edwards Lifesciences
+      - BDX         # Becton Dickinson
+      - IDXX        # IDEXX — veterinary diagnostics
+      - IQV         # IQVIA — clinical trials and data
+      - DXCM        # DexCom — continuous glucose monitoring (Nasdaq, S&P 500)
+      - GEHC        # GE HealthCare
+      - RMD         # ResMed
+      - BIIB        # Biogen
+      - ZTS         # Zoetis — animal health
+      - MRNA        # Moderna
+      - INCY        # Incyte (Nasdaq, S&P 500)
+      - CRL         # Charles River — preclinical services
+      - A           # Agilent
+
+      # --- US: Nasdaq-listed, NOT in the S&P 500 ------------------------------
+      # The group this whole exercise started from. Verified Nasdaq, not NYSE.
+      - CRSP        # CRISPR Therapeutics — gene editing, sickle cell
+      - NVCR        # NovoCure — tumour treating fields
+      - NTLA        # Intellia — in vivo CRISPR
+      - BEAM        # Beam Therapeutics — base editing
+      - EDIT        # Editas Medicine — CRISPR
+      - SRPT        # Sarepta — Duchenne gene therapy
+      - KRYS        # Krystal Biotech — redosable gene therapy
+      - ALNY        # Alnylam — RNAi, ATTR amyloidosis
+      - IONS        # Ionis — antisense oligonucleotides
+      - ARWR        # Arrowhead — RNAi gene silencing
+      - BMRN        # BioMarin — rare genetic disease
+      - RARE        # Ultragenyx — ultra-rare disease
+      - PTCT        # PTC Therapeutics
+      - ASND        # Ascendis Pharma — endocrine rare disease
+      - INSM        # Insmed — rare pulmonary disease
+      - NBIX        # Neurocrine — neuroendocrine and CNS
+      - CYTK        # Cytokinetics — cardiac myosin modulators
+      - XENE        # Xenon — ion channel epilepsy
+      - MDGL        # Madrigal — MASH liver disease
+      - ALKS        # Alkermes — sleep and CNS
+      - ARGX        # argenx — FcRn autoimmune antibodies
+      - CORT        # Corcept — cortisol modulators
+      - EXEL        # Exelixis — oncology small molecules
+      - IOVA        # Iovance — TIL cell therapy
+      - LNTH        # Lantheus — radiopharmaceuticals
+      - UTHR        # United Therapeutics — pulmonary hypertension
+      - JAZZ        # Jazz Pharmaceuticals
+      - HALO        # Halozyme — subcutaneous drug delivery
+      - NTRA        # Natera — cell-free DNA diagnostics
+      - PODD        # Insulet — Omnipod insulin pumps
+      - TNDM        # Tandem Diabetes Care
+      - ILMN        # Illumina — DNA sequencing
+      - RGEN        # Repligen — bioprocessing
+      - TWST        # Twist Bioscience — synthetic DNA
+
+      # --- Japan (Nikkei 225 healthcare constituents) -------------------------
+      - 4502.T      # Takeda — Japan's largest global pharma
+      - 4503.T      # Astellas — oncology and urology
+      - 4568.T      # Daiichi Sankyo — antibody-drug conjugates
+      - 4523.T      # Eisai — Alzheimer's and oncology
+      - 4519.T      # Chugai — Roche-affiliated biologics
+      - 4507.T      # Shionogi — anti-infectives
+      - 4578.T      # Otsuka Holdings — CNS pharma, nutraceuticals
+      - 4151.T      # Kyowa Kirin — antibody biotech
+      - 4506.T      # Sumitomo Pharma — regenerative medicine
+      - 4543.T      # Terumo — cardiovascular devices
+      - 7733.T      # Olympus — endoscopes and surgical devices
+      - 2413.T      # M3 — online medical information platform
+
+      # --- Hong Kong (HKEX) ---------------------------------------------------
+      - 6160.HK     # BeOne Medicines (ex-BeiGene) — global oncology
+      - 2269.HK     # WuXi Biologics — biologics CDMO
+      - 1801.HK     # Innovent Biologics — oncology and metabolic
+      - 2359.HK     # WuXi AppTec — pharma R&D outsourcing
+      - 9926.HK     # Akeso — bispecific antibodies
+      - 1093.HK     # CSPC Pharmaceutical
+      - 1177.HK     # Sino Biopharmaceutical
+      - 3692.HK     # Hansoh Pharmaceutical
+      - 6618.HK     # JD Health — online pharmacy
+      - 1530.HK     # 3SBio — recombinant proteins
+      - 9688.HK     # Zai Lab — in-licensed oncology
+      - 0241.HK     # Alibaba Health
+      - 1099.HK     # Sinopharm — pharmaceutical distribution
+      - 2196.HK     # Fosun Pharma — diversified pharma and devices
+      - 1548.HK     # Genscript Biotech — life-science services
+
+      # --- Singapore (SGX) ----------------------------------------------------
+      # Thin secondary listings (Top Glove BVA, Sri Trang STG, China Medical
+      # System 8A8) are deliberately excluded — the codes are right but SGX
+      # volume is near zero, and they would arrive as empty price series.
+      - Q0F.SI      # IHH Healthcare — pan-Asian private hospitals
+      - BSL.SI      # Raffles Medical — Singapore hospitals and clinics
+      - A50.SI      # Thomson Medical — women's and children's hospitals
+      - QC7.SI      # Q&M Dental
+      - AP4.SI      # Riverstone — cleanroom and medical gloves
+      - C2PU.SI     # Parkway Life REIT — hospital property
+      - 5WA.SI      # OUE Healthcare
+      - P8A.SI      # Cordlife — cord blood banking
+      - 1J5.SI      # Hyphens Pharma — specialty pharma distribution
+      - 40T.SI      # ISEC Healthcare — eye care
+      - 1B1.SI      # HC Surgical Specialists — endoscopy
+
+      # --- Thailand (SET) -----------------------------------------------------
+      - BDMS.BK     # Bangkok Dusit Medical — largest private hospital group
+      - BH.BK       # Bumrungrad Hospital — premium international
+      - BCH.BK      # Bangkok Chain Hospital
+      - RAM.BK      # Ramkhamhaeng Hospital
+      - VIBHA.BK    # Vibhavadi Medical Center
+      - CHG.BK      # Chularat Hospital
+      - SKR.BK      # Sikarin
+      - PR9.BK      # Praram 9 Hospital
+      - THG.BK      # Thonburi Healthcare
+      - MEGA.BK     # Mega Lifesciences — nutraceuticals and distribution
+      - PRINC.BK    # Principal Capital — regional hospitals
+      - NTV.BK      # Nonthavej Hospital
+      - TNH.BK      # Thai Nakarin Hospital
+      - EKH.BK      # Ekachai Medical Care
+
+      # --- Malaysia (Bursa) ---------------------------------------------------
+      - 5225.KL     # IHH Healthcare — pan-Asian private hospitals
+      - 5878.KL     # KPJ Healthcare — Malaysia's largest hospital network
+      - 5555.KL     # Sunway Healthcare — IPO Mar 2026, short history
+      - 5168.KL     # Hartalega — nitrile examination gloves
+      - 7113.KL     # Top Glove — world's largest glove maker
+      - 7153.KL     # Kossan Rubber — medical gloves
+      - 7106.KL     # Supermax — glove manufacturing
+      - 7148.KL     # Duopharma Biotech — generics and biosimilars
+      - 7081.KL     # Pharmaniaga — pharma manufacturing and distribution
+      - 7090.KL     # Apex Healthcare — pharmaceutical distribution
+      - 0002.KL     # Kotra Industries — vitamins and pharmaceuticals
+      - 0222.KL     # Optimax Holdings — eye specialist centres
+  "AI infrastructure":
+    description: >
+      The supply chain powering AI build-out — silicon, interconnect, servers,
+      and the power and metals underneath them.
+    tickers:
+      - TSM
+      - ASML
+      - AMAT
+      - LRCX
+      - KLAC
+      - ANET
+      - APH
+      - LITE
+      - COHR
+      - GLW
+      - DELL
+      - SMCI
+      - MU
+
+  "Chip foundries":
+    description: Advanced-node manufacture of GPUs and AI accelerators.
+    tickers:
+      - TSM
+
+  "Fab equipment":
+    description: Lithography, deposition, etch and inspection tools.
+    tickers:
+      - ASML
+      - AMAT
+      - LRCX
+      - KLAC
+
+  "Optical & networking":
+    description: Switching, transceivers, connectors and fibre inside GPU clusters.
+    tickers:
+      - ANET
+      - APH
+      - LITE
+      - COHR
+      - GLW
+
+  "Server systems":
+    description: Rack integration and liquid cooling for GPU density.
+    tickers:
+      - DELL
+      - SMCI
+
+  "Memory & storage":
+    description: >
+      High-bandwidth memory is the tightest bottleneck in the AI stack — an
+      accelerator is throttled by what it can feed itself. The two largest HBM
+      makers, Samsung and SK Hynix, list in Seoul and are outside this
+      universe; Micron is the accessible pure-play.
+    tickers:
+      - MU
+      - WDC
+      - STX
+
+  "Uranium & nuclear":
+    description: >
+      Fuel cycle and reactor hardware. Data-centre baseload demand is the
+      thesis; several of these are pre-revenue developers.
+    tickers:
+      - CCJ
+      - NXE
+      - UUUU
+      - DNN
+      - LEU
+      - BWXT
+      - URA
+      - URNM
+
+  "Copper":
+    description: >
+      Grid, transformers, switchgear and busbars. A hyperscale site consumes
+      copper in tens of thousands of tonnes.
+    tickers:
+      - FCX
+      - SCCO
+      - BHP
+      - RIO
+      - TECK
+      - ERO
+      - COPX
+
+# Funds, not companies. Revenue, equity, ROE and EV/EBIT are undefined for an
+# ETF, so the six value frameworks are marked n/a rather than failed — the same
+# treatment financials get for Greenblatt. Prices, technicals, the Soros regime
+# read and the full deep-dive quantitative suite all still apply.
+# Rogers argues the commodity beats the miner three to one over 41 years, so
+# the buyable vehicles are carried in the universe as well as on the board.
+# These are ETFs: they have no accounts, so every company framework reports
+# not-applicable rather than failing them on a missing balance sheet.
+etfs:
+  - URA
+  - URNM
+  - COPX
+  # broad baskets
+  - DBC        # optimised roll
+  - PDBC       # same exposure, no K-1
+  - GSG
+  - COMT
+  - RJI        # Rogers International Commodity Index — an ETN
+  # single commodity
+  - CPER       # copper
+  - USO        # WTI
+  - BNO        # Brent
+  - UNG        # natural gas
+  - GLD        # gold, physical
+  - IAU
+  - SLV        # silver, physical
+  - PPLT       # platinum
+  - PALL       # palladium
+  - DBA        # agriculture basket
+  - WEAT
+  - CORN
+  - SOYB
+  - CANE       # sugar — Rogers's own example
+  - JO         # coffee, an ETN

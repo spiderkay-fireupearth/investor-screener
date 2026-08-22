@@ -32,7 +32,9 @@ def _n(x) -> bool:
 def assess(index_df: Optional[pd.DataFrame],
            breadth: Optional[Dict[str, Any]],
            vix: Optional[float],
-           cfg: Dict[str, Any]) -> Dict[str, Any]:
+           cfg: Dict[str, Any],
+           hy_oas: Optional[float] = None,
+           cape: Optional[float] = None) -> Dict[str, Any]:
     """Return the cycle posture plus the evidence behind it.
 
     Deliberately a VOTE across three independent signals rather than a single
@@ -80,11 +82,42 @@ def assess(index_df: Optional[pd.DataFrame],
         else:
             votes[CORE] += 1
 
+    # 4) Credit spreads. Marks: "the markets are riskiest when there's a
+    #    widespread belief that there's no risk, since this makes investors
+    #    feel it's safe to do risky things." Credit priced for no defaults is
+    #    that belief expressed in the market where it does the most damage.
+    sig["hy_oas_bp"] = hy_oas
+    if _n(hy_oas):
+        if hy_oas < cfg.get("hy_oas_calm", 350):
+            votes[DEFENSIVE] += 1
+        elif hy_oas > cfg.get("hy_oas_stressed", 700):
+            votes[OPPORTUNISTIC] += 1
+        else:
+            votes[CORE] += 1
+
+    # 5) Valuation. The slowest-moving signal here and the one that says least
+    #    about the next twelve months — which is why it is one vote of five and
+    #    not a gate. Marks gives no number; these are calibrations.
+    sig["cape"] = cape
+    if _n(cape):
+        if cape > cfg.get("cape_rich", 30):
+            votes[DEFENSIVE] += 1
+        elif cape < cfg.get("cape_cheap", 16):
+            votes[OPPORTUNISTIC] += 1
+        else:
+            votes[CORE] += 1
+
     if not any(votes.values()):
         return {"mode": CORE, "reason": "no cycle signals available",
                 "signals": sig, "votes": votes}
 
     mode = max(votes, key=lambda k: votes[k])
+    # A 2-2 split resolved by dict order is still a call, and presenting it
+    # with the same confidence as 4-1 is misleading. Say when it was close.
+    top = votes[mode]
+    tied = [k for k, v in votes.items() if v == top and k != mode]
+    sig["vote_split"] = dict(votes)
+    sig["contested"] = bool(tied)
     parts = []
     if _n(rsi):
         parts.append(f"index RSI {rsi:.0f}")
@@ -92,6 +125,12 @@ def assess(index_df: Optional[pd.DataFrame],
         parts.append(f"{pct200:.0%} of names above their 200-day")
     if _n(vix):
         parts.append(f"VIX {vix:.1f}")
+    if _n(hy_oas):
+        parts.append(f"high-yield {hy_oas:.0f}bp")
+    if _n(cape):
+        parts.append(f"CAPE {cape:.1f}")
+    parts.append(f"vote {votes[DEFENSIVE]}-{votes[CORE]}-{votes[OPPORTUNISTIC]}"
+                 + (" (tied — treat the posture as contested)" if tied else ""))
 
     narrative = {
         DEFENSIVE: ("Raise the bar. Prices embed optimism, so the same evidence "

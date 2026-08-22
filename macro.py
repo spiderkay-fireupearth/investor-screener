@@ -234,6 +234,17 @@ def build(yahoo, fred, store) -> Dict[str, Any]:
             equity[tk] = df
 
     macro = fred.snapshot(FRED_SERIES)
+    # CPI arrives as an index level, and every use of it here wants the rate of
+    # change. Lynch's Rule of 20 in particular is P/E PLUS inflation, and
+    # adding an index level of 320 to a P/E of 22 is nonsense.
+    try:
+        cpi_hist = fred.history("CPIAUCSL", limit=24)
+        if len(cpi_hist) >= 13 and cpi_hist[12][1]:
+            macro["us_cpi_yoy"] = (cpi_hist[0][1] / cpi_hist[12][1] - 1) * 100.0
+        else:
+            macro["us_cpi_yoy"] = None
+    except Exception:                                # noqa: BLE001
+        macro["us_cpi_yoy"] = None
 
     out = {
         "macro": macro,

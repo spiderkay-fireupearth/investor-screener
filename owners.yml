@@ -1,0 +1,309 @@
+# Who else owns this? -------------------------------------------------------
+#
+# A short list of investors whose disclosed positions are worth flagging on a
+# row. A tag here is NOT a recommendation and it is NOT current: read the two
+# limitations below before reading any badge on the page.
+#
+# 1. A 13F IS A CENSUS OF THE PAST. Managers over $100m in US equities file
+#    within 45 days of quarter end. The Q2 2026 filings below describe
+#    positions held on 30 June 2026 and were filed in mid-August. A position
+#    can have been sold the day after the quarter closed and the form would
+#    still show it. Treat a badge as "owned this on the report date", never as
+#    "owns this now".
+#
+# 2. A 13F COVERS US-LISTED LONG EQUITY ONLY. No shorts, no bonds, no foreign
+#    listings. Berkshire's Japanese trading-house stakes are among its largest
+#    equity positions on earth and appear in no 13F ever filed. That is why the
+#    `manual:` block exists — those rows are sourced from company disclosure,
+#    are marked as such on the page, and have to be maintained by hand.
+#
+# WHAT IS DELIBERATELY EXCLUDED, and why it matters here:
+#
+#   Convertible bonds. Oaktree's Q2 filing has 145 rows and roughly 60% of them
+#   are converts, reported in principal rather than shares. A convert is a
+#   credit position, routinely delta-hedged with a SHORT in the same company's
+#   stock. Badging Sea Ltd because Oaktree owns its converts would state the
+#   opposite of the truth about half the time.
+#
+#   Puts and calls. Oaktree's single largest reported line is a $1.01bn PUT on
+#   SPY, and its second is a $652m put on QQQ. Those are bearish. A naive
+#   "appears in the filing" rule would have stamped OT on the S&P 500 itself.
+#
+#   So: `positions` below holds COMMON STOCK LONGS ONLY. The excluded counts
+#   are recorded per owner so the page can say what was left out rather than
+#   quietly dropping it.
+#
+# TO REFRESH each quarter: run `python -m tools.update_owners --help`. It
+# rewrites this file from the SEC filings and prints a diff. Nothing in the
+# refresh pipeline reads EDGAR for this — the data is static by design, so a
+# bad quarter at the SEC can never delay or break a screener run.
+
+owners:
+
+  BK:
+    name: Berkshire Hathaway
+    long_name: Berkshire Hathaway Inc.
+    manager: Warren Buffett
+    badge: BK
+    cik: "0001067983"
+    source: 13F-HR
+    accession: "0001193125-26-352200"
+    period: "2026-06-30"
+    filed: "2026-08-14"
+    url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526352200/0001193125-26-352200-index.htm
+    # Cover-page totals, carried so the page can show the position in context
+    # and so the updater can assert it read the whole table.
+    portfolio_value_usd: 299253556246
+    reported_rows: 89              # one row per included manager per security
+    distinct_positions: 29
+    confidential_omitted: false
+    excluded:
+      convertible_bonds: 0
+      options: 0
+      warrants: 0
+      etfs: 0
+    note: >-
+      Reconciles exactly to the cover page: 89 table rows across 14 included
+      managers aggregate to 29 distinct securities and $299.25bn. No
+      confidential-treatment request, so nothing was withheld.
+
+    # ticker: [shares, value_usd_thousands, change]
+    # change is versus the Q1 2026 filing (accession 0001193125-26-226661):
+    #   new | add | trim | hold
+    positions:
+      AAPL:   {name: "Apple", shares: 227917808, value: 65950297, pct: 22.04, change: hold}
+      AXP:    {name: "American Express", shares: 151610700, value: 51282319, pct: 17.14, change: hold}
+      KO:     {name: "Coca-Cola", shares: 400000000, value: 32508000, pct: 10.86, change: hold}
+      GOOGL:  {name: "Alphabet Cl A", shares: 78791167,  value: 28157599, pct: 9.41,  change: add,  delta_pct: 45.2}
+      BAC:    {name: "Bank of America", shares: 483394015, value: 27543791, pct: 9.20,  change: trim, delta_pct: -5.9}
+      CVX:    {name: "Chevron", shares: 84375856,  value: 13986142, pct: 4.67,  change: hold}
+      OXY:    {name: "Occidental Petroleum", shares: 264941431, value: 12868205, pct: 4.30,  change: hold}
+      CB:     {name: "Chubb", shares: 34249183,  value: 11670067, pct: 3.90,  change: hold}
+      MCO:    {name: "Moody's", shares: 24669778,  value: 11173436, pct: 3.73,  change: hold}
+      GOOG:   {name: "Alphabet Cl C", shares: 27188433,  value: 9606489,  pct: 3.21,  change: add,  delta_pct: 658.4}
+      KHC:    {name: "Kraft Heinz", shares: 325634818, value: 7691494,  pct: 2.57,  change: hold}
+      DVA:    {name: "DaVita", shares: 28880209,  value: 6425269,  pct: 2.15,  change: trim, delta_pct: -4.1}
+      DAL:    {name: "Delta Air Lines", shares: 57320000,  value: 5368591,  pct: 1.79,  change: add,  delta_pct: 44.0}
+      SIRI:   {name: "SiriusXM", shares: 124807117, value: 3686802,  pct: 1.23,  change: hold}
+      VRSN:   {name: "VeriSign", shares: 8989880,   value: 2261494,  pct: 0.76,  change: hold}
+      KR:     {name: "Kroger", shares: 39000000,  value: 2165670,  pct: 0.72,  change: trim, delta_pct: -22.0}
+      ALLY:   {name: "Ally Financial", shares: 27000000,  value: 1240650,  pct: 0.41,  change: trim, delta_pct: -6.9}
+      LEN:    {name: "Lennar Cl A", shares: 13111741,  value: 1186481,  pct: 0.40,  change: add,  delta_pct: 29.8}
+      LLYVK:  {name: "Liberty Live Cl C", shares: 10587143,  value: 1118426,  pct: 0.37,  change: hold}
+      NYT:    {name: "New York Times", shares: 15700000,  value: 1098686,  pct: 0.37,  change: add,  delta_pct: 3.7}
+      COF:    {name: "Capital One", shares: 3000000,   value: 601860,   pct: 0.20,  change: trim, delta_pct: -58.0}
+      LLYVA:  {name: "Liberty Live Cl A", shares: 4986588,   value: 504942,   pct: 0.17,  change: hold}
+      LPX:    {name: "Louisiana-Pacific", shares: 5664793,   value: 445593,   pct: 0.15,  change: hold}
+      NUE:    {name: "Nucor", shares: 1857752,   value: 413814,   pct: 0.14,  change: trim, delta_pct: -52.4}
+      M:      {name: "Macy's", shares: 7347426,   value: 173032,   pct: 0.06,  change: add,  delta_pct: 141.8}
+      NVR:    {name: "NVR", shares: 11112,     value: 75711,    pct: 0.03,  change: hold}
+      LEN-B:  {name: "Lennar Cl B", shares: 298117,    value: 26446,    pct: 0.01,  change: add,  delta_pct: 25.4}
+      JEF:    {name: "Jefferies", shares: 433558,    value: 21669,    pct: 0.01,  change: hold}
+      DHI:    {name: "D.R. Horton", shares: 3564,      value: 581,      pct: 0.00,  change: new}
+
+    # Sold to zero during the quarter. Kept so the page can say "was here last
+    # quarter, is not now" rather than silently dropping the row — an exit is
+    # information, and a badge that just disappears reads like a bug.
+    # CUSIP -> ticker. A 13F information table contains no ticker symbols and
+    # the SEC publishes no free crosswalk, so this mapping is the one part of
+    # the pipeline a machine cannot derive. It is verified by hand and carried
+    # forward; the updater NEVER invents a symbol for a CUSIP it has not seen.
+    # A new, unmapped position is reported as unmapped and left unbadged —
+    # a missing badge is recoverable, a badge on the wrong company is not.
+    cusips:
+      "037833100": AAPL
+      "025816109": AXP
+      "191216100": KO
+      "02079K305": GOOGL
+      "060505104": BAC
+      "166764100": CVX
+      "674599105": OXY
+      "H1467J104": CB
+      "615369105": MCO
+      "02079K107": GOOG
+      "500754106": KHC
+      "23918K108": DVA
+      "247361702": DAL
+      "829933100": SIRI
+      "92343E102": VRSN
+      "501044101": KR
+      "02005N100": ALLY
+      "526057104": LEN
+      "530909308": LLYVK
+      "650111107": NYT
+      "14040H105": COF
+      "530909100": LLYVA
+      "546347105": LPX
+      "670346105": NUE
+      "55616P104": M
+      "62944T105": NVR
+      "526057302": LEN-B
+      "47233W109": JEF
+      "23331A109": DHI
+      "21036P108": STZ
+
+    exited:
+      STZ: {name: "Constellation Brands", shares_prior: 632890, value_prior: 94934, note: "fully liquidated in Q2 2026"}
+
+    # Not in any 13F and never will be. Sourced from Berkshire's own
+    # disclosures and the Japanese large-shareholder filings, so these carry a
+    # visibly different provenance on the page.
+    manual:
+      "8058.T": {name: Mitsubishi Corp,  source: company disclosure, note: "long-term stake in the five Japanese trading houses"}
+      "8031.T": {name: Mitsui & Co,      source: company disclosure, note: "long-term stake in the five Japanese trading houses"}
+      "8001.T": {name: Itochu,           source: company disclosure, note: "long-term stake in the five Japanese trading houses"}
+      "8002.T": {name: Marubeni,         source: company disclosure, note: "long-term stake in the five Japanese trading houses"}
+      "8053.T": {name: Sumitomo Corp,    source: company disclosure, note: "long-term stake in the five Japanese trading houses"}
+
+  OT:
+    name: Oaktree
+    long_name: Oaktree Capital Management, L.P.
+    manager: Howard Marks
+    badge: OT
+    cik: "0000949509"
+    source: 13F-HR
+    accession: "0000949509-26-000005"
+    period: "2026-06-30"
+    # EDGAR's submissions feed says the 14th. The archive folder's file
+    # timestamps say the 13th, which is what the first hand-written version of
+    # this file recorded — a submission accepted after 17:30 ET carries the
+    # NEXT business day's filing date, so the folder mtime runs a day early.
+    # The feed is the authoritative one.
+    filed: "2026-08-14"
+    url: https://www.sec.gov/Archives/edgar/data/949509/000094950926000005/0000949509-26-000005-index.htm
+    portfolio_value_usd: 7206070520
+    reported_rows: 145
+    distinct_positions: 49         # common stock longs only — see `excluded`
+    confidential_omitted: false
+    excluded:
+      convertible_bonds: 87
+      options: 5                   # SPY put, QQQ put, Visteon put, LYB put, CORZ/BTDR/MX calls
+      warrants: 2                  # Alvotech, Rice Acquisition Corp 3
+      etfs: 2                      # both held as PUTS, both excluded
+    note: >-
+      145 rows on the cover page; 49 of them are common-stock longs and those
+      are the only ones badged. The largest single line in the whole filing is
+      a $1.01bn PUT on SPY and the second is a $652m put on QQQ — both bearish,
+      both excluded. Roughly 60% of the remaining rows are convertible bonds,
+      which are credit positions usually hedged with a short in the same stock.
+
+    positions:
+      TRMD:   {name: "Torm", shares: 20329874, value: 524261, pct: 7.28, change: trim, delta_pct: -14.7}
+      EXE:    {name: "Expand Energy", shares: 5237477,  value: 477606, pct: 6.63, change: hold}
+      GTX:    {name: "Garrett Motion", shares: 7594816,  value: 275160, pct: 3.82, change: trim, delta_pct: -48.0}
+      AU:     {name: "AngloGold Ashanti", shares: 3179092,  value: 257157, pct: 3.57, change: trim, delta_pct: -1.4}
+      INDV:   {name: "Indivior", shares: 6127212,  value: 251400, pct: 3.49, change: trim, delta_pct: -12.3}
+      TDS:    {name: "Telephone & Data Systems", shares: 5282905,  value: 195520, pct: 2.71, change: add,  delta_pct: 23.1}
+      VNOM:   {name: "Viper Energy", shares: 3791432,  value: 160757, pct: 2.23, change: hold}
+      CORZ:   {name: "Core Scientific", shares: 4993708,  value: 127789, pct: 1.77, change: trim, delta_pct: -46.6}
+      TLN:    {name: "Talen Energy", shares: 331117,   value: 127235, pct: 1.77, change: hold}
+      B:      {name: "Barrick Mining", shares: 3206087,  value: 117760, pct: 1.63, change: add,  delta_pct: 22.1}
+      ITUB:   {name: "Itau Unibanco", shares: 11977665, value: 97858,  pct: 1.36, change: trim, delta_pct: -1.7}
+      LBTYA:  {name: "Liberty Global Cl A", shares: 8551191,  value: 97227,  pct: 1.35, change: hold}
+      OCSL:   {name: "Oaktree Specialty Lending", shares: 7872199,  value: 93994,  pct: 1.30, change: add,  delta_pct: 325.0}
+      FCX:    {name: "Freeport-McMoRan", shares: 1201122,  value: 75539,  pct: 1.05, change: trim, delta_pct: -1.6}
+      AERO:   {name: "Grupo Aeromexico", shares: 3968686,  value: 71436,  pct: 0.99, change: hold}
+      KRC:    {name: "Kilroy Realty", shares: 1850011,  value: 69320,  pct: 0.96, change: hold}
+      SE:     {name: "Sea Limited", shares: 635443,   value: 60895,  pct: 0.85, change: new}
+      LILAK:  {name: "Liberty Latin America Cl C", shares: 7559083,  value: 58885,  pct: 0.82, change: add,  delta_pct: 31.5}
+      BLCO:   {name: "Bausch + Lomb", shares: 3441042,  value: 56984,  pct: 0.79, change: add,  delta_pct: 1.7}
+      VSAT:   {name: "Viasat", shares: 630280,   value: 56605,  pct: 0.79, change: new}
+      MMYT:   {name: "MakeMyTrip", shares: 983068,   value: 52388,  pct: 0.73, change: new}
+      MATW:   {name: "Matthews International", shares: 1925992,  value: 51848,  pct: 0.72, change: new}
+      XP:     {name: "XP Inc", shares: 3116809,  value: 50679,  pct: 0.70, change: trim, delta_pct: -1.7}
+      YPF:    {name: "YPF", shares: 991346,   value: 45077,  pct: 0.63, change: add,  delta_pct: 11.8}
+      TAC:    {name: "TransAlta", shares: 3000000,  value: 41487,  pct: 0.58, change: trim, delta_pct: -53.2}
+      RWAY:   {name: "Runway Growth Finance", shares: 7029667,  value: 39436,  pct: 0.55, change: hold}
+      ERJ:    {name: "Embraer", shares: 439706,   value: 28053,  pct: 0.39, change: trim, delta_pct: -1.8}
+      AD:     {name: "Array Digital Infrastructure", shares: 696858,   value: 25268,  pct: 0.35, change: trim, delta_pct: -3.8}
+      KRSP:   {name: "Rice Acquisition Corp III", shares: 2400000,  value: 25200,  pct: 0.35, change: new}
+      SHAZ:   {name: "SharonAI Holdings", shares: 289456,   value: 24505,  pct: 0.34, change: new}
+      TX:     {name: "Ternium", shares: 572324,   value: 24438,  pct: 0.34, change: trim, delta_pct: -1.8}
+      QMCO:   {name: "Quantum", shares: 2011678,  value: 22128,  pct: 0.31, change: hold}
+      SMPL:   {name: "Simply Good Foods", shares: 1203889,  value: 15988,  pct: 0.22, change: add,  delta_pct: 6.6}
+      SGRY:   {name: "Surgery Partners", shares: 862588,   value: 14491,  pct: 0.20, change: new}
+      MINE:   {name: "Mayfair Gold", shares: 4500000,  value: 11070,  pct: 0.15, change: hold}
+      BMM:    {name: "Blue Moon Metals", shares: 1685000,  value: 10689,  pct: 0.15, change: hold}
+      SMRT:   {name: "SmartRent", shares: 7505294,  value: 8931,   pct: 0.12, change: hold}
+      MX:     {name: "MagnaChip Semiconductor", shares: 1500000,  value: 7095,   pct: 0.10, change: trim, delta_pct: -47.4}
+      LILA:   {name: "Liberty Latin America Cl A", shares: 839020,   value: 6578,   pct: 0.09, change: hold}
+      BATL:   {name: "Battalion Oil", shares: 3009912,  value: 3943,   pct: 0.05, change: hold}
+      DPC:    {name: "DPC Holdings (Doncasters)", shares: 75000,    value: 3680,   pct: 0.05, change: new}
+      SVC:    {name: "Service Properties Trust", shares: 1988382,  value: 3360,   pct: 0.05, change: new}
+      BTAI:   {name: "BioXcel Therapeutics", shares: 1380248,  value: 1946,   pct: 0.03, change: add,  delta_pct: 472.3}
+      NNBR:   {name: "NN Inc", shares: 510943,   value: 1834,   pct: 0.03, change: new}
+      TEO:    {name: "Telecom Argentina", shares: 116105,   value: 1509,   pct: 0.02, change: trim, delta_pct: -92.8}
+      CX:     {name: "Cemex", shares: 100000,   value: 1200,   pct: 0.02, change: trim, delta_pct: -96.4}
+      STKL:   {name: "SunOpta", shares: 74314,    value: 406,    pct: 0.01, change: trim, delta_pct: -99.6}
+      ALVO:   {name: "Alvotech", shares: 97982,    value: 362,    pct: 0.01, change: trim, delta_pct: -59.2}
+      OPI:    {name: "Office Properties Income Trust", shares: 10851,    value: 184,    pct: 0.00, change: hold}
+
+    cusips:
+      "G89479102": TRMD
+      "165167735": EXE
+      "366505105": GTX
+      "G0378L100": AU
+      "45579U109": INDV
+      "879433829": TDS
+      "64361Q101": VNOM
+      "21874A106": CORZ
+      "87422Q109": TLN
+      "06849F108": B
+      "465562106": ITUB
+      "G61188101": LBTYA
+      "67401P405": OCSL
+      "35671D857": FCX
+      "40054J109": AERO
+      "49427F108": KRC
+      "81141R100": SE
+      "G9001E128": LILAK
+      "071705107": BLCO
+      "92552V100": VSAT
+      "V5633W109": MMYT
+      "577128101": MATW
+      "G98239109": XP
+      "984245100": YPF
+      "89346D107": TAC
+      "78163D100": RWAY
+      "29082A107": ERJ
+      "911684108": AD
+      "G7553X106": KRSP
+      "778920306": SHAZ
+      "880890108": TX
+      "747906600": QMCO
+      "82900L102": SMPL
+      "86881A100": SGRY
+      "57808L305": MINE
+      "09570Q509": BMM
+      "83193G107": SMRT
+      "55933J203": MX
+      "G9001E102": LILA
+      "07134L107": BATL
+      "G2R11M108": DPC
+      "81761L102": SVC
+      "09075P204": BTAI
+      "629337106": NNBR
+      "879273209": TEO
+      "151290889": CX
+      "8676EP108": STKL
+      "L01800108": ALVO
+      "67623C307": OPI
+      # exited last quarter, kept so an exit can still be named
+      "654902204": NOK
+      "124830878": CBL
+      "G25457105": CRDO
+      "27923Q109": ECVT
+      "629377508": NRG
+      "40415F101": HDB
+      "722304102": PDD
+
+    exited:
+      NOK:  {name: "Nokia", shares_prior: 11200308, value_prior: 90050, note: "Nokia, exited in Q2 2026"}
+      CBL:  {name: "CBL & Associates", shares_prior: 2153717,  value_prior: 82767, note: "CBL & Associates, exited"}
+      CRDO: {name: "Credo Technology", shares_prior: 539000,   value_prior: 50596, note: "Credo Technology, exited"}
+      ECVT: {name: "Ecovyst", shares_prior: 2393791,  value_prior: 30784, note: "Ecovyst, exited"}
+      NRG:  {name: "NRG Energy", shares_prior: 49028,    value_prior: 7165,  note: "NRG Energy, exited"}
+      HDB:  {name: "HDFC Bank", shares_prior: 114261,   value_prior: 2843,  note: "HDFC Bank, exited"}
+      PDD:  {name: "PDD Holdings", shares_prior: 4823,     value_prior: 493,   note: "PDD Holdings, exited"}
+
+    manual: {}
