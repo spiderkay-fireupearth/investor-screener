@@ -516,7 +516,47 @@ def main() -> int:
             print(f"  config already has {have_period}, which is newer. Skipped.")
             continue
         if latest["accessionNumber"] == have_acc:
-            print("  already up to date.")
+            # The 13F has not moved — which is the normal state for eleven
+            # weeks out of thirteen. That is NOT a reason to stop: the weekly
+            # run exists for the Schedule 13D/G sweep, and those are filed
+            # within days of a stake crossing 5% rather than on the quarterly
+            # clock. An earlier version of this returned here, which meant the
+            # weekly cron did nothing at all except print this line.
+            print("  13F unchanged; refreshing the 13D/G sweep and metadata.")
+            block = dict(old)
+            touched = []
+
+            stakes = stake_filings(cik, filings, limit=args.stake_limit)
+            if stakes != (old.get("stake_filings") or []):
+                block["stake_filings"] = stakes
+                touched.append(f"{len(stakes)} 13D/G filing(s)")
+            if stakes:
+                for s in stakes[:6]:
+                    print(f"    {s['filed']}  {s['form']:<12} "
+                          f"{s['subject'] or '(subject not parsed)'}")
+
+            # The submissions feed is authoritative for the filing date. The
+            # archive folder's timestamps are not: a submission accepted after
+            # 17:30 ET is disseminated with the NEXT business day's date, so
+            # reading the mtime off the directory listing can be a day early.
+            # This is how the Oaktree date in the hand-written config came to
+            # say the 13th when EDGAR says the 14th.
+            feed_filed = latest.get("filingDate") or ""
+            if feed_filed and feed_filed != str(old.get("filed") or ""):
+                print(f"    corrected filing date "
+                      f"{old.get('filed')!r} -> {feed_filed!r} (EDGAR is "
+                      f"authoritative; the archive mtime is not)")
+                block["filed"] = feed_filed
+                touched.append("filing date")
+
+            if touched:
+                block["updated_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                                     time.gmtime())
+                owners[key] = block
+                changed_any = True
+                print(f"  updated: {', '.join(touched)}")
+            else:
+                print("  nothing to change.")
             continue
 
         url = infotable_url(cik, latest["accessionNumber"])

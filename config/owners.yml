@@ -164,7 +164,12 @@ owners:
     source: 13F-HR
     accession: "0000949509-26-000005"
     period: "2026-06-30"
-    filed: "2026-08-13"
+    # EDGAR's submissions feed says the 14th. The archive folder's file
+    # timestamps say the 13th, which is what the first hand-written version of
+    # this file recorded — a submission accepted after 17:30 ET carries the
+    # NEXT business day's filing date, so the folder mtime runs a day early.
+    # The feed is the authoritative one.
+    filed: "2026-08-14"
     url: https://www.sec.gov/Archives/edgar/data/949509/000094950926000005/0000949509-26-000005-index.htm
     portfolio_value_usd: 7206070520
     reported_rows: 145

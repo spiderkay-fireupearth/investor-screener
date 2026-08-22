@@ -4782,6 +4782,101 @@ def test_owner_auto_update():
               bool(block.get("cik")), True)
 
 
+def test_owner_weekly_sweep():
+    """The weekly run must do real work in the 11 weeks out of 13 with no new 13F.
+
+    This is a regression test for a bug the first live run exposed: the updater
+    returned as soon as it saw the 13F accession it already had, which meant
+    the Monday cron — added specifically to watch Schedule 13D/G filings —
+    printed 'already up to date' and did nothing for an entire quarter.
+    """
+    import io
+    import contextlib
+    import json
+    import shutil
+    from tools import update_owners as up
+
+    subs = {"filings": {"recent": {
+        "form": ["SC 13G/A", "13F-HR", "SC 13G"],
+        "accessionNumber": ["0009-26-2", "0001193125-26-352200", "0009-26-1"],
+        "filingDate": ["2026-08-20", "2026-08-14", "2026-08-18"],
+        "reportDate": ["", "2026-06-30", ""],
+        "primaryDocument": ["primary_doc.xml"] * 3}}}
+    subjects = {"0009-26-2": "DELTA AIR LINES INC", "0009-26-1": "D R HORTON INC"}
+
+    def fake(url, timeout=60, tries=3):
+        if "submissions" in url:
+            return json.dumps(subs)
+        if "index-headers" in url:
+            hit = [a for a in subjects if a.replace("-", "") in url.replace("-", "")]
+            nm = subjects[hit[0]] if hit else "UNKNOWN"
+            return (f"SUBJECT COMPANY:\n COMPANY CONFORMED NAME: {nm}\n"
+                    f"  CENTRAL INDEX KEY: 0000027904\n")
+        return None
+
+    real_fetch, real_throttle, real_argv = up.fetch, up.THROTTLE_S, sys.argv
+    up.fetch, up.THROTTLE_S = fake, 0
+    tmp = "/tmp/_weekly_case.yml"
+    try:
+        shutil.copy("config/owners.yml", tmp)
+
+        def run():
+            sys.argv = ["x", "--config", tmp, "--only", "BK", "--write"]
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                rc = up.main()
+            return rc, buf.getvalue()
+
+        before = yaml.safe_load(open(tmp))["owners"]["BK"]
+        rc, out = run()
+        after = yaml.safe_load(open(tmp))["owners"]["BK"]
+
+        check("the run does not stop at an unchanged 13F",
+              "13F unchanged; refreshing" in out, True)
+        check("the 13D/G sweep actually ran",
+              "DELTA AIR LINES INC" in out, True)
+        check("and both filings were recorded",
+              [s["subject"] for s in after["stake_filings"]],
+              ["DELTA AIR LINES INC", "D R HORTON INC"])
+        check("newest first", after["stake_filings"][0]["filed"], "2026-08-20")
+        # The holdings must be untouched. A weekly job that rewrote positions
+        # from a stale read would be far worse than one that did nothing.
+        check("the quarterly holdings are left alone",
+              after["positions"], before["positions"])
+        check("as are the period and accession",
+              (after["period"], after["accession"]),
+              (before["period"], before["accession"]))
+        check("and the run stamps itself", bool(after.get("updated_utc")), True)
+
+        # Idempotence: a weekly job that commits on every run would fill the
+        # history with empty commits.
+        rc2, out2 = run()
+        check("running again changes nothing", "nothing to change" in out2, True)
+        check("and leaves the file identical",
+              yaml.safe_load(open(tmp))["owners"]["BK"]["stake_filings"],
+              after["stake_filings"])
+
+        # EDGAR's feed is authoritative for the filing date; the archive
+        # folder's mtime can run a day early for an after-hours submission.
+        doc = yaml.safe_load(open(tmp))
+        doc["owners"]["BK"]["filed"] = "2026-08-13"
+        with open(tmp, "w") as f:
+            yaml.safe_dump(doc, f, sort_keys=False)
+        rc3, out3 = run()
+        check("a wrong filing date is corrected from the feed",
+              yaml.safe_load(open(tmp))["owners"]["BK"]["filed"], "2026-08-14")
+        check("and the correction is explained in the log",
+              "corrected filing date" in out3, True)
+    finally:
+        up.fetch, up.THROTTLE_S, sys.argv = real_fetch, real_throttle, real_argv
+
+    # The shipped config must already carry EDGAR's dates, not the mtimes.
+    cfg = yaml.safe_load(open("config/owners.yml"))["owners"]
+    check("Oaktree's filing date matches EDGAR's feed",
+          cfg["OT"]["filed"], "2026-08-14")
+    check("and Berkshire's", cfg["BK"]["filed"], "2026-08-14")
+
+
 def test_owner_verify_gate():
     """The gate that stands between an unattended EDGAR write and the live page."""
     import copy
@@ -5722,6 +5817,7 @@ if __name__ == "__main__":
     test_biotech_healthcare_category()
     test_owner_badges()
     test_owner_auto_update()
+    test_owner_weekly_sweep()
     test_owner_verify_gate()
     test_nasdaq_coverage()
     test_synopsis()
