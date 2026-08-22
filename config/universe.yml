@@ -119,6 +119,38 @@ markets:
       always_include:
         - CRSP
         - NVCR
+
+    # NYSE and NYSE American, from the same publisher's other half of the
+    # symbol directory. Without this the US universe was S&P 500 + Nasdaq,
+    # which reads as complete and is not: every NYSE company outside the S&P
+    # 500 had no route in at all. Alibaba is the obvious case, and 21 of
+    # Oaktree's 49 disclosed holdings were unreachable for the same reason.
+    other_listed:
+      enabled: true
+      url: "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt"
+      # N = NYSE, A = NYSE American. P (NYSE Arca) and Z (Cboe) are almost
+      # entirely ETFs, which are excluded anyway, so including them would cost
+      # fetch time for nothing.
+      exchanges: ["N", "A"]
+      exclude_etfs: true
+      max_names: null
+      # FIVE TIMES the Nasdaq floor, and that is deliberate. The NYSE lists
+      # some 2,200 common stocks; at $20m/day roughly 600-800 clear, which
+      # would about double the US universe and push the run past the fetch
+      # budget this pipeline has already been tuned once to respect. At $100m
+      # the layer admits the few hundred genuinely liquid names that were
+      # missing — Alibaba, Itau, Sea, AngloGold, Embraer and the like — for a
+      # fraction of the time. Lower it if you would rather have the small caps,
+      # and raise fetch_budget_minutes and the workflow timeout to match.
+      min_median_turnover_usd: 100000000
+      # Admitted whatever their turnover, exactly as on the Nasdaq side. These
+      # are the NYSE American microcaps in the Oaktree book that a $100m floor
+      # would otherwise exclude.
+      always_include:
+        - BABA
+        - MINE
+        - BATL
+
     seed_fallback:
       - AAPL
       - MSFT
