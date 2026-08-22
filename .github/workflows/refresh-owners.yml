@@ -1,0 +1,140 @@
+name: Refresh owner badges (13F + 13D/G)
+
+# Deliberately its OWN workflow, not a step inside the two screener refreshes.
+#
+# Those jobs run close to their timeouts (300 and 180 minutes) and publish the
+# site. This one makes a handful of SEC requests, edits one config file, and
+# publishes nothing. Keeping them apart means a bad day at sec.gov cannot delay
+# or fail a screener run, and a screener timeout cannot leave the badges
+# half-written. If this job fails, the badges simply stay as they are — and
+# because every badge on the page carries the date of the filing it came from,
+# a stale badge announces itself.
+#
+# SCHEDULE. A 13F is due 45 days after quarter end: 14 Feb, 14 May, 14 Aug,
+# 14 Nov. This runs on the 16th of each of those months, giving the SEC two
+# days to publish and the filer two days to amend — Oaktree amended its Q1 2026
+# filing twice within a week of filing it, and taking the original would have
+# published numbers the manager had already corrected.
+#
+# The weekly run is for the OTHER half of the job: Schedule 13D/G filings are
+# made within days of crossing 5% of a company, so they move between quarters
+# and are the only near-current signal available here.
+
+on:
+  schedule:
+    # 13F sweep: 06:00 UTC on the 16th of Feb, May, Aug, Nov (14:00 SGT).
+    - cron: '0 6 16 2,5,8,11 *'
+    # 13D/G sweep: 06:00 UTC every Monday.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Update just one owner (BK or OT); blank = both'
+        required: false
+      check_only:
+        description: 'Report without writing (true/false)'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: owner-badges
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # this job commits config/owners.yml
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pyyaml
+
+      - name: Update owner holdings from EDGAR
+        id: update
+        env:
+          # The SEC asks for a contact address in the User-Agent and throttles
+          # requests without one. Same secret the screener already uses.
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: |
+          set -o pipefail
+          ARGS=""
+          if [ -n "${{ github.event.inputs.only }}" ]; then
+            ARGS="$ARGS --only ${{ github.event.inputs.only }}"
+          fi
+          if [ "${{ github.event.inputs.check_only }}" = "true" ]; then
+            ARGS="$ARGS --check"
+          else
+            ARGS="$ARGS --write"
+          fi
+          # The tool exits 1 when it hit a problem it refused to write through,
+          # and 2 when there was simply nothing new. Neither should fail the
+          # job: "no new filing" is the normal state for 11 weeks out of 13,
+          # and a refusal to write is the safety gate doing its job. Both are
+          # captured in the log and the step summary below.
+          python -m tools.update_owners $ARGS 2>&1 | tee /tmp/owners.log || true
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the config still loads and the badges still render
+        # The whole point of an unattended commit is that nothing downstream
+        # breaks. This runs the owner tests against the file that was just
+        # written; if they fail, the checkout is reverted and nothing is
+        # committed, so a malformed config can never reach the live page.
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, '.')
+          from src import owners as ow
+          cfg = ow.load("config/owners.yml")
+          assert cfg, "owners.yml did not load"
+          idx = ow.by_ticker(cfg)
+          for key, block in cfg.items():
+              n = len(block.get("positions") or {})
+              assert n > 0, f"{key} has no positions after the update"
+              assert block.get("period"), f"{key} has no filing period"
+              print(f"{key}: {n} positions as at {block['period']}")
+          print(f"{len(idx)} tickers carry at least one badge")
+          PY
+          python -m pytest tests/test_pipeline.py -q -k owner
+
+      - name: Revert if verification failed
+        if: failure()
+        run: git checkout -- config/owners.yml || true
+
+      - name: Commit
+        run: |
+          if git diff --quiet -- config/owners.yml; then
+            echo "No change to config/owners.yml."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config/owners.yml
+          # The commit message carries the summary, so `git log` on this file
+          # is a readable history of what each manager did each quarter.
+          {
+            echo "Update owner badges from EDGAR"
+            echo
+            sed -n 's/^=== /## /p;s/^  \(new\|add\|trim\|hold\|exit\) /\1 /p' /tmp/owners.log | head -40
+          } > /tmp/msg.txt
+          git commit -F /tmp/msg.txt
+          git push
+
+      - name: Step summary
+        if: always()
+        run: |
+          {
+            echo "## Owner badge refresh"
+            echo '```'
+            cat /tmp/owners.log 2>/dev/null | tail -80
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
