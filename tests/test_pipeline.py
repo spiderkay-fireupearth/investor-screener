@@ -4417,6 +4417,371 @@ def test_candle_reference():
     check("the page includes it", "cnd_html" in open("src/render.py").read(), True)
 
 
+def test_owner_badges():
+    """OT and BK badges: what they claim, and the three ways to get it wrong."""
+    from src import owners as ow
+
+    cfg = ow.load("config/owners.yml")
+    check("the owners config loads", sorted(cfg.keys()), ["BK", "OT"])
+
+    # --- the config describes real filings -----------------------------------
+    bk, ot = cfg["BK"], cfg["OT"]
+    check("Berkshire's filing is the Q2 2026 one", bk["period"], "2026-06-30")
+    check("and it is a 13F-HR", bk["source"], "13F-HR")
+    check("filed within the 45-day window", bk["filed"], "2026-08-14")
+    check("Oaktree's is the same quarter", ot["period"], "2026-06-30")
+    check("Berkshire's accession is recorded so the claim is checkable",
+          bk["accession"], "0001193125-26-352200")
+    check("and Oaktree's likewise", ot["accession"], "0000949509-26-000005")
+    check("neither withheld anything under confidential treatment",
+          (bk["confidential_omitted"], ot["confidential_omitted"]), (False, False))
+
+    # --- position counts reconcile to the cover pages ------------------------
+    check("Berkshire's 29 distinct positions are all carried",
+          len(bk["positions"]), 29)
+    check("and that matches the cover page", bk["distinct_positions"], 29)
+    check("Oaktree's badged positions are the common-stock longs only",
+          len(ot["positions"]), 49)
+    check("which is far fewer than the 145 rows it reported",
+          ot["reported_rows"], 145)
+    # The whole point of the exclusion: it must be STATED, not silent.
+    check("and the excluded rows are counted rather than dropped quietly",
+          sum(ot["excluded"].values()) > 90, True)
+
+    # --- the exclusions that would have inverted the meaning -----------------
+    # Oaktree's largest line is a PUT on the S&P 500 and its second is a put on
+    # the Nasdaq 100. A rule of "appears in the filing" badges the index the
+    # manager is short. This is the single most important assertion in the file.
+    check("SPY is NOT badged — Oaktree's biggest line is a put on it",
+          "SPY" in ot["positions"], False)
+    check("nor is QQQ, for the same reason",
+          "QQQ" in ot["positions"], False)
+    # Sea Ltd appears twice in the filing: common stock AND a convertible bond.
+    # The common holding earns the badge; the convert must not have created a
+    # second, double-counted entry.
+    check("Sea Ltd is badged once, on the common stock",
+          ot["positions"]["SE"]["shares"], 635443)
+    # Names Oaktree holds ONLY via converts must not be badged at all.
+    for conv_only in ("DKNG", "AFRM", "DASH", "BMRN", "ENPH", "NET", "JD"):
+        check(f"{conv_only} is not badged — Oaktree owns its converts, not its "
+              f"stock", conv_only in ot["positions"], False)
+
+    # --- change classification is constrained --------------------------------
+    for key, block in cfg.items():
+        for tkr, row in block["positions"].items():
+            check(f"{key}/{tkr} has a valid change", row["change"] in ow.CHANGES,
+                  True)
+    # A bad change value must be dropped, not rendered as a blank chip that
+    # reads like "no change".
+    bad = ow._validate({"XX": {"positions": {"AAA": {"shares": 1,
+                                                     "change": "bought a bit"}}}})
+    check("an unrecognised change value is rejected outright",
+          bad["XX"]["positions"], {})
+
+    # --- the index the run loop uses -----------------------------------------
+    idx = ow.by_ticker(cfg)
+    check("Apple carries a Berkshire tag", [t["key"] for t in idx["AAPL"]], ["BK"])
+    check("with the share count from the filing", idx["AAPL"][0]["shares"],
+          227917808)
+    check("and its portfolio weight", idx["AAPL"][0]["pct"], 22.04)
+    check("Alphabet A is flagged as an add", idx["GOOGL"][0]["change"], "add")
+    check("with the size of the add carried too",
+          idx["GOOGL"][0]["delta_pct"], 45.2)
+    check("Alphabet C was the big one", idx["GOOG"][0]["delta_pct"], 658.4)
+    check("D.R. Horton is the quarter's only new Berkshire name",
+          idx["DHI"][0]["change"], "new")
+    check("Capital One was cut by more than half",
+          idx["COF"][0]["delta_pct"], -58.0)
+    check("Torm is Oaktree's largest badged equity",
+          idx["TRMD"][0]["shares"], 20329874)
+    check("and it was trimmed, not added to", idx["TRMD"][0]["change"], "trim")
+    check("SunOpta was all but liquidated", idx["STKL"][0]["delta_pct"], -99.6)
+    check("a change always arrives with its plain-language note",
+          bool(idx["DHI"][0]["change_note"]), True)
+
+    # --- the manual, non-13F holdings ----------------------------------------
+    # A 13F cannot contain these. If they ever start rendering as if they were
+    # filed positions, the page is lying about its own source.
+    for jp in ("8058.T", "8031.T", "8001.T", "8002.T", "8053.T"):
+        tags = ow.tags_for(jp, idx)
+        check(f"{jp} carries the Berkshire badge", [t["key"] for t in tags], ["BK"])
+        check(f"{jp} is marked as NOT from a filing",
+              tags[0]["disclosure"], "manual")
+        check(f"{jp} therefore quotes no share count", tags[0]["shares"], None)
+    check("filed positions are marked as such", idx["AAPL"][0]["disclosure"], "13F")
+
+    # --- share-class ticker variants -----------------------------------------
+    # The filing says LEN.B, Yahoo says LEN-B. Without the variant match the
+    # position simply goes unbadged and nothing anywhere says why.
+    check("Lennar B matches through the dash spelling",
+          bool(ow.tags_for("LEN.B", idx)), True)
+    check("and through the dot spelling", bool(ow.tags_for("LEN-B", idx)), True)
+    check("an unheld name gets no tags", ow.tags_for("ZZZZ", idx), [])
+    check("and neither does an empty ticker", ow.tags_for("", idx), [])
+
+    # --- exits ---------------------------------------------------------------
+    ex = ow.exits_by_ticker(cfg)
+    check("Constellation Brands is recorded as a Berkshire exit",
+          [t["key"] for t in ex["STZ"]], ["BK"])
+    check("with the size it used to be", ex["STZ"][0]["shares_prior"], 632890)
+    check("Nokia is recorded as an Oaktree exit",
+          [t["key"] for t in ex["NOK"]], ["OT"])
+    check("an exited name is NOT also a holding",
+          "STZ" in cfg["BK"]["positions"], False)
+
+    # --- the coverage ledger -------------------------------------------------
+    # A badge that fails to appear is indistinguishable from a manager who does
+    # not hold the name, unless the page says so.
+    led = ow.coverage(cfg, {"AAPL": ["BK"], "KO": ["BK"], "TRMD": ["OT"]})
+    bkrow = next(r for r in led if r["key"] == "BK")
+    check("the ledger counts what was asked for", bkrow["asked"], 34)  # 29 + 5 JP
+    check("and what actually arrived", bkrow["present"], 2)
+    check("and names the rest", "DHI" in bkrow["missing"], True)
+    check("the ledger carries the filing so the panel can cite it",
+          bkrow["period"], "2026-06-30")
+    check("and the excluded counts for the panel to print",
+          "convertible_bonds" in (next(r for r in led if r["key"] == "OT")
+                                  ["excluded"]), True)
+
+    # --- fail-soft -----------------------------------------------------------
+    # The feature is additive: every row renders correctly with no owners at
+    # all, so a missing config must never take a refresh down.
+    check("a missing config is not an error",
+          ow.load("config/does-not-exist.yml"), {})
+    check("and yields no tags rather than crashing",
+          ow.by_ticker(ow.load("config/does-not-exist.yml")), {})
+
+    # --- render: badge, filter, card, legend ---------------------------------
+    aapl = {"ticker": "AAPL", "name": "Apple", "market": "US",
+            "owners": idx["AAPL"], "owner_exits": []}
+    stz = {"ticker": "STZ", "name": "Constellation", "market": "US",
+           "owners": [], "owner_exits": ex["STZ"]}
+    trmd = {"ticker": "TRMD", "name": "Torm", "market": "US",
+            "owners": idx["TRMD"], "owner_exits": []}
+    page = rn.TEMPLATE
+    check("the page has a slot for the owner filter row",
+          "__OWNERROW__" in page, True)
+    check("the row filter honours the owner chip",
+          'fOwner!=="ALL"' in page, True)
+    check("the owner survives a shared link", "p.set('owner',fOwner)" in page,
+          True)
+    check("and is restored from one", "p.get('owner')" in page, True)
+    check("the badge is drawn on the ticker cell", "const ow = (r.owners||[])"
+          in page, True)
+    check("the detail panel has an owner card", "function ownerCard(r)" in page,
+          True)
+    check("which is actually called", "h+=ownerCard(r);" in page, True)
+    # Colour alone can never carry the direction — that is a colour-vision
+    # failure waiting to happen, so the direction rides a border style too.
+    check("direction is encoded without relying on colour",
+          ".own.c-trim{border-bottom-style:dotted" in page, True)
+    check("and a manual holding looks different from a filed one",
+          ".own.manual{border-style:dashed" in page, True)
+
+    leg = rn._owner_legend(led)
+    check("the legend names the manager", "Warren Buffett" in leg, True)
+    check("and Howard Marks", "Howard Marks" in leg, True)
+    check("it dates the claim", "2026-06-30" in leg, True)
+    check("it links the actual filing", "sec.gov/Archives" in leg, True)
+    check("it says the converts were excluded",
+          "convertible bonds" in leg, True)
+    check("it warns that the data is 45 days stale", "45 days" in leg, True)
+    check("it says the form is long-only", "No shorts" in leg, True)
+    check("and it refuses to let the badge read as advice",
+          "not an endorsement" in leg, True)
+    check("no legend at all when there are no owners", rn._owner_legend([]), "")
+
+    # --- end to end: the payload carries it through --------------------------
+    rows = rn.build_payload(
+        {"AAPL": {**aapl, "metrics": {}, "frameworks": {}, "surfaced": True},
+         "STZ": {**stz, "metrics": {}, "frameworks": {}, "surfaced": True},
+         "TRMD": {**trmd, "metrics": {}, "frameworks": {}, "surfaced": True}},
+        {}, {})
+    byt = {r["ticker"]: r for r in rows}
+    check("the Apple row reaches the page with its badge",
+          [o["key"] for o in byt["AAPL"]["owners"]], ["BK"])
+    check("the Torm row with its", [o["key"] for o in byt["TRMD"]["owners"]],
+          ["OT"])
+    check("and the exited name carries the exit rather than a holding",
+          ([o["key"] for o in byt["STZ"]["owner_exits"]], byt["STZ"]["owners"]),
+          (["BK"], []))
+
+
+def test_owner_auto_update():
+    """The unattended updater. Every assertion here guards one commit-to-main risk."""
+    from tools import update_owners as up
+    from src import owners as ow
+
+    def info(**kw):
+        return {"nameOfIssuer": kw.get("n", "X"), "cusip": kw.get("c", "111111111"),
+                "titleOfClass": kw.get("cls", "COM"), "value": str(kw.get("v", 1000)),
+                "sshPrnamt": str(kw.get("s", 100)),
+                "sshPrnamtType": kw.get("t", "SH"),
+                **({"putCall": kw["pc"]} if kw.get("pc") else {})}
+
+    # --- classification: the rule that stops a put becoming a buy ------------
+    check("plain common stock is badged",
+          up.classify(info(cls="COM"))[0], "common")
+    check("a class A line is badged", up.classify(info(cls="Cl A"))[0], "common")
+    # This is the assertion that matters most in the whole file. Oaktree's
+    # largest reported line is a PUT on the S&P 500; classifying by class alone
+    # would badge it, and the badge would mean the opposite of the truth.
+    check("a PUT on common stock is excluded, not badged",
+          up.classify(info(cls="COM", pc="Put"))[0], "excluded")
+    check("and so is a call", up.classify(info(cls="COM", pc="Call"))[0],
+          "excluded")
+    check("anything reported in principal is a bond, not shares",
+          up.classify(info(cls="COM", t="PRN"))[0], "excluded")
+    check("a convertible note is excluded",
+          up.classify(info(cls="CONVERTIBLE BOND"))[0], "excluded")
+    check("a warrant is excluded", up.classify(info(cls="WARRANT"))[0],
+          "excluded")
+    check("an unrecognised class is flagged rather than guessed",
+          up.classify(info(cls="SOMETHING ODD"))[0], "unsure")
+
+    # --- aggregation: one row per manager per security ----------------------
+    # Berkshire files 89 rows describing 29 securities. Failing to sum by CUSIP
+    # turns every insurance subsidiary into a phantom position.
+    rows = [info(c="AAA", v=100, s=10), info(c="AAA", v=250, s=25),
+            info(c="BBB", v=70, s=7),
+            info(c="CCC", v=999, s=9, pc="Put"),
+            info(c="DDD", v=888, s=8, t="PRN")]
+    agg, tally, unsure = up.aggregate(rows)
+    check("rows for the same security are summed", agg["AAA"]["shares"], 35)
+    check("and their values too", agg["AAA"]["value"], 350)
+    check("two distinct securities survive", sorted(agg), ["AAA", "BBB"])
+    check("the put did not become a position", "CCC" in agg, False)
+    check("nor did the bond", "DDD" in agg, False)
+    check("and both were counted as exclusions rather than dropped silently",
+          (tally["options"], tally["convertible_bonds"]), (1, 1))
+    check("every row still counts toward the reconciliation total",
+          up.sum_all_rows(rows), 100 + 250 + 70 + 999 + 888)
+
+    # --- amendment handling --------------------------------------------------
+    # Oaktree amended its Q1 2026 filing twice inside a week. Taking the
+    # original would publish numbers the manager had already corrected.
+    filings = [
+        {"form": "13F-HR",   "accessionNumber": "a-1", "filingDate": "2026-05-15",
+         "reportDate": "2026-03-31", "primaryDocument": ""},
+        {"form": "13F-HR/A", "accessionNumber": "a-2", "filingDate": "2026-05-20",
+         "reportDate": "2026-03-31", "primaryDocument": ""},
+        {"form": "13F-HR",   "accessionNumber": "b-1", "filingDate": "2026-08-13",
+         "reportDate": "2026-06-30", "primaryDocument": ""},
+        {"form": "SC 13G/A", "accessionNumber": "g-1", "filingDate": "2026-08-14",
+         "reportDate": "", "primaryDocument": ""},
+        {"form": "8-K",      "accessionNumber": "k-1", "filingDate": "2026-08-18",
+         "reportDate": "", "primaryDocument": ""},
+    ]
+    check("the newest quarter wins", up.latest_13f(filings)["accessionNumber"],
+          "b-1")
+    check("an amendment supersedes its original for the same quarter",
+          up.latest_13f(filings[:2])["accessionNumber"], "a-2")
+    check("the prior quarter is the amended one, not the original",
+          up.prior_13f(filings, "2026-06-30")["accessionNumber"], "a-2")
+    check("an 8-K is never mistaken for a holdings report",
+          up.latest_13f([filings[4]]), None)
+    check("and neither is a 13G", up.latest_13f([filings[3]]), None)
+
+    # --- diffing -------------------------------------------------------------
+    prior = {"AAA": {"shares": 100, "value": 1000, "name": "A", "class": "COM"},
+             "BBB": {"shares": 50, "value": 500, "name": "B", "class": "COM"},
+             "CCC": {"shares": 10, "value": 100, "name": "C", "class": "COM"}}
+    latest = {"AAA": {"shares": 150, "value": 1500, "name": "A", "class": "COM"},
+              "BBB": {"shares": 50, "value": 600, "name": "B", "class": "COM"},
+              "DDD": {"shares": 5, "value": 50, "name": "D", "class": "COM"}}
+    d = up.diff(prior, latest)
+    check("a bigger share count is an add", d["AAA"]["change"], "add")
+    check("with the size of it", d["AAA"]["delta_pct"], 50.0)
+    # A position whose VALUE moved but whose SHARE COUNT did not is a price
+    # move, not a decision. Calling it an "add" would credit the manager with a
+    # trade they did not make.
+    check("a value move on an unchanged share count is a hold, not an add",
+          d["BBB"]["change"], "hold")
+    check("an unseen security is new", d["DDD"]["change"], "new")
+    check("and a vanished one is not in the result", "CCC" in d, False)
+
+    # --- the ticker rule: never guess ---------------------------------------
+    old = {"cik": "1", "name": "T", "cusips": {"AAA": "AAA-TKR"}}
+    cover = {"tableValueTotal": "2000", "tableEntryTotal": "3",
+             "periodOfReport": "06-30-2026", "isConfidentialOmitted": "false"}
+    filing = {"accessionNumber": "0001-26-1", "reportDate": "2026-06-30",
+              "filingDate": "2026-08-14", "form": "13F-HR"}
+    block, unmapped = up.build_owner_block(
+        old, filing, cover, d, {"CCC": prior["CCC"]}, {"options": 1}, [], "1",
+        2000)
+    check("a known CUSIP becomes a badged position",
+          "AAA-TKR" in block["positions"], True)
+    # The whole safety argument for committing unreviewed rests on this.
+    check("an unknown CUSIP is NOT badged under a guessed symbol",
+          sorted(block["positions"]), ["AAA-TKR"])
+    check("it is reported as unmapped instead", sorted(unmapped), ["BBB", "DDD"])
+    check("and recorded in the config so the page can say so",
+          sorted(block["unmapped"]), ["BBB", "DDD"])
+    check("the known mapping is carried forward for next quarter",
+          block["cusips"], {"AAA": "AAA-TKR"})
+    check("values are stored in thousands, as the config expects",
+          block["positions"]["AAA-TKR"]["value"], 2)
+    check("the run stamps when it happened", bool(block["updated_utc"]), True)
+    check("and which filing it read", block["accession"], "0001-26-1")
+
+    # --- the output must satisfy the loader that reads it -------------------
+    # An unattended write that produces a file src/owners.py rejects would turn
+    # every badge off at once. Round-trip it.
+    round_trip = ow._validate({"T": block})
+    check("the generated block survives validation",
+          sorted(round_trip["T"]["positions"]), ["AAA-TKR"])
+    idx = ow.by_ticker({"T": block})
+    check("and indexes to a usable tag", idx["AAA-TKR"][0]["change"], "add")
+
+    # --- the ledger surfaces the gap ----------------------------------------
+    led = ow.coverage({"T": block}, {"AAA-TKR": ["T"]})
+    check("the ledger carries the unmapped count to the page",
+          sorted(led[0]["unmapped"]), ["BBB", "DDD"])
+    leg = rn._owner_legend(led)
+    check("and the panel prints it rather than hiding it",
+          "could not be matched to a ticker" in leg, True)
+    check("the panel says the updater will not guess",
+          "will not guess a ticker" in leg, True)
+    check("and dates the last automatic refresh", "last refreshed from EDGAR"
+          in leg, True)
+
+    # --- 13D/G, the between-quarters signal ---------------------------------
+    led2 = ow.coverage({"T": {**block, "stake_filings": [
+        {"form": "SC 13G/A", "filed": "2026-08-14", "subject": "DELTA AIR LINES",
+         "url": "https://example.invalid/x", "accession": "z"}]}},
+        {"AAA-TKR": ["T"]})
+    leg2 = rn._owner_legend(led2)
+    check("a 5% filing reaches the panel", "DELTA AIR LINES" in leg2, True)
+    check("labelled as the fast signal it is",
+          "within days of crossing 5%" in leg2, True)
+    check("and warned that it can contradict the quarterly table",
+          "may already have been sold" in leg2, True)
+
+    header_re = re.compile(r"SUBJECT\s+COMPANY", re.I)
+    sample = ("FILED BY:\n COMPANY CONFORMED NAME: BERKSHIRE HATHAWAY INC\n"
+              "  CENTRAL INDEX KEY: 0001067983\n"
+              "SUBJECT COMPANY:\n COMPANY CONFORMED NAME: DELTA AIR LINES INC\n"
+              "  CENTRAL INDEX KEY: 0000027904\n")
+    m = up.SUBJECT_RE.search(sample)
+    check("the subject company is read from the filing header, not the filer",
+          (m.group(1), m.group(2)), ("DELTA AIR LINES INC", "0000027904"))
+    check("the header really does distinguish the two", bool(header_re.search(sample)),
+          True)
+
+    # --- the config the tool will actually read ------------------------------
+    cfg = ow.load("config/owners.yml")
+    for key, block in cfg.items():
+        cus = {str(k).upper() for k in (block.get("cusips") or {})}
+        check(f"{key} ships a CUSIP map so the updater has somewhere to start",
+              len(cus) > 0, True)
+        tickers = set(block["positions"]) | set(block.get("exited") or {})
+        mapped = {str(v).upper() for v in (block.get("cusips") or {}).values()}
+        check(f"{key}: every badged ticker has a CUSIP behind it",
+              sorted(tickers - mapped), [])
+        check(f"{key} has a CIK for the updater to fetch",
+              bool(block.get("cik")), True)
+
+
 def test_biotech_healthcare_category():
     """A category that spans seven markets, built two ways so it cannot rot."""
     from src import run as R
@@ -5277,6 +5642,8 @@ if __name__ == "__main__":
     test_bollinger_bands()
     test_candle_reference()
     test_biotech_healthcare_category()
+    test_owner_badges()
+    test_owner_auto_update()
     test_nasdaq_coverage()
     test_synopsis()
     test_lynch_categories()

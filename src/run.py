@@ -38,6 +38,7 @@ from . import render as rn
 from . import library as lib
 from . import cycle as cyc
 from . import debtcycle as dbt
+from . import owners as own
 from . import commodities as cmd
 from . import reflexivity as rfx
 from . import dislocation as dis
@@ -793,6 +794,17 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     log.info("Listings: %s", ", ".join(f"{k} {v}" for k, v in
                                        sorted(_lcounts.items(), key=lambda kv: -kv[1])))
 
+    # Disclosed institutional owners. Static config, no network, so this cannot
+    # slow or break a refresh; a missing file simply turns the badges off.
+    owners_cfg = own.load(os.environ.get("OWNERS_CONFIG", "config/owners.yml"))
+    owners_by_ticker = own.by_ticker(owners_cfg)
+    owner_exits_by_ticker = own.exits_by_ticker(owners_cfg)
+    if owners_cfg:
+        log.info("Owner badges: %s", ", ".join(
+            f"{b.get('badge', k)} {len(b.get('positions') or {})} positions"
+            f" (as of {b.get('period') or '?'})"
+            for k, b in owners_cfg.items()))
+
     themes_by_ticker = theme_map(universe_cfg)
     sector_rules = sector_themes(universe_cfg)
     if sector_rules:
@@ -871,6 +883,8 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
                         if _auto not in rec.themes:
                             rec.themes.append(_auto)
                     rec.listing = listing_by_ticker.get(t.upper())
+                    rec.owners = own.tags_for(t, owners_by_ticker)
+                    rec.owner_exits = own.tags_for(t, owner_exits_by_ticker)
                     # Trust the config's ETF list over Yahoo's quoteType, which
                     # is occasionally absent; fall back to it when not listed.
                     if t.upper() in fund_tickers:
@@ -1036,6 +1050,27 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         else:
             log.info("ALWAYS_INCLUDE: all %d pinned names reached the screens "
                      "(%s)", len(_pins), ", ".join(_have_pins))
+
+    # The owner ledger, for the same reason as the pinned one: a badge that
+    # silently fails to appear looks exactly like a manager who does not hold
+    # the name. A holding listed in the config but absent from this run is
+    # almost always a market that was not part of this job (the US refresh does
+    # not screen Berkshire's Tokyo names) or a ticker the feed spells
+    # differently — both worth saying out loud rather than leaving to guesswork.
+    if owners_cfg:
+        _seen: Dict[str, List[str]] = {}
+        for r in records:
+            for tag in (getattr(r, "owners", None) or []):
+                _seen.setdefault(r.ticker.upper(), []).append(tag["key"])
+        screened["owners"] = own.coverage(owners_cfg, _seen)
+        for row in screened["owners"]:
+            if row["missing"]:
+                log.info("OWNERS %s: %d/%d holdings on the page; not in this "
+                         "run: %s", row["badge"], row["present"], row["asked"],
+                         ", ".join(row["missing"]))
+            else:
+                log.info("OWNERS %s: all %d holdings reached the page",
+                         row["badge"], row["asked"])
 
     if missed:
         log.warning("COVERAGE: %d of %d names did not reach the screens. "

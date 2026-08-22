@@ -354,6 +354,12 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             "has_report": ticker in report_tickers,
             "themes": r.get("themes") or [],
             "listing": r.get("listing") or "",
+            # Disclosed owners. Carried whole rather than flattened to a list
+            # of badge letters, because the badge is the least interesting part
+            # — the share count, the quarter it describes, and whether the
+            # manager was buying or selling are what make it worth reading.
+            "owners": r.get("owners") or [],
+            "owner_exits": r.get("owner_exits") or [],
             "is_fund": bool(r.get("is_fund")),
             "gates": r.get("gates_failed", []),
             "warnings": (list(r.get("warnings", []))
@@ -783,6 +789,40 @@ padding:11px 15px;margin:14px 0;font-size:13px;color:var(--tx2)}
 .tag.lst{border-color:var(--acc);color:var(--acc)}
 .tag{font-size:10.5px;padding:2px 8px;border-radius:20px;background:var(--panel2);
  color:var(--tx2);border:1px solid var(--line)}
+/* Owner badges. Two letters, and the colour carries the manager rather than the
+   direction — a reader learns "orange means Oaktree" once, and the direction is
+   told by the underline, which is a second, non-colour channel. Green/red alone
+   would be the one pair that cannot pass a colour-vision check. */
+.own{font-size:9.5px;font-weight:800;margin-left:4px;padding:1px 5px;border-radius:4px;
+ letter-spacing:.03em;border:1px solid;vertical-align:middle;cursor:help}
+.own.o-BK{color:var(--series-1);border-color:var(--series-1)}
+.own.o-OT{color:var(--series-2);border-color:var(--series-2)}
+/* Direction as a bottom rule: solid up for a build, dotted for a trim, none for
+   an unchanged hold. Independent of hue, so it survives both colourblindness
+   and a monochrome print. */
+.own.c-new{border-bottom-width:3px}
+.own.c-add{border-bottom-width:3px;border-bottom-style:double}
+.own.c-trim{border-bottom-style:dotted;border-bottom-width:2px}
+.own.manual{border-style:dashed;opacity:.85}
+.own.c-exit{color:var(--tx3);border-color:var(--tx3);text-decoration:line-through}
+.ownbox{border-left-color:var(--tx3)}
+.ownrow{display:flex;gap:9px;align-items:flex-start;margin:9px 0 0}
+.ownrow .own{margin-left:0;flex:0 0 auto;margin-top:2px}
+.ownnum{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--tx);margin-top:2px}
+.ochg{font-weight:700}
+.ochg.c-new{color:var(--ok)} .ochg.c-add{color:var(--ok)}
+.ochg.c-trim{color:var(--warn)} .ochg.c-exit{color:var(--bad)}
+.ochg.c-hold{color:var(--tx2)}
+.ownrow b.up{color:var(--ok)} .ownrow b.dn{color:var(--warn)}
+.oleg{margin-top:26px}
+.oleg table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
+.oleg th{text-align:left;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+ color:var(--tx3);padding:5px 9px 5px 0;border-bottom:1px solid var(--line);font-weight:600}
+.oleg td{padding:6px 9px 6px 0;border-bottom:1px solid var(--line);
+ color:var(--tx2);vertical-align:top}
+.oleg td b{color:var(--tx)}
+.oleg td .cgs{margin-top:3px;line-height:1.45}
+.oleg .own{margin-left:0;margin-right:3px}
 .ddbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .ddbtn{font-size:12.5px;font-weight:600;padding:6px 13px;border-radius:7px;
  border:1px solid var(--line);color:var(--tx2);text-decoration:none;white-space:nowrap}
@@ -811,6 +851,7 @@ __GATE__
   __FWCHIPS__
   __THEMEROW__
   __LISTINGROW__
+  __OWNERROW__
   <span class="sep"></span>
   <button class="chip" id="techOnly">Technical pass</button>
   <button class="chip" id="disOnly" title="Every name down more than 30% over six months, whatever the reason">Fell &gt;30% (6m)</button>
@@ -859,6 +900,7 @@ const STY = __STY__;
 const WF_URL = __WFURL__;
 const ISSUE_URL = __ISSUEURL__;
 let fMkt="ALL", fFw=new Set(), fTech=false, fSurf=true, fQ="", fTheme="ALL", fList="ALL";
+let fOwner="ALL";
 let fRfx=false;   // Soros stage DE/EF only
 let fDis=false;   // fell >30% in 6m
 let fDisQ=false;  // ...and the accounts do not explain it
@@ -888,6 +930,7 @@ function visible(){
     if(fMkt!=="ALL" && r.market!==fMkt) return false;
     if(fTheme!=="ALL" && !(r.themes||[]).includes(fTheme)) return false;
     if(fList!=="ALL" && (r.listing||"")!==fList) return false;
+    if(fOwner!=="ALL" && !(r.owners||[]).some(o=>o.key===fOwner)) return false;
     if(fTech && !r.tech_pass) return false;
     for(const f of fFw){ if(r.fw[f]!=="pass") return false; }
     return true;
@@ -937,6 +980,7 @@ function syncUrl(){
   if(fMkt!=="ALL") p.set('market',fMkt);
   if(fTheme!=="ALL") p.set('theme',fTheme);
   if(fList!=="ALL") p.set('listing',fList);
+  if(fOwner!=="ALL") p.set('owner',fOwner);
   if(fFw.size) p.set('pass',[...fFw].join(','));
   if(fTech) p.set('tech','1');
   if(fB) p.set('b','1');
@@ -962,6 +1006,10 @@ function loadUrl(){
   if(li){ fList=li;
     document.querySelectorAll('[data-listing]').forEach(b=>
       b.classList.toggle('on', b.dataset.listing===li)); }
+  const ow=p.get('owner');
+  if(ow){ fOwner=ow;
+    document.querySelectorAll('[data-owner]').forEach(b=>
+      b.classList.toggle('on', b.dataset.owner===ow)); }
   const pass=p.get('pass');
   if(pass) pass.split(',').filter(Boolean).forEach(k=>{ fFw.add(k);
     const b=document.querySelector(`[data-fw="${k}"]`); if(b) b.classList.add('on'); });
@@ -1683,6 +1731,63 @@ function candleCard(r){
     <div class="cap">${esc(c.caveat||'')}</div></div>`;
 }
 
+// 13F values arrive in thousands and span five orders of magnitude in one
+// filing — Berkshire's Apple stake is $66bn and Oaktree's SunOpta rump is
+// $406k. A fixed unit turns the small end into "$0m", which reads as an error
+// rather than as a position being wound down.
+function ownMoney(v){
+  if(v>=1e6) return '$'+(v/1e6).toFixed(1).replace(/\\.0$/,'')+'bn';
+  if(v>=1e3) return '$'+Math.round(v/1e3).toLocaleString()+'m';
+  return '$'+Math.round(v).toLocaleString()+'k';
+}
+
+// Who else owns this, stated in full. The chip on the row is a pointer; this
+// is the claim. Every number here is dated, because the single most common way
+// to misuse a 13F is to read a stale census as a live position.
+function ownerCard(r){
+  const held=(r.owners||[]), gone=(r.owner_exits||[]);
+  if(!held.length && !gone.length) return '';
+  let rowsHtml='';
+  held.forEach(o=>{
+    if(o.disclosure==='manual'){
+      rowsHtml+=`<div class="ownrow"><span class="own o-${esc(o.key)} manual">${esc(o.badge)}</span>
+        <div><b>${esc(o.name)}</b> holds this, but it is <b>not in any 13F</b> and never
+        will be &mdash; the form covers US-listed equity only.
+        <div class="cap" style="margin:3px 0 0">Source: ${esc(o.manual_source||'company disclosure')}${o.manual_note?' &mdash; '+esc(o.manual_note):''}.
+        No share count is shown because none is filed quarterly; treat this as
+        &ldquo;a disclosed stake&rdquo;, not a measured one.</div></div></div>`;
+      return;
+    }
+    const dp=(o.delta_pct!==null&&o.delta_pct!==undefined&&o.change!=='hold')
+      ? ` <b class="${o.delta_pct>0?'up':'dn'}">${o.delta_pct>0?'+':''}${o.delta_pct}%</b>` : '';
+    rowsHtml+=`<div class="ownrow"><span class="own o-${esc(o.key)} c-${esc(o.change||'na')}">${esc(o.badge)}</span>
+      <div><b>${esc(o.name)}</b>${o.manager?' &middot; '+esc(o.manager):''} &mdash;
+      <span class="ochg c-${esc(o.change||'na')}">${esc(o.change_label||'held')}</span>${dp}
+      <div class="ownnum">
+        ${o.shares?`<span>${Number(o.shares).toLocaleString()} shares</span>`:''}
+        ${o.value?`<span>${ownMoney(o.value)}</span>`:''}
+        ${(o.pct!==null&&o.pct!==undefined)?`<span>${o.pct.toFixed(2)}% of their book</span>`:''}
+      </div>
+      <div class="cap" style="margin:3px 0 0">${esc(o.change_note||'')}
+      Position as at <b>${esc(o.period||'?')}</b>, filed ${esc(o.filed||'?')}${o.url?` &middot; <a href="${esc(o.url)}" target="_blank" rel="noopener">the filing</a>`:''}.</div>
+      </div></div>`;
+  });
+  gone.forEach(o=>{
+    rowsHtml+=`<div class="ownrow"><span class="own o-${esc(o.key)} c-exit">${esc(o.badge)}</span>
+      <div><b>${esc(o.name)}</b> &mdash; <span class="ochg c-exit">sold out</span>
+      <div class="cap" style="margin:3px 0 0">Held
+      ${o.shares_prior?Number(o.shares_prior).toLocaleString()+' shares':'a position'} the previous
+      quarter${o.value_prior?' ('+ownMoney(o.value_prior)+')':''} and none as at
+      ${esc(o.period||'the latest filing')}. Shown because a badge that simply
+      vanishes reads as a bug rather than as a sale.</div></div></div>`;
+  });
+  return `<div class="note ownbox"><b>Disclosed holders</b>${rowsHtml}
+    <div class="cap" style="margin-top:7px">A 13F is filed up to 45 days after
+    quarter end and reports US-listed <b>long equity only</b> &mdash; no shorts,
+    no bonds, no foreign listings. It says what was held on the report date, not
+    what is held today.</div></div>`;
+}
+
 function technicalPanel(r){
   const t=r.tech_raw||{}, d=r.tech_detail||{};
   let cards='';
@@ -1805,6 +1910,7 @@ function detail(r){
   if(r.listing) tagbits.push(`<span class="tag lst">${esc(r.listing)}</span>`);
   (r.themes||[]).forEach(t=>tagbits.push(`<span class="tag">${esc(t)}</span>`));
   if(tagbits.length) h+='<div class="tagrow">'+tagbits.join('')+'</div>';
+  h+=ownerCard(r);
   // Lynch's category decides which bar this row was judged against, so it is
   // stated before the panels rather than buried inside one of them.
   // Value or growth, with the percentiles that produced it. The badge is one
@@ -1940,7 +2046,31 @@ function render(){
     // noise on every second row.
     const st = r.sty && r.sty !== 'blend' && r.sty !== 'unscored'
       ? `<span class="sty ${r.sty.replace(' ','')}" title="${esc(r.sty_why||'')}${r.sty_ev&&r.sty_ev.length?' ['+esc(r.sty_ev.join(', '))+']':''}">${STY[r.sty]||'?'}</span>` : '';
-    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${bl}${st}${ct}${rx}${dl}</td><td class="nm" title="${esc(r.name)}${r.syn&&r.syn.one_liner?' — '+esc(r.syn.one_liner):''}">${esc(r.name)}</td>
+    // Disclosed owners, as two-letter chips. The tooltip carries the whole
+    // claim — whose filing, which date, how big, and which direction — because
+    // two letters on their own would be an invitation to misread a 45-day-old
+    // census as a live recommendation.
+    const ow = (r.owners||[]).map(o=>{
+      const bits=[o.name+(o.manager?' ('+o.manager+')':'')];
+      if(o.disclosure==='manual'){
+        bits.push('not in any 13F — '+(o.manual_source||'company disclosure'));
+        if(o.manual_note) bits.push(o.manual_note);
+      } else {
+        if(o.pct!==null&&o.pct!==undefined)
+          bits.push(o.pct.toFixed(2)+'% of their portfolio');
+        if(o.shares) bits.push(Number(o.shares).toLocaleString()+' shares');
+        if(o.change_label){
+          let c=o.change_label;
+          if(o.delta_pct!==null&&o.delta_pct!==undefined&&o.change!=='hold')
+            c+=' '+(o.delta_pct>0?'+':'')+o.delta_pct+'%';
+          bits.push(c);
+        }
+        bits.push('as at '+(o.period||'the last filing'));
+      }
+      return `<span class="own o-${esc(o.key)}${o.disclosure==='manual'?' manual':''} c-${esc(o.change||'na')}"
+        title="${esc(bits.join(' · '))}">${esc(o.badge)}</span>`;
+    }).join('');
+    let cells=`<td class="tk">${esc(r.ticker)}${r.has_report?'<span class="dd" title="deep dive available">&#9670;</span>':''}${bl}${st}${ct}${rx}${dl}${ow}</td><td class="nm" title="${esc(r.name)}${r.syn&&r.syn.one_liner?' — '+esc(r.syn.one_liner):''}">${esc(r.name)}</td>
       <td><span class="mk">${esc(r.market_label)}</span></td>
       <td class="num">${esc(r.price)}</td><td class="num">${esc(r.mcap_usd)}</td>`;
     for(const [key] of FWS){
@@ -1969,6 +2099,9 @@ document.querySelectorAll('[data-theme]').forEach(b=>b.onclick=()=>{
 document.querySelectorAll('[data-listing]').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('[data-listing]').forEach(x=>x.classList.remove('on'));
   b.classList.add('on'); fList=b.dataset.listing; render();});
+document.querySelectorAll('[data-owner]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('[data-owner]').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on'); fOwner=b.dataset.owner; render();});
 document.querySelectorAll('[data-fw]').forEach(b=>b.onclick=()=>{
   const k=b.dataset.fw;
   if(fFw.has(k)){fFw.delete(k);b.classList.remove('on');}else{fFw.add(k);b.classList.add('on');}
@@ -2214,6 +2347,138 @@ def _candle_legend() -> str:
         'screen in this app is measured in years. Use a pattern to choose an '
         'entry into a company the frameworks already justify &mdash; never as '
         'the reason to own it.</div></details>')
+
+
+def _owner_legend(ledger: List[Dict[str, Any]]) -> str:
+    """What the OT and BK badges claim, and — more usefully — what they do not.
+
+    Built from the same ledger the footer uses, so the panel can never describe
+    a filing the page is not actually showing. The excluded counts are printed
+    rather than summarised: "49 of 145 rows" invites the obvious question, and
+    a panel that raises a question it does not answer is worse than none.
+    """
+    if not ledger:
+        return ""
+    body = ""
+    for row in ledger:
+        exc = row.get("excluded") or {}
+        # "2 etfs" reads as a typo next to "87 convertible bonds"; the acronym
+        # has to survive the underscore-to-space rewrite.
+        _exname = {"convertible_bonds": "convertible bonds", "options": "options",
+                   "warrants": "warrants", "etfs": "ETFs"}
+        exbits = [f"{v} {_exname.get(k, k.replace('_', ' '))}"
+                  for k, v in exc.items() if v]
+        val = row.get("portfolio_value_usd")
+        val_s = (f"${val / 1e9:,.1f}bn" if val and val >= 1e9
+                 else (f"${val / 1e6:,.0f}m" if val else "—"))
+        miss = row.get("missing") or []
+        body += (
+            f'<tr><td><span class="own o-{e_attr(row["key"])}">'
+            f'{e_attr(row["badge"])}</span> <b>{e_attr(row["long_name"])}</b>'
+            f'<div class="cgs">{e_attr(row.get("manager") or "")}</div></td>'
+            f'<td class="cgs"><b>{e_attr(row.get("source") or "13F")}</b> for the '
+            f'quarter ended <b>{e_attr(row.get("period") or "?")}</b><br>'
+            f'filed {e_attr(row.get("filed") or "?")}'
+            + (f' &middot; <a href="{e_attr(row["url"])}" target="_blank" '
+               f'rel="noopener">the filing</a>' if row.get("url") else "")
+            + f'</td><td class="cgs">{val_s} across '
+            f'<b>{row.get("distinct_positions") or row.get("asked")}</b> badged '
+            f'positions, out of {row.get("reported_rows") or "?"} reported rows.'
+            + (f'<br>Excluded: {e_attr(", ".join(exbits))}.' if exbits else "")
+            + (f'<br><b>{len(row["unmapped"])}</b> position(s) could not be '
+               f'matched to a ticker and are <b>not badged</b>.'
+               if row.get("unmapped") else "")
+            + f'</td><td class="cgs"><b>{row.get("present")}</b> of '
+            f'{row.get("asked")} are on this page.'
+            + (f'<br>Not in this run: {e_attr(", ".join(miss[:14]))}'
+               + ("&hellip;" if len(miss) > 14 else "")
+               if miss else "<br>All of them.")
+            + '</td></tr>')
+
+    # Recent 5% filings, across both managers, newest first. Separated from the
+    # table above because they answer a different question — that table is
+    # "what did they hold on 30 June", this is "what have they done since".
+    stakes = []
+    for row in ledger:
+        for s in (row.get("stake_filings") or []):
+            stakes.append({**s, "badge": row["badge"], "key": row["key"],
+                           "owner": row["name"]})
+    stakes.sort(key=lambda s: s.get("filed") or "", reverse=True)
+    stake_html = ""
+    if stakes:
+        srows = "".join(
+            f'<tr><td class="cgs">{e_attr(s.get("filed") or "")}</td>'
+            f'<td><span class="own o-{e_attr(s["key"])}">{e_attr(s["badge"])}'
+            f'</span></td>'
+            f'<td class="cgs"><b>{e_attr(s.get("subject") or "subject not parsed")}</b></td>'
+            f'<td class="cgs">{e_attr(s.get("form") or "")}'
+            + (f' &middot; <a href="{e_attr(s["url"])}" target="_blank" '
+               f'rel="noopener">filing</a>' if s.get("url") else "")
+            + '</td></tr>'
+            for s in stakes[:14])
+        stake_html = (
+            '<div class="cgn" style="margin-top:16px"><b>Since the quarter '
+            'ended</b> &mdash; Schedule 13D/G filings, made within days of '
+            'crossing 5% of a company rather than 45 days after a quarter. '
+            'These cover large stakes only, so they add to the picture above '
+            'rather than replacing it, and a filing here can contradict the '
+            'table: a name still badged from the June 13F may already have '
+            'been sold.</div>'
+            '<table class="ctab"><thead><tr><th>Filed</th><th></th>'
+            '<th>Company</th><th>Form</th></tr></thead><tbody>'
+            + srows + '</tbody></table>')
+
+    upd = [r.get("updated_utc") for r in ledger if r.get("updated_utc")]
+    upd_html = (f'<div class="cgn">Holdings last refreshed from EDGAR '
+                f'<b>{e_attr(max(upd))}</b>, by the '
+                f'<code>refresh-owners</code> workflow. It runs on the 16th of '
+                f'February, May, August and November &mdash; two days after '
+                f'each 13F deadline, so a filer has time to amend &mdash; and '
+                f'weekly for the 13D/G sweep.</div>' if upd else
+                '<div class="cgn">These holdings were entered by hand and are '
+                'not on an automatic schedule yet.</div>')
+    return (
+        '<details class="dcard cleg oleg"><summary><b>What the owner badges '
+        'mean</b> &mdash; and the three things a 13F does not tell you</summary>'
+        '<div class="cgn" style="margin-top:10px">A badge says one narrow thing: '
+        '<b>on the report date of the filing named below, this manager disclosed '
+        'a long position in this company&rsquo;s common stock.</b> The chip on '
+        'the row is underlined by direction &mdash; a solid rule for a new '
+        'position, a double rule for one that was added to, a dotted rule for one '
+        'that was trimmed, and no rule for an unchanged holding. A dashed border '
+        'means the holding is <b>not from a filing at all</b> (see below).</div>'
+        '<table class="ctab"><thead><tr><th>Investor</th><th>Filing</th>'
+        '<th>What is badged</th><th>Reached this page</th></tr></thead><tbody>'
+        + body + '</tbody></table>'
+        + stake_html
+        + '<div class="cgn"><b>1. It is old.</b> A 13F is due 45 days after quarter '
+        'end. A position can have been sold the day after the quarter closed and '
+        'the form would still show it. Never read a badge as &ldquo;owns this '
+        'now&rdquo;.</div>'
+        '<div class="cgn"><b>2. It is long-only and US-only.</b> No shorts, no '
+        'bonds, no foreign listings. Berkshire&rsquo;s stakes in the five Japanese '
+        'trading houses are among the largest equity positions on earth and appear '
+        'in no 13F ever filed &mdash; which is why those rows carry a dashed badge '
+        'sourced from company disclosure instead.</div>'
+        '<div class="cgn"><b>3. Appearing in the filing is not the same as owning '
+        'the stock.</b> This page badges <b>common-stock longs only</b>. Oaktree&rsquo;s '
+        'single largest reported line is a put on the S&amp;P 500 and its second is '
+        'a put on the Nasdaq 100 &mdash; both bearish, both excluded. Roughly '
+        'three-fifths of its remaining rows are convertible bonds, which are credit '
+        'positions routinely hedged with a <i>short</i> in the same company&rsquo;s '
+        'shares. A rule that badged everything in the filing would have stamped '
+        'these names with the opposite of the truth.</div>'
+        '<div class="cgn">Finally, a badge is not an endorsement and copying one '
+        'is not a strategy: you are seeing a stale, partial view of a book run to '
+        'a mandate, a tax position and a time horizon that are not yours.</div>'
+        + upd_html +
+        '<div class="cgn">The updater will not guess a ticker. A 13F reports '
+        'CUSIPs, not symbols, and symbols change &mdash; Barrick went GOLD to B '
+        'and UScellular became AD in the last year. Where a CUSIP has no known '
+        'mapping the position is counted as unmapped above and left unbadged, '
+        'because a missing badge can be fixed and a badge on the wrong company '
+        'cannot.</div>'
+        '</details>')
 
 
 def _bollinger_legend() -> str:
@@ -3142,6 +3407,36 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
                 f'{e_attr(k)} <b>{v}</b></button>'
                 for k, v in sorted(listings.items(), key=lambda kv: -kv[1])))
 
+    # The owner chips, counted from the rows that actually rendered rather than
+    # from the config. A chip promising 29 Berkshire names that opens onto 24
+    # is worse than no chip: the reader cannot tell whether five were sold or
+    # five failed to fetch. The footer ledger answers that; the chip states
+    # only what is here.
+    owner_counts: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        for tag in (r.get("owners") or []):
+            k = tag.get("key")
+            if not k:
+                continue
+            slot = owner_counts.setdefault(
+                k, {"badge": tag.get("badge") or k,
+                    "name": tag.get("name") or k, "n": 0,
+                    "period": tag.get("period") or ""})
+            slot["n"] += 1
+    owner_row = ""
+    if owner_counts:
+        owner_row = (
+            '<span class="sep"></span><span class="fl">Held by</span>'
+            '<button class="chip on" data-owner="ALL">All</button>'
+            + "".join(
+                f'<button class="chip" data-owner="{e_attr(k)}" '
+                f'title="{v["n"]} names on this page were in '
+                f'{e_attr(v["name"])}’s holdings as at '
+                f'{e_attr(v["period"] or "the last filing")}">'
+                f'{e_attr(v["badge"])} <b>{v["n"]}</b></button>'
+                for k, v in sorted(owner_counts.items(),
+                                   key=lambda kv: -kv[1]["n"])))
+
     # The coverage line, built from what this run actually produced. Written
     # from the data for the same reason the listing chips are: a hard-coded
     # line drifts, and a page that understates its own coverage sends the
@@ -3245,6 +3540,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     rfx_html = _reflexive_legend(screened.get("reflexive_census") or {})
     cnd_html = _candle_legend()
     bol_html = _bollinger_legend()
+    own_html = _owner_legend(screened.get("owners") or [])
     dis_html = _dislocation_panel(screened.get("dislocation_summary") or {})
     sen_html = _sentiment_panel(screened.get("sentiment") or {})
     mf_html = _magic_formula_panel(screened.get("magic_formula") or {})
@@ -3304,10 +3600,12 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__FWHEAD__", fw_head)
             .replace("__THEMEROW__", theme_row)
             .replace("__LISTINGROW__", listing_row)
+            .replace("__OWNERROW__", owner_row)
             .replace("__COVERAGE__", coverage)
             .replace("__GATE__", debt_html + sen_html + mf_html + buf_html
                      + mun_html + cmd_html
-                     + lyn_html + rfx_html + bol_html + cnd_html + dis_html + cycle_html + gate)
+                     + lyn_html + rfx_html + bol_html + cnd_html + own_html
+                     + dis_html + cycle_html + gate)
             .replace("__REGION__", {"us": "US", "asia": "Asia", "all": "Full"}[region])
             .replace("__RUNID__", run_id or "—")
             .replace("__SERIES__", ", ".join(

@@ -191,6 +191,11 @@ class CompanyRecord:
     # and then becomes invisible: there is no way to answer "did the
     # Nasdaq names actually arrive?" by looking at the page.
     listing: Optional[str] = None
+    # Named investors who disclosed a long position in this company, from
+    # config/owners.yml. A tag is a fact about a filing on a date, not a view
+    # about the company — see src/owners.py for exactly what it claims.
+    owners: List[Dict[str, Any]] = field(default_factory=list)
+    owner_exits: List[Dict[str, Any]] = field(default_factory=list)
 
     years: List[FundamentalYear] = field(default_factory=list)   # newest first
 
