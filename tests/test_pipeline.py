@@ -4796,13 +4796,37 @@ def test_owner_weekly_sweep():
     import shutil
     from tools import update_owners as up
 
+    # The form names here are deliberately the POST-2024 spelling. EDGAR
+    # Release 24.4 (16 Dec 2024) replaced `SC 13G` with `SCHEDULE 13G` when
+    # these moved to XML. The first live run matched only the legacy names, so
+    # every filing since that date was invisible and the sweep silently
+    # returned filings from 2023 and 2024 as if they were the latest news.
     subs = {"filings": {"recent": {
-        "form": ["SC 13G/A", "13F-HR", "SC 13G"],
+        "form": ["SCHEDULE 13G/A", "13F-HR", "SCHEDULE 13G"],
         "accessionNumber": ["0009-26-2", "0001193125-26-352200", "0009-26-1"],
         "filingDate": ["2026-08-20", "2026-08-14", "2026-08-18"],
         "reportDate": ["", "2026-06-30", ""],
         "primaryDocument": ["primary_doc.xml"] * 3}}}
     subjects = {"0009-26-2": "DELTA AIR LINES INC", "0009-26-1": "D R HORTON INC"}
+
+    # --- the form-name matcher, both eras ------------------------------------
+    for legacy in ("SC 13D", "SC 13D/A", "SC 13G", "SC 13G/A"):
+        check(f"{legacy} is swept (pre-2024 archive)",
+              up.is_stake_form(legacy), True)
+    for current in ("SCHEDULE 13D", "SCHEDULE 13D/A", "SCHEDULE 13G",
+                    "SCHEDULE 13G/A"):
+        check(f"{current} is swept (EDGAR 24.4 onward)",
+              up.is_stake_form(current), True)
+    # Neighbouring families share the "SC 13"/"SC 14" space and are a different
+    # kind of event entirely — a going-private proposal is not an ownership
+    # stake, and sweeping one in would put a false entry on the page.
+    for other in ("SC 13E3", "SC 13E1", "SC 13E4/A", "SCHEDULE 13E-3",
+                  "SC 14D9", "SC 14D1", "SC TO-I", "13F-HR", "8-K", "4",
+                  "DEF 14A", "S-1"):
+        check(f"{other} is NOT swept in", up.is_stake_form(other), False)
+    check("matching survives odd spacing and case",
+          (up.is_stake_form("  schedule   13g/a  "),
+           up.is_stake_form("Sc 13D")), (True, True))
 
     def fake(url, timeout=60, tries=3):
         if "submissions" in url:
@@ -4875,6 +4899,37 @@ def test_owner_weekly_sweep():
     check("Oaktree's filing date matches EDGAR's feed",
           cfg["OT"]["filed"], "2026-08-14")
     check("and Berkshire's", cfg["BK"]["filed"], "2026-08-14")
+
+    # --- the panel's heading has to be literally true ------------------------
+    # "Since the quarter ended" must not list a filing from before the quarter
+    # ended. An old 13D on a long-held position is not news — the 13F above
+    # already says they hold it — and showing it there dresses up an old fact
+    # as a recent development.
+    from src import owners as ow
+    led = ow.coverage({"BK": {
+        "name": "Berkshire Hathaway", "badge": "BK", "cik": "1",
+        "period": "2026-06-30", "positions": {"AAPL": {"change": "hold"}},
+        "stake_filings": [
+            {"form": "SCHEDULE 13G/A", "filed": "2026-08-20",
+             "subject": "DELTA AIR LINES INC", "url": "u1"},
+            {"form": "SC 13G/A", "filed": "2024-11-14",
+             "subject": "ANCIENT HOLDING CO", "url": "u2"},
+        ]}}, {"AAPL": ["BK"]})
+    leg = rn._owner_legend(led)
+    check("a filing made after the quarter is shown",
+          "DELTA AIR LINES INC" in leg, True)
+    check("one made two years before it is not",
+          "ANCIENT HOLDING CO" in leg, False)
+    # And when nothing is newer than the quarter, the panel does not appear at
+    # all rather than appearing empty under a claim of recency.
+    led_old = ow.coverage({"BK": {
+        "name": "Berkshire Hathaway", "badge": "BK", "cik": "1",
+        "period": "2026-06-30", "positions": {"AAPL": {"change": "hold"}},
+        "stake_filings": [{"form": "SC 13G/A", "filed": "2024-11-14",
+                           "subject": "ANCIENT HOLDING CO", "url": "u2"}]}},
+        {"AAPL": ["BK"]})
+    check("no 'since the quarter ended' panel when nothing is",
+          "Since the quarter ended" in rn._owner_legend(led_old), False)
 
 
 def test_owner_verify_gate():

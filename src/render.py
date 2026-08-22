@@ -2400,7 +2400,15 @@ def _owner_legend(ledger: List[Dict[str, Any]]) -> str:
     # "what did they hold on 30 June", this is "what have they done since".
     stakes = []
     for row in ledger:
+        # Only filings made AFTER the quarter the 13F describes. The panel is
+        # headed "since the quarter ended" and that has to be literally true:
+        # a manager's 13D on a position they have held since 2023 is not news,
+        # the 13F above already says they hold it, and listing it here would
+        # dress up an old fact as a recent development.
+        cutoff = row.get("period") or ""
         for s in (row.get("stake_filings") or []):
+            if cutoff and (s.get("filed") or "") <= cutoff:
+                continue
             stakes.append({**s, "badge": row["badge"], "key": row["key"],
                            "owner": row["name"]})
     stakes.sort(key=lambda s: s.get("filed") or "", reverse=True)

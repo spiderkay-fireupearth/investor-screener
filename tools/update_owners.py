@@ -355,6 +355,30 @@ SUBJECT_RE = re.compile(
     r"SUBJECT\s+COMPANY.*?COMPANY\s+CONFORMED\s+NAME:\s*(.+?)\s*\n"
     r".*?CENTRAL\s+INDEX\s+KEY:\s*(\d+)", re.S | re.I)
 
+# BOTH spellings, and this is not optional.
+#
+# EDGAR Release 24.4 (16 December 2024) replaced the HTML/ASCII Schedule 13D
+# and 13G formats with an XML one, and renamed the submission types with it:
+# `SC 13D` -> `SCHEDULE 13D`, `SC 13G` -> `SCHEDULE 13G`, amendments likewise.
+# Matching only the legacy names makes every filing since that date invisible,
+# which is exactly what the first live run did — Berkshire's sweep stopped at
+# 2024-11-25, three weeks before the cutover, and looked plausible enough to
+# pass for a manager who simply had not filed since.
+#
+# Both are matched because the archive still contains the pre-2024 filings
+# under the old names, and they are real filings.
+#
+# The prefixes are safe against neighbours: `SC 13E3` (going-private) and
+# `SC 14D9` (tender offer) share the `SC 13`/`SC 14` space and must NOT be
+# swept in, and neither starts with any string below.
+STAKE_FORM_PREFIXES = ("SC 13D", "SC 13G", "SCHEDULE 13D", "SCHEDULE 13G")
+
+
+def is_stake_form(form: str) -> bool:
+    """True for a Schedule 13D/13G filing under either naming convention."""
+    f = " ".join(str(form or "").upper().split())
+    return f.startswith(STAKE_FORM_PREFIXES)
+
 
 def stake_filings(cik: str, filings: List[Dict[str, str]], limit: int = 12,
                   since: str = "") -> List[Dict[str, str]]:
@@ -367,7 +391,7 @@ def stake_filings(cik: str, filings: List[Dict[str, str]], limit: int = 12,
     "what changed lately" panel and not an archive.
     """
     forms = [f for f in filings
-             if f["form"].upper().startswith(("SC 13D", "SC 13G"))
+             if is_stake_form(f["form"])
              and (not since or f["filingDate"] >= since)]
     forms.sort(key=lambda f: f["filingDate"], reverse=True)
     out: List[Dict[str, str]] = []
