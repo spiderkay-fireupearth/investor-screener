@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import json
 import os
 import sys
 import time
@@ -316,6 +317,159 @@ def nasdaq_listed(cfg: Dict[str, Any]) -> List[str]:
         log.warning("always_include: %s not found in the Nasdaq directory, or "
                     "dropped as a non-common security — check the spelling and "
                     "that the company is Nasdaq-listed", ", ".join(missing))
+    return out
+
+
+OTHER_SYMBOL_FILE = "https://www.nasdaqtrader.com/dynamic/symdir/otherlisted.txt"
+
+# Non-common instruments in otherlisted.txt. Note what is NOT in this tuple:
+# "preferred". That word needs its own rule here — see `_is_non_common_other`.
+OTHER_NON_COMMON_WORDS = (
+    "warrant", "warrants", "right", "rights", "unit", "units",
+    "convertible", "notes", "debenture", "debentures", "subordinated",
+    "when issued", "depositary receipt",
+)
+_OTHER_NON_COMMON_RE = re.compile(
+    r"\b(" + "|".join(w.replace(" ", r"\s+") for w in OTHER_NON_COMMON_WORDS)
+    + r")\b", re.I)
+
+
+def _is_non_common_other(name: str) -> bool:
+    """Is this otherlisted.txt row something other than common equity?
+
+    Handled separately from the Nasdaq rule because the two files write names
+    differently, and the difference is a trap.
+
+    `nasdaqlisted.txt` uses "Company Name - Instrument Description", so the
+    Nasdaq filter can split on the dash and test only the half that says what
+    the security IS. That is what keeps it from dropping Preferred Bank, whose
+    company NAME contains the word.
+
+    `otherlisted.txt` has no such convention — the whole thing is one string.
+    Running the same word list over it drops Itau Unibanco, whose ADR is
+    described as "American Depositary Shares (Each representing 500 Preferred
+    Shares)". Brazilian preferred shares are the primary traded class; that ADR
+    is ordinary equity and one of the larger banks in the Americas.
+
+    So "preferred" is judged by CONTEXT instead:
+
+      * "American Depositary Shares ... Preferred Shares"  -> a foreign equity
+        ADR. Keep. The wrapper is always "AMERICAN Depositary".
+      * "Depositary Shares each representing a 1/1000th interest in a share of
+        6.50% Series B Preferred Stock" -> a US preferred wrapper. Drop. These
+        never say "American", and they carry a series letter or a coupon.
+
+    That single word — "American" — is what separates a $200bn bank from a
+    slice of a bank's preferred issue.
+    """
+    low = (name or "").lower()
+    if _OTHER_NON_COMMON_RE.search(low):
+        return True
+    if "preferred" in low or "pfd" in low:
+        # A foreign equity ADR is the one legitimate use of the word here.
+        if "american depositary" in low or "american depository" in low:
+            return False
+        return True
+    # A series designation or a coupon rate means a preference issue even when
+    # the word itself is absent ("Depositary Shares, 6.5% Series A").
+    if "depositary shares" in low and "american depositary" not in low:
+        if "series" in low or "%" in low:
+            return True
+    return False
+
+# Exchange codes in otherlisted.txt. The file is the counterpart to
+# nasdaqlisted.txt from the same directory and covers everything that is NOT
+# Nasdaq, so the code is the only thing separating the New York Stock Exchange
+# from a leveraged ETF on Cboe.
+OTHER_EXCHANGES = {
+    "N": "NYSE",
+    "A": "NYSE American",       # the old AMEX; small caps live here
+    "P": "NYSE Arca",           # overwhelmingly ETFs
+    "Z": "Cboe BZX",            # overwhelmingly ETFs
+    "V": "IEX",
+}
+
+
+def other_listed(cfg: Dict[str, Any]) -> List[str]:
+    """Candidate NYSE / NYSE American common stocks from the symbol directory.
+
+    Why this exists: the US universe was S&P 500 + Nasdaq, which sounds
+    complete and is not. A NYSE company outside the S&P 500 had no route in at
+    all — Alibaba is the obvious one, and 21 of Oaktree's 49 disclosed holdings
+    were unreachable for the same reason. The gap was invisible because the
+    page could only report on names it knew about.
+
+    This is deliberately a SEPARATE function from `nasdaq_listed` rather than a
+    parameterised one. The two files share a publisher and nothing else:
+
+        nasdaqlisted.txt: Symbol|Name|Market Category|Test Issue|
+                          Financial Status|Round Lot|ETF|NextShares
+        otherlisted.txt:  ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|
+                          Round Lot Size|Test Issue|NASDAQ Symbol
+
+    Note what moved: ETF is column 6 in one and column 4 in the other, and Test
+    Issue is column 3 versus column 6. A shared parser reading by index would
+    have silently swapped "is an ETF" for "is a test issue" — both are Y/N, so
+    nothing would have crashed; the universe would just have been quietly wrong.
+    There is also no Financial Status column here at all.
+    """
+    url = cfg.get("url") or OTHER_SYMBOL_FILE
+    text = _http_get(url)
+    if not text:
+        log.warning("NYSE symbol directory fetch failed — no NYSE coverage "
+                    "this run")
+        return []
+    want = {str(c).upper() for c in (cfg.get("exchanges") or ["N", "A"])}
+    forced = {str(x).upper() for x in (cfg.get("always_include") or [])}
+    out: List[str] = []
+    seen_header = False
+    dropped = {"exchange": 0, "etf": 0, "test": 0, "suffix": 0}
+    for line in text.splitlines():
+        parts = line.split("|")
+        if len(parts) < 7:
+            continue
+        if not seen_header:
+            seen_header = True
+            continue
+        if parts[0].startswith("File Creation Time"):
+            continue
+        sym = parts[0].strip()
+        name = parts[1]
+        exch = parts[2].strip().upper()
+        etf = parts[4].strip().upper()
+        test = parts[6].strip().upper()
+        # Class shares arrive as "BRK.A" here rather than "BRK-A"; Yahoo wants
+        # the dash. Normalise before anything downstream tries to fetch it.
+        sym_norm = sym.replace(".", "-").upper()
+        if not sym:
+            continue
+        if test == "Y":
+            dropped["test"] += 1
+            continue
+        if cfg.get("exclude_etfs", True) and etf == "Y":
+            dropped["etf"] += 1
+            continue
+        # An always_include name skips the EXCHANGE test, exactly as it skips
+        # the tier test on the Nasdaq side: the list exists to reach a named
+        # company, and which venue it happens to trade on is not something the
+        # reader should have to know. Structural tests below still apply.
+        if want and exch not in want and sym_norm not in forced:
+            dropped["exchange"] += 1
+            continue
+        if _is_non_common_other(name) and sym_norm not in forced:
+            dropped["suffix"] += 1
+            continue
+        out.append(sym_norm)
+    log.info("NYSE directory: %d candidates after filters (dropped %d wrong "
+             "exchange, %d ETFs, %d test issues, %d non-common)",
+             len(out), dropped["exchange"], dropped["etf"], dropped["test"],
+             dropped["suffix"])
+    missing = sorted(forced - set(out))
+    if missing:
+        log.warning("always_include: %s not found in the NYSE directory, or "
+                    "dropped as a non-common security — check the spelling and "
+                    "that the company is NYSE or NYSE American listed",
+                    ", ".join(missing))
     return out
 
 
@@ -785,6 +939,37 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
                      len(added), len(tickers_by_market["US"]))
         except Exception as e:                    # noqa: BLE001
             log.warning("Nasdaq extra coverage failed, continuing without it: %s", e)
+
+    # NYSE / NYSE American, the same shape as the Nasdaq layer above and for
+    # the same reason. Runs AFTER it so that a company listed on both routes
+    # keeps its Nasdaq label, and so the dedup set already contains every
+    # Nasdaq name — otherwise a dual-listed ticker would be fetched twice.
+    #
+    # This layer carries its own, higher turnover floor. Nasdaq's $20m admits
+    # small caps usefully; applied to the NYSE it would roughly double the US
+    # universe and push the run past its fetch budget, which is the failure
+    # this whole pipeline has already been tuned once to avoid. A higher floor
+    # buys the large-cap coverage that was missing without that cost.
+    nyse_dropped = 0
+    _oth = ((universe_cfg.get("markets", {}).get("US") or {})
+            .get("other_listed") or {})
+    if _oth.get("enabled") and "US" in tickers_by_market:
+        try:
+            have = {t.upper() for t in tickers_by_market["US"]}
+            cands = [t for t in other_listed(_oth) if t.upper() not in have]
+            log.info("NYSE extra: %d candidates after removing the %d names "
+                     "already in the universe", len(cands), len(have))
+            added = [t for t in rank_by_liquidity(yahoo, cands, _oth)
+                     if t.upper() not in have]
+            tickers_by_market["US"].extend(added)
+            for _t in added:
+                listing_by_ticker[_t.upper()] = "NYSE listed"
+            nyse_dropped = getattr(rank_by_liquidity, "last_dropped", 0)
+            log.info("NYSE extra: %d names added — US universe is now %d",
+                     len(added), len(tickers_by_market["US"]))
+        except Exception as e:                    # noqa: BLE001
+            log.warning("NYSE extra coverage failed, continuing without it: %s", e)
+
     for _mkt, _lst in tickers_by_market.items():
         for _t in _lst:
             listing_by_ticker.setdefault(str(_t).upper(), "Theme list")
@@ -932,7 +1117,12 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     breadth = None
     try:
         from . import analytics as an
-        frames = {r.ticker: store.load_prices(r.ticker) for r in records[:400]}
+        # 400 was a cap for the cycle gauge, which only needs a representative
+        # sample. TRIN and the 50d/200d breadth split are BREADTH statistics —
+        # "how many names" is the entire measurement — so a truncated sample
+        # does not just add noise, it answers a different question. Load the
+        # lot; these come from the local store, not the network.
+        frames = {r.ticker: store.load_prices(r.ticker) for r in records}
         frames = {k: v for k, v in frames.items() if v is not None and len(v) >= 200}
         if frames:
             breadth = an.breadth_from_universe(frames)
@@ -1033,9 +1223,15 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     # and still not reach the screens — no price history, a failed fetch — and
     # the whole point of pinning it was that someone is looking for it. Say
     # plainly whether it is there.
-    _pins = [str(x).upper() for x in
-             ((universe_cfg.get("markets", {}).get("US") or {})
-              .get("nasdaq_listed") or {}).get("always_include") or []]
+    # Both layers pin names, and both have to be checked. Pinning BABA on the
+    # NYSE layer and then only auditing the Nasdaq list would reproduce exactly
+    # the silence this ledger exists to break.
+    _us_cfg = universe_cfg.get("markets", {}).get("US") or {}
+    _pins = sorted({
+        str(x).upper()
+        for _layer in ("nasdaq_listed", "other_listed")
+        for x in ((_us_cfg.get(_layer) or {}).get("always_include") or [])
+    })
     if _pins:
         _got = {r.ticker.upper() for r in records}
         _have_pins = [p for p in _pins if p in _got]
@@ -1063,6 +1259,10 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
             for tag in (getattr(r, "owners", None) or []):
                 _seen.setdefault(r.ticker.upper(), []).append(tag["key"])
         screened["owners"] = own.coverage(owners_cfg, _seen)
+        # The full book, for the holdings tab. Read from the filing rather than
+        # from this run's rows, so a position the universe cannot reach still
+        # appears — that is most of the Oaktree list.
+        screened["owners_panel"] = own.panel(owners_cfg)
         for row in screened["owners"]:
             if row["missing"]:
                 log.info("OWNERS %s: %d/%d holdings on the page; not in this "
@@ -1165,6 +1365,49 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     except Exception as e:                        # noqa: BLE001
         log.warning("commodity board failed: %s", e)
         screened["commodity_board"] = {}
+
+    # The market-sentiment tab. Computed last because it reads the debt-cycle
+    # and commodity output; every part of it degrades on its own, so a missing
+    # input costs one panel rather than the tab.
+    try:
+        from . import marketsentiment as mkt
+        screened["market_sentiment"] = mkt.build(
+            frames, metrics_by_ticker, screened.get("results") or {},
+            debt=debt_state, commodities=screened.get("commodity_board") or {})
+        _ms = screened["market_sentiment"]
+        log.info("Market sentiment: TRIN %s, breadth 50d %s%% / 200d %s%%, "
+                 "%d names down >50%% from their high",
+                 _ms["trin"].get("value", "n/a"),
+                 _ms["breadth"].get("above_50d", "n/a"),
+                 _ms["breadth"].get("above_200d", "n/a"),
+                 _ms["oversold"].get("n", 0))
+        # A sidecar of computed facts, for the on-demand report. Written here
+        # rather than assembled by the report tool so there is exactly one
+        # place these numbers are produced: the report can only restate what
+        # the refresh measured, never recompute it differently.
+        try:
+            _facts = {
+                "asof": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                "run_id": run_id,
+                "region": region,
+                "universe_size": len(records),
+                "market_sentiment": screened["market_sentiment"],
+                "debt_cycle_stage": (debt_state or {}).get("stage"),
+                "commodities": [
+                    {k: r.get(k) for k in ("name", "return_3m", "return_12m")}
+                    for r in ((screened.get("commodity_board") or {}).get("rows") or [])
+                ],
+            }
+            os.makedirs(out_dir, exist_ok=True)
+            with open(os.path.join(out_dir, "sentiment_facts.json"), "w") as _f:
+                json.dump(_facts, _f, indent=1, default=str)
+            log.info("Wrote %s/sentiment_facts.json for the on-demand report",
+                     out_dir)
+        except Exception as e:                    # noqa: BLE001
+            log.warning("could not write sentiment facts: %s", e)
+    except Exception as e:                        # noqa: BLE001
+        log.warning("market sentiment panel failed: %s", e)
+        screened["market_sentiment"] = {}
     store.save_screen_results(run_id, screened["results"])
 
     # Merge in the other region's most recent results so the published page
