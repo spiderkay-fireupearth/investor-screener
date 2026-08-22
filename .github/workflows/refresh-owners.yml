@@ -54,6 +54,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      # Just the two libraries this job actually uses. It makes HTTP requests
+      # and edits one YAML file; it has no use for the screener's pandas/numpy
+      # stack, and installing them would add a minute and a failure mode to a
+      # job whose whole value is being small and reliable.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -81,36 +85,39 @@ jobs:
           # job: "no new filing" is the normal state for 11 weeks out of 13,
           # and a refusal to write is the safety gate doing its job. Both are
           # captured in the log and the step summary below.
-          python -m tools.update_owners $ARGS 2>&1 | tee /tmp/owners.log || true
-          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          #
+          # PIPESTATUS, not $?. With a pipe into tee, `$?` is tee's exit code,
+          # and after `|| true` it is always 0 — so the earlier version of this
+          # recorded rc=0 no matter what the updater did.
+          set +e
+          python -m tools.update_owners $ARGS 2>&1 | tee /tmp/owners.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$RC" >> "$GITHUB_OUTPUT"
+          case "$RC" in
+            0) echo "Updater finished cleanly." ;;
+            2) echo "Nothing new to write (this is the normal state between filings)." ;;
+            *) echo "Updater reported problems and declined to write; see the log above." ;;
+          esac
 
-      - name: Verify the config still loads and the badges still render
-        # The whole point of an unattended commit is that nothing downstream
-        # breaks. This runs the owner tests against the file that was just
-        # written; if they fail, the checkout is reverted and nothing is
-        # committed, so a malformed config can never reach the live page.
+      # The gate between an unattended write and the live page. It imports only
+      # PyYAML and src/owners.py — see tools/verify_owners.py for why that
+      # constraint is deliberate. If this fails, the next step puts the file
+      # back and nothing is committed.
+      - name: Verify the config is safe to publish
+        id: verify
+        run: python -m tools.verify_owners --config config/owners.yml
+
+      - name: Revert the config if verification failed
+        if: failure() && steps.verify.outcome == 'failure'
         run: |
-          python - <<'PY'
-          import sys
-          sys.path.insert(0, '.')
-          from src import owners as ow
-          cfg = ow.load("config/owners.yml")
-          assert cfg, "owners.yml did not load"
-          idx = ow.by_ticker(cfg)
-          for key, block in cfg.items():
-              n = len(block.get("positions") or {})
-              assert n > 0, f"{key} has no positions after the update"
-              assert block.get("period"), f"{key} has no filing period"
-              print(f"{key}: {n} positions as at {block['period']}")
-          print(f"{len(idx)} tickers carry at least one badge")
-          PY
-          python -m pytest tests/test_pipeline.py -q -k owner
-
-      - name: Revert if verification failed
-        if: failure()
-        run: git checkout -- config/owners.yml || true
+          echo "Verification failed — restoring config/owners.yml and "
+          echo "committing nothing. The badges stay as they were."
+          git checkout -- config/owners.yml || true
+          git status --short
 
       - name: Commit
+        if: success() && github.event.inputs.check_only != 'true'
         run: |
           if git diff --quiet -- config/owners.yml; then
             echo "No change to config/owners.yml."
