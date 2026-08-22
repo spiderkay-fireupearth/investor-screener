@@ -4958,6 +4958,401 @@ def test_unsurfaced_names_are_findable():
           or "failed every screen" in page, True)
 
 
+def test_daily_history_chart():
+    """Ten years of real daily closes, and a cursor that can name a day."""
+    idx = pd.date_range("2015-09-01", periods=2600, freq="B")
+    rng = np.random.default_rng(11)
+    close = pd.Series(40 * np.exp(np.cumsum(rng.normal(.0006, .015, 2600))),
+                      index=idx)
+    df = pd.DataFrame({"Open": close, "High": close * 1.01, "Low": close * .99,
+                       "Close": close, "Volume": np.full(2600, 1e6)})
+
+    h = ta.daily_history(df)
+    check("ten years are produced", h["years"], 10.0)
+    check("as real daily bars, not samples", h["n"], 2520)
+    check("closes and dates stay in step", len(h["c"]), len(h["dx"]))
+    check("dates are a base plus offsets, not 2520 strings",
+          (isinstance(h["d0"], str), all(isinstance(x, int) for x in h["dx"])),
+          (True, True))
+    check("offsets start at zero and increase", (h["dx"][0], h["dx"][-1] > 0),
+          (0, True))
+    # The point of shipping daily data at all: a cursor must be able to report
+    # a real close on a real day. Spot-check against the source series.
+    import datetime as _d
+    base = _d.date.fromisoformat(h["d0"])
+    for k in (0, len(h["c"]) // 3, len(h["c"]) - 1):
+        want = float(close.iloc[-2520:].iloc[k])
+        got = h["c"][k]
+        check(f"close at index {k} matches the source to 6 sig figs",
+              abs(got - want) / want < 1e-5, True)
+        d = base + _d.timedelta(days=h["dx"][k])
+        check(f"and its date matches", str(close.iloc[-2520:].index[k])[:10],
+              d.isoformat())
+
+    # Only closes travel. The averages are computed in the browser, which is
+    # both smaller and more accurate than shipping sampled ones.
+    check("only closes are shipped, not four series",
+          sorted(k for k in h if isinstance(h[k], list)), ["c", "dx"])
+
+    check("a short history yields nothing rather than a stub",
+          ta.daily_history(df.iloc[-30:]), None)
+    check("and an empty frame likewise", ta.daily_history(pd.DataFrame()), None)
+
+    # --- the per-ticker filenames -------------------------------------------
+    # Tickers carry dots, dashes and worse. A slug that dropped them would map
+    # two companies onto one file; one that passed a slash through would write
+    # outside the directory.
+    check("a plain ticker is itself", rn.safe_slug("AAPL"), "AAPL")
+    check("a dot is encoded, not dropped", rn.safe_slug("8058.T"), "8058_2ET")
+    check("a dash likewise", rn.safe_slug("BRK-B"), "BRK_2DB")
+    check("so the two cannot collide",
+          rn.safe_slug("8058.T") != rn.safe_slug("8058-T"), True)
+    check("and a path separator cannot escape the directory",
+          "/" not in rn.safe_slug("A/B") and "\\" not in rn.safe_slug("A\\B"),
+          True)
+    check("an empty ticker still yields a filename", rn.safe_slug(""), "_")
+
+    # --- writing -------------------------------------------------------------
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        res = {"AAPL": {"ticker": "AAPL", "market": "US"},
+               "8058.T": {"ticker": "8058.T", "market": "JP"},
+               "NOHIST": {"ticker": "NOHIST", "market": "US"}}
+        met = {"AAPL": {"history": h}, "8058.T": {"history": h},
+               "NOHIST": {}}
+        n = rn.write_history(res, met, td)
+        check("one file per company that has history", n, 2)
+        check("named by the slug",
+              sorted(os.listdir(os.path.join(td, "history"))),
+              ["8058_2ET.json", "AAPL.json"])
+        check("a name with no history gets no file",
+              os.path.exists(os.path.join(td, "history", "NOHIST.json")), False)
+        with open(os.path.join(td, "history", "AAPL.json")) as f:
+            back = yaml.safe_load(f)
+        check("and the file round-trips", back["n"], 2520)
+
+    # --- the snapshot contract ----------------------------------------------
+    # The deep-dive deploy replaces the whole site root. A sidecar directory
+    # saved by one function and forgotten by the other is how the price charts
+    # broke once already: page loads, table works, charts 404.
+    from src import library as lib
+    check("history is a tracked sidecar directory",
+          "history" in lib.SIDECAR_DIRS, True)
+    check("and so is series", "series" in lib.SIDECAR_DIRS, True)
+    src = open("src/library.py").read()
+    check("snapshot and restore both iterate the same list",
+          src.count("for name in SIDECAR_DIRS:"), 2)
+
+    # --- the page ------------------------------------------------------------
+    page = rn.TEMPLATE
+    check("the chart offers a ten-year range", 'data-range="10"' in page, True)
+    check("and shorter ones", all(f'data-range="{r}"' in page
+                                  for r in (1, 2, 5)), True)
+    check("history is fetched per ticker, lazily",
+          "function loadHistory(t)" in page, True)
+    check("the browser computes the averages from daily closes",
+          "function sma(arr, n)" in page, True)
+    check("there is a daily chart distinct from the sampled one",
+          "function dailyChart(h, ccy, years)" in page, True)
+    check("the cursor branch reads real closes",
+          "const daily = !!d.daily;" in page, True)
+    check("the tooltip labels the number as a close",
+          "close ${esc(d.ccy)}" in page, True)
+    # The averages must travel with the chart. Recomputing them from the
+    # visible slice leaves the 200-day empty on a one-year view — drawn on the
+    # chart and missing from the tooltip.
+    check("averages are shipped with the chart, not recomputed from the slice",
+          "const m20=d.m20||[], m50=d.m50||[], m200=d.m200||[];" in page, True)
+    check("the fallback to the sampled series is stated, not silent",
+          "Showing the sampled series" in page, True)
+
+
+def test_market_sentiment():
+    """TRIN, breadth divergence, the Seven, and the oversold screen."""
+    from src import marketsentiment as mkt
+
+    idx = pd.date_range("2024-01-01", periods=320, freq="B")
+
+    def fr(close, vol):
+        s = pd.Series(close, index=idx, dtype=float)
+        return pd.DataFrame({"Open": s, "High": s * 1.01, "Low": s * 0.99,
+                             "Close": s,
+                             "Volume": pd.Series(vol, index=idx, dtype=float)})
+
+    def tape(heavy, n_fall=25, skew=3.0):
+        """A deterministic tape: some names fall, some rise, and one side
+        carries `skew` times the volume of the other."""
+        out = {}
+        for i in range(60):
+            falling = i < n_fall
+            px = (100 - np.arange(320) * 0.05 if falling
+                  else 100 + np.arange(320) * 0.05)
+            hv = (falling and heavy == "dec") or (not falling and heavy == "adv")
+            out[f"T{i}"] = fr(px, np.full(320, 1e6 * (skew if hv else 1.0)))
+        return out
+
+    # --- TRIN ----------------------------------------------------------------
+    # The whole point of the Arms Index is that it weighs volume against
+    # breadth. Same advancer/decliner counts, opposite volume — opposite verdict.
+    t_dec = mkt.trin(tape("dec"))
+    t_adv = mkt.trin(tape("adv"))
+    check("heavy volume on the decliners reads oversold", t_dec["band"],
+          "oversold")
+    check("heavy volume on the advancers reads overbought", t_adv["band"],
+          "overbought")
+    check("and the counts were identical in both — only volume differed",
+          (t_dec["advancers"], t_dec["decliners"]),
+          (t_adv["advancers"], t_adv["decliners"]))
+    check("a 3x volume skew produces a 3.0 reading", round(t_dec["value"], 2),
+          3.0)
+    check("and its inverse the reciprocal", round(t_adv["value"], 3), 0.333)
+
+    # Symmetric volume is the arithmetic identity check: TRIN must be exactly 1.
+    even = {}
+    for i in range(60):
+        falling = i < 30
+        px = (100 - np.arange(320) * 0.05 if falling
+              else 100 + np.arange(320) * 0.05)
+        even[f"E{i}"] = fr(px, np.full(320, 1e6))
+    t_even = mkt.trin(even)
+    check("proportional volume gives exactly 1.00", round(t_even["value"], 3),
+          1.0)
+    check("which is neutral", t_even["band"], "neutral")
+    check("the smoothing window is the one asked for", t_even["ma_days"], 10)
+    check("the population caveat is always attached",
+          "not the ~3,000 NYSE issues" in t_even["caveat"], True)
+    check("and a percentile is offered as the better guide",
+          t_even.get("percentile") is not None, True)
+
+    # Guards. A breadth statistic over a handful of names is noise with a
+    # percent sign on it.
+    check("too few names refuses rather than returning a number",
+          mkt.trin({f"X{i}": fr([100] * 320, [1] * 320) for i in range(5)}
+                   )["available"], False)
+    check("and says why",
+          "at least 30" in mkt.trin({f"X{i}": fr([100] * 320, [1] * 320)
+                                     for i in range(5)})["reason"], True)
+    no_vol = {f"V{i}": pd.DataFrame({"Close": pd.Series(
+        np.full(320, 100.0), index=idx)}) for i in range(40)}
+    check("no volume column means no TRIN, not a guessed one",
+          mkt.trin(no_vol)["available"], False)
+
+    # --- breadth divergence --------------------------------------------------
+    steep_down = 200 - np.arange(260) * 0.5
+    bounce = {f"B{i}": fr(np.concatenate(
+        [steep_down, steep_down[-1] + np.arange(60) * 0.1]),
+        np.full(320, 1e6)) for i in range(50)}
+    b = mkt.breadth_ma(bounce)
+    check("a bounce off a steep downtrend puts the short term ahead",
+          b["state"], "short-term ahead")
+    check("nearly all are above the 50-day", b["above_50d"] >= 90, True)
+    check("and almost none above the 200-day", b["above_200d"] <= 10, True)
+    check("participation is correctly called narrow", b["health"], "narrow")
+
+    steep_up = 100 + np.arange(260) * 0.5
+    pullback = {f"C{i}": fr(np.concatenate(
+        [steep_up, steep_up[-1] - np.arange(60) * 0.35]),
+        np.full(320, 1e6)) for i in range(50)}
+    b2 = mkt.breadth_ma(pullback)
+    check("a pullback inside an uptrend puts the short term behind",
+          b2["state"], "short-term behind")
+    check("with long-term participation still broad", b2["health"], "broad")
+
+    steady = {f"D{i}": fr(100 + np.arange(320) * 0.1, np.full(320, 1e6))
+              for i in range(50)}
+    check("a steady trend shows no divergence",
+          mkt.breadth_ma(steady)["state"], "aligned")
+    check("breadth needs 200 days of history to speak",
+          mkt.breadth_ma({})["available"], False)
+
+    # --- Magnificent Seven ---------------------------------------------------
+    m = {t: {"return_3m": 0.05, "return_12m": 0.2, "rsi_14": 55.0,
+             "price_above_sma200": 1, "pct_below_52w_high": 0.02,
+             "market_cap_usd": 1e12} for t in mkt.MAG7}
+    m7 = mkt.mag7(m)
+    check("all seven are reported", m7["n"], 7)
+    check("with none missing", m7["missing"], [])
+    check("and the count above the 200-day", m7["n_above_200d"], 7)
+    check("an Asia-only run says so rather than showing an empty table",
+          mkt.mag7({})["available"], False)
+    # Membership is FIXED. Deriving it from market cap would silently change
+    # who is in it and make one quarter incomparable with the next.
+    check("membership is the named seven, not a screen",
+          sorted(mkt.MAG7), ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA",
+                             "TSLA"])
+
+    # --- oversold, with the sector-shock flag --------------------------------
+    # Four healthcare names down 60% together, one industrial down alone. The
+    # flag must fire on the sector and not on the lone name.
+    res, met = {}, {}
+    for i in range(10):
+        t = f"H{i}"
+        crash = i < 4
+        res[t] = {"ticker": t, "name": f"Health {i}", "sector": "Healthcare",
+                  "market": "US"}
+        met[t] = {"pct_below_52w_high": 0.60 if crash else 0.05,
+                  "revenue_growth_1y": 0.05, "eps_growth_1y": 0.03,
+                  "free_cash_flow_ttm": 1e9, "net_debt_to_ebitda": 1.0,
+                  "loss_years_in_10": 0, "accruals_ratio": 0.05}
+    for i in range(10):
+        t = f"I{i}"
+        res[t] = {"ticker": t, "name": f"Indl {i}", "sector": "Industrials",
+                  "market": "US"}
+        met[t] = {"pct_below_52w_high": 0.70 if i == 0 else 0.03,
+                  "revenue_growth_1y": -0.60, "eps_growth_1y": -0.80,
+                  "free_cash_flow_ttm": -5e8, "net_debt_to_ebitda": 7.0,
+                  "loss_years_in_10": 6, "accruals_ratio": 0.05}
+    ov = mkt.oversold(res, met)
+    hits = {r["ticker"]: r for r in ov["rows"]}
+    check("only names down more than half are listed", ov["n"], 5)
+    check("the sector that fell together is flagged", ov["sectors_shocked"],
+          ["Healthcare"])
+    check("so its names carry the sector-shock marker",
+          hits["H0"]["sector_shock"], True)
+    # The lone faller is the control: one company breaking is not a shock.
+    check("but a name that fell alone does not",
+          hits["I0"]["sector_shock"], False)
+    check("healthy accounts behind a big fall are flagged as intact",
+          hits["H0"]["accounts_intact"], True)
+    check("and collapsing ones as explaining the fall",
+          hits["I0"]["accounts_intact"], False)
+    check("the reason is spelled out rather than left to a chip",
+          "accounts tests passed" in hits["H0"]["accounts_note"], True)
+    # A name with no fundamentals is neither exonerated nor condemned.
+    res["Z"] = {"ticker": "Z", "name": "Nofunda", "sector": "Energy"}
+    met["Z"] = {"pct_below_52w_high": 0.8}
+    ovz = mkt.oversold(res, met)
+    zr = next(r for r in ovz["rows"] if r["ticker"] == "Z")
+    check("missing fundamentals give no verdict, not a false one",
+          zr["accounts_intact"], None)
+    check("and the row explains that",
+          "neither explained nor unexplained" in zr["accounts_note"], True)
+
+    # --- cross asset ---------------------------------------------------------
+    xa = mkt.cross_asset({}, b2, t_dec,
+                         {"signals": {"curve_10y2y": {"value": -0.4},
+                                      "hy_oas": {"value": 6.5}}},
+                         {"rows": [{"name": "Gold", "return_3m": 0.12}]})
+    reads = {r["asset"]: r["reads"] for r in xa["rows"]}
+    check("an inverted curve with wide spreads reads cautious",
+          reads["Bonds & credit"], "cautious")
+    check("gold up 12% reads constructive", reads["Precious metals"],
+          "constructive")
+    check("every row carries the evidence behind its label",
+          all(r["evidence"] for r in xa["rows"]), True)
+    check("disagreement between classes is surfaced, not averaged away",
+          xa["disagree"], True)
+    # TRIN is contrarian, so an oversold reading must lean constructive — and
+    # it must count, or "Reads" would be summarising evidence it ignored.
+    stocks_ev = next(r for r in xa["rows"] if r["asset"] == "Stocks")
+    check("TRIN appears in the stocks evidence",
+          any("TRIN" in e for e in stocks_ev["evidence"]), True)
+
+    # --- render --------------------------------------------------------------
+    built = mkt.build(tape("dec"), m, res,
+                      debt={"signals": {"curve_10y2y": {"value": -0.4}}},
+                      commodities={"rows": [{"name": "Gold", "return_3m": 0.1}]})
+    tab, body = rn._market_sentiment_panel(built)
+    check("a tab button is produced", 'data-view="sentiment"' in tab, True)
+    for want in ("Arms Index", "Market breadth", "Magnificent Seven",
+                 "Down more than half", "Across the three asset classes"):
+        check(f"the tab contains the {want} panel", want in body, True)
+    check("the TRIN population caveat reaches the page",
+          "not the ~3,000 NYSE issues" in body, True)
+    check("the tab states what it cannot do",
+          "does not read the news" in body, True)
+    check("and that it is not advice", "Not investment advice" in body, True)
+    check("no tab at all with no data", rn._market_sentiment_panel({}), ("", ""))
+
+    page = rn.TEMPLATE
+    check("the template has the sentiment view", 'id="view-sentiment"' in page,
+          True)
+    check("and its slots", "__SENTTAB__" in page and "__SENTPANEL__" in page,
+          True)
+    check("the switcher handles three views by name",
+          "VIEWS={screen:'view-screen'" in page, True)
+
+
+def test_sentiment_report_tool():
+    """The report restates computed facts; it never invents them."""
+    import json as _json
+    import subprocess
+    from tools import sentiment_report as sr
+
+    check("1st/2nd/3rd/82nd are formed correctly",
+          [sr._ord(n) for n in (1, 2, 3, 4, 11, 12, 13, 21, 82, 100)],
+          ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "82nd",
+           "100th"])
+
+    facts = {"asof": "2026-08-22 14:00 UTC", "universe_size": 44,
+             "market_sentiment": {
+                 "breadth": {"available": True, "names": 44, "above_50d": 91.0,
+                             "above_200d": 40.0, "gap": 51.0,
+                             "state": "short-term ahead", "health": "mixed",
+                             "note": "N", "divergence_at": 15.0,
+                             "n_above_200d": 18, "caveat": "C"},
+                 "trin": {"available": True, "value": 1.55, "ma_days": 10,
+                          "band": "oversold", "percentile": 82.0,
+                          "meaning": "M", "caveat": "TRIN caveat",
+                          "raw_today": 1.6, "advancers": 24, "decliners": 20,
+                          "overbought_at": 0.8, "oversold_at": 1.2,
+                          "dropped_days": 1},
+                 "mag7": {"available": True, "n": 1, "n_above_200d": 1,
+                          "rows": [{"ticker": "AAPL", "name": "Apple",
+                                    "return_3m": 0.05, "return_12m": 0.2,
+                                    "rsi": 55.0, "pct_below_high": 0.02}],
+                          "missing": [], "note": "N"},
+                 "oversold": {"available": True, "n": 1,
+                              "sectors_shocked": ["Healthcare"], "note": "N",
+                              "rows": [{"ticker": "MRNA", "off_high": 0.6,
+                                        "sector": "Healthcare",
+                                        "sector_shock": True,
+                                        "accounts_intact": True,
+                                        "accounts_note": "6 of 6"}]},
+                 "cross_asset": {"available": True, "note": "N", "links": [],
+                                 "rows": [{"asset": "Stocks",
+                                           "reads": "constructive",
+                                           "evidence": ["e1"]}]}}}
+    body = sr.deterministic_section(facts)
+    for want in ("91% of 44 names", "82nd percentile", "TRIN caveat",
+                 "AAPL", "MRNA", "Healthcare"):
+        check(f"the computed section states {want}", want in body, True)
+    check("and says plainly that no model wrote it",
+          "No part of this section is" in body, True)
+
+    # The degraded path is the one that must never break: no key, no network,
+    # still a usable report that says why the narrative is absent.
+    tmp = "/tmp/_sr_facts.json"
+    with open(tmp, "w") as f:
+        _json.dump(facts, f)
+    out = "/tmp/_sr_report.md"
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    r = subprocess.run([sys.executable, "-m", "tools.sentiment_report",
+                        "--facts", tmp, "--out", out],
+                       capture_output=True, text=True, cwd=os.getcwd(), env=env)
+    check("it runs with no API key at all", r.returncode, 0)
+    txt = open(out).read()
+    check("and still produces the computed indicators", "82nd percentile" in txt,
+          True)
+    check("while saying why the narrative is missing",
+          "No `ANTHROPIC_API_KEY` is configured" in txt, True)
+    check("a missing facts file is refused rather than invented",
+          subprocess.run([sys.executable, "-m", "tools.sentiment_report",
+                          "--facts", "/tmp/_nope.json", "--out", out],
+                         capture_output=True, text=True,
+                         cwd=os.getcwd()).returncode, 1)
+
+    # The system prompt is the only thing standing between this feature and
+    # fabricated market data. Assert its load-bearing clauses exist.
+    for clause in ("NEVER state a market statistic",
+                   "no reliable memory of market",
+                   "must carry an inline source",
+                   "Attributing a cause without a source is fabrication",
+                   "not advice"):
+        check(f"the system prompt forbids/requires: {clause[:38]}",
+              clause in sr.SYSTEM, True)
+
+
 def test_owner_holdings_tab():
     """The holdings tab renders the FILING, not the screener's own rows."""
     from src import owners as ow
@@ -6140,6 +6535,9 @@ if __name__ == "__main__":
     test_owner_auto_update()
     test_nyse_layer()
     test_unsurfaced_names_are_findable()
+    test_daily_history_chart()
+    test_market_sentiment()
+    test_sentiment_report_tool()
     test_owner_holdings_tab()
     test_owner_weekly_sweep()
     test_owner_verify_gate()

@@ -161,6 +161,14 @@ replaces its report. Not investment advice.</div>
 # that has not changed.
 # ---------------------------------------------------------------------------
 
+# Every sidecar directory the published page depends on. Kept as ONE list
+# because snapshot and restore must agree: the price charts broke exactly once
+# already by saving index.html and forgetting what it fetches, and a second
+# directory added to one function and not the other would break them again in
+# the same invisible way — page loads, table works, charts 404.
+SIDECAR_DIRS = ("series", "history")
+
+
 def snapshot_site(out_dir: str = "out", data_dir: str = "data") -> bool:
     """Copy the rendered screener page into the data store."""
     src = os.path.join(out_dir, "index.html")
@@ -174,11 +182,12 @@ def snapshot_site(out_dir: str = "out", data_dir: str = "data") -> bool:
     # saved only index.html would restore a page whose every price chart
     # 404s — working yesterday, broken after the first deep dive, with nothing
     # in the logs to say why.
-    series_src = os.path.join(out_dir, "series")
-    if os.path.isdir(series_src):
-        series_dest = os.path.join(dest_dir, "series")
-        shutil.rmtree(series_dest, ignore_errors=True)
-        shutil.copytree(series_src, series_dest)
+    for name in SIDECAR_DIRS:
+        src_d = os.path.join(out_dir, name)
+        if os.path.isdir(src_d):
+            dst_d = os.path.join(dest_dir, name)
+            shutil.rmtree(dst_d, ignore_errors=True)
+            shutil.copytree(src_d, dst_d)
     return True
 
 
@@ -202,8 +211,8 @@ def restore_site(data_dir: str = "data", out_dir: str = "out") -> bool:
     # sidecar files it never wrote are simply absent, and the failure is
     # invisible: the page loads, the table works, and only the price charts
     # quietly 404.
-    series_src = os.path.join(data_dir, "site", "series")
-    series_dest = os.path.join(out_dir, "series")
-    if os.path.isdir(series_src) and not os.path.isdir(series_dest):
-        shutil.copytree(series_src, series_dest)
-    return True
+    for name in SIDECAR_DIRS:
+        src_d = os.path.join(data_dir, "site", name)
+        dst_d = os.path.join(out_dir, name)
+        if os.path.isdir(src_d) and not os.path.isdir(dst_d):
+            shutil.copytree(src_d, dst_d)

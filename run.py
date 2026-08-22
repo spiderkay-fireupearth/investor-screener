@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import json
 import os
 import sys
 import time
@@ -1116,7 +1117,12 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     breadth = None
     try:
         from . import analytics as an
-        frames = {r.ticker: store.load_prices(r.ticker) for r in records[:400]}
+        # 400 was a cap for the cycle gauge, which only needs a representative
+        # sample. TRIN and the 50d/200d breadth split are BREADTH statistics —
+        # "how many names" is the entire measurement — so a truncated sample
+        # does not just add noise, it answers a different question. Load the
+        # lot; these come from the local store, not the network.
+        frames = {r.ticker: store.load_prices(r.ticker) for r in records}
         frames = {k: v for k, v in frames.items() if v is not None and len(v) >= 200}
         if frames:
             breadth = an.breadth_from_universe(frames)
@@ -1359,6 +1365,49 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
     except Exception as e:                        # noqa: BLE001
         log.warning("commodity board failed: %s", e)
         screened["commodity_board"] = {}
+
+    # The market-sentiment tab. Computed last because it reads the debt-cycle
+    # and commodity output; every part of it degrades on its own, so a missing
+    # input costs one panel rather than the tab.
+    try:
+        from . import marketsentiment as mkt
+        screened["market_sentiment"] = mkt.build(
+            frames, metrics_by_ticker, screened.get("results") or {},
+            debt=debt_state, commodities=screened.get("commodity_board") or {})
+        _ms = screened["market_sentiment"]
+        log.info("Market sentiment: TRIN %s, breadth 50d %s%% / 200d %s%%, "
+                 "%d names down >50%% from their high",
+                 _ms["trin"].get("value", "n/a"),
+                 _ms["breadth"].get("above_50d", "n/a"),
+                 _ms["breadth"].get("above_200d", "n/a"),
+                 _ms["oversold"].get("n", 0))
+        # A sidecar of computed facts, for the on-demand report. Written here
+        # rather than assembled by the report tool so there is exactly one
+        # place these numbers are produced: the report can only restate what
+        # the refresh measured, never recompute it differently.
+        try:
+            _facts = {
+                "asof": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                "run_id": run_id,
+                "region": region,
+                "universe_size": len(records),
+                "market_sentiment": screened["market_sentiment"],
+                "debt_cycle_stage": (debt_state or {}).get("stage"),
+                "commodities": [
+                    {k: r.get(k) for k in ("name", "return_3m", "return_12m")}
+                    for r in ((screened.get("commodity_board") or {}).get("rows") or [])
+                ],
+            }
+            os.makedirs(out_dir, exist_ok=True)
+            with open(os.path.join(out_dir, "sentiment_facts.json"), "w") as _f:
+                json.dump(_facts, _f, indent=1, default=str)
+            log.info("Wrote %s/sentiment_facts.json for the on-demand report",
+                     out_dir)
+        except Exception as e:                    # noqa: BLE001
+            log.warning("could not write sentiment facts: %s", e)
+    except Exception as e:                        # noqa: BLE001
+        log.warning("market sentiment panel failed: %s", e)
+        screened["market_sentiment"] = {}
     store.save_screen_results(run_id, screened["results"])
 
     # Merge in the other region's most recent results so the published page
