@@ -4865,6 +4865,36 @@ def test_nyse_layer():
           R._is_non_common_other("American Depositary Shares (Each "
                                  "representing 500 Preferred Shares)"), False)
 
+    # Preferred-share tickers. In otherlisted.txt the ACT Symbol uses "$" to
+    # separate a preferred or warrant class from its issuer, while a plain
+    # share class uses a dot. The first live run let all of these through and
+    # spent several hundred price fetches on them, earning a wall of Yahoo
+    # rate-limit errors — a preferred stock is not a company, but it still
+    # gets looked up.
+    pfd_lines = [HEAD,
+        row("AHL$D", "Aspen Insurance Holdings Limited 5.625% Perpetual "
+                     "Non-Cumulative Preference Shares"),
+        row("MET$E", "MetLife Inc. 5.625% Non-Cumulative Preferred Stock Series E"),
+        row("TRTN$G", "Triton International Limited 5.00% Series G Cumulative "
+                      "Redeemable Perpetual Preference Shares"),
+        row("SCE$M", "SCE Trust VI Fixed-Rate Trading Preference Securities"),
+        row("BRK.A", "Berkshire Hathaway Inc. Class A Common Stock"),
+        row("BABA", "Alibaba Group Holding Limited American Depositary Shares")]
+    with patch.object(R, "_http_get", return_value="\n".join(pfd_lines)):
+        pfd = R.other_listed({"exchanges": ["N", "A"], "exclude_etfs": True})
+    for t in ("AHL$D", "MET$E", "TRTN$G", "SCE$M"):
+        check(f"{t} is dropped — a dollar in the symbol means preferred",
+              not any(t.replace("$", c) in pfd for c in ("$", "-", "")), True)
+    check("but a dotted share class is kept", "BRK-A" in pfd, True)
+    check("and so is an ordinary ADR", "BABA" in pfd, True)
+    # "Preference Shares" is the non-US spelling and slipped past "preferred".
+    check("'Preference Shares' is recognised as non-common",
+          R._is_non_common_other("5.00% Series G Cumulative Redeemable "
+                                 "Perpetual Preference Shares"), True)
+    check("while a foreign ADR on preferred shares is still common",
+          R._is_non_common_other("American Depositary Shares (Each "
+                                 "representing 500 Preferred Shares)"), False)
+
     for junk in ("XYZW", "RTSU", "UNTS"):
         check(f"{junk} is dropped as a non-common instrument", junk not in got,
               True)

@@ -365,7 +365,7 @@ def _is_non_common_other(name: str) -> bool:
     low = (name or "").lower()
     if _OTHER_NON_COMMON_RE.search(low):
         return True
-    if "preferred" in low or "pfd" in low:
+    if "preferred" in low or "preference" in low or "pfd" in low:
         # A foreign equity ADR is the one legitimate use of the word here.
         if "american depositary" in low or "american depository" in low:
             return False
@@ -443,6 +443,15 @@ def other_listed(cfg: Dict[str, Any]) -> List[str]:
         sym_norm = sym.replace(".", "-").upper()
         if not sym:
             continue
+        # In otherlisted.txt the ACT Symbol uses "$" to separate a PREFERRED or
+        # warrant class from its issuer — AHL$D, MET$E, TRTN$G — while a plain
+        # share class uses a dot, as in BRK.A. Letting the dollar ones through
+        # cost the first live run several hundred pointless price fetches and
+        # a wall of Yahoo rate-limit errors, because a preferred stock is not
+        # a company and every one of them still gets looked up.
+        if "$" in sym:
+            dropped["suffix"] += 1
+            continue
         if test == "Y":
             dropped["test"] += 1
             continue
@@ -474,7 +483,9 @@ def other_listed(cfg: Dict[str, Any]) -> List[str]:
 
 
 def rank_by_liquidity(yahoo: YahooProvider, symbols: List[str],
-                      cfg: Dict[str, Any]) -> List[str]:
+                      cfg: Dict[str, Any],
+                      already: Optional[set] = None,
+                      label: str = "Nasdaq") -> List[str]:
     """Keep the most traded candidates, measured on prices we fetch anyway.
 
     Returns [] rather than an arbitrary slice when the price download fails:
@@ -490,8 +501,9 @@ def rank_by_liquidity(yahoo: YahooProvider, symbols: List[str],
     _cap = cfg.get("max_names")
     want = int(_cap) if _cap else len(symbols)
     floor = float(cfg.get("min_median_turnover_usd", 5_000_000))
-    log.info("Ranking %d Nasdaq candidates by liquidity (keeping %d above "
-             "USD %s median daily turnover)", len(symbols), want, f"{floor:,.0f}")
+    log.info("Ranking %d %s candidates by liquidity (keeping %d above "
+             "USD %s median daily turnover)", len(symbols), label, want,
+             f"{floor:,.0f}")
     frames = yahoo.prices_batch(symbols, period="6mo")
     scored = []
     for sym, df in (frames or {}).items():
@@ -505,7 +517,7 @@ def rank_by_liquidity(yahoo: YahooProvider, symbols: List[str],
         if turnover >= floor:
             scored.append((sym, turnover))
     if not scored:
-        log.warning("No Nasdaq candidate cleared the turnover floor — either "
+        log.warning("No candidate cleared the turnover floor — either "
                     "the price download failed or the floor is set too high; "
                     "no extra names added")
         return []
@@ -527,9 +539,16 @@ def rank_by_liquidity(yahoo: YahooProvider, symbols: List[str],
             forced.append(u)                      # ranked, just below the cap
         elif u in (frames or {}):
             forced.append(u)                      # priced, below the floor too
+        elif u in (already or set()):
+            # Already in the universe by another route — an index, or a theme
+            # list. Nothing is wrong and nothing needs adding, but the old
+            # message said "not added", which reads as a failure and is exactly
+            # how a working pin gets chased for an afternoon.
+            log.info("always_include: %s is already in the universe from "
+                     "another list; this layer had nothing to add", u)
         else:
-            log.warning("always_include: %s is not in the Nasdaq directory "
-                        "(or had no price history) — not added", u)
+            log.warning("always_include: %s is not in the %s directory "
+                        "(or had no price history) — not added", u, label)
     kept.extend(forced)
     if forced:
         log.info("always_include: %d name(s) admitted past the ranking: %s",
@@ -547,9 +566,9 @@ def rank_by_liquidity(yahoo: YahooProvider, symbols: List[str],
                     len(scored), f"{floor:,.0f}", want, dropped,
                     f"{scored[want - 1][1]:,.0f}",
                     f"{scored[want][1]:,.0f}")
-    log.info("Nasdaq liquidity pass: %d of %d priced, %d above the floor, "
+    log.info("%s liquidity pass: %d of %d priced, %d above the floor, "
              "%d kept (smallest kept trades USD %s a day)",
-             len(frames or {}), len(symbols), len(scored), len(kept),
+             label, len(frames or {}), len(symbols), len(scored), len(kept),
              f"{scored[min(len(scored), want) - 1][1]:,.0f}")
     rank_by_liquidity.last_dropped = dropped      # for the page footnote
     return kept
@@ -929,7 +948,8 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
             cands = [t for t in nasdaq_listed(_nas) if t.upper() not in have]
             log.info("Nasdaq extra: %d candidates after removing the %d names "
                      "already in the universe", len(cands), len(have))
-            added = [t for t in rank_by_liquidity(yahoo, cands, _nas)
+            added = [t for t in rank_by_liquidity(yahoo, cands, _nas,
+                                                  already=have, label="Nasdaq")
                      if t.upper() not in have]
             tickers_by_market["US"].extend(added)
             for _t in added:
@@ -959,7 +979,8 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
             cands = [t for t in other_listed(_oth) if t.upper() not in have]
             log.info("NYSE extra: %d candidates after removing the %d names "
                      "already in the universe", len(cands), len(have))
-            added = [t for t in rank_by_liquidity(yahoo, cands, _oth)
+            added = [t for t in rank_by_liquidity(yahoo, cands, _oth,
+                                                  already=have, label="NYSE")
                      if t.upper() not in have]
             tickers_by_market["US"].extend(added)
             for _t in added:

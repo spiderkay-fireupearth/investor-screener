@@ -15,6 +15,19 @@ import requests
 log = logging.getLogger(__name__)
 
 FRED_URL = "https://api.stlouisfed.org/fred/series/observations"
+FRED_META_URL = "https://api.stlouisfed.org/fred/series"
+
+# What FRED's `units_short` strings mean as a multiplier into plain dollars.
+# This exists because the Buffett Indicator divides one FRED series by another
+# and the two are NOT published in the same units: the Z.1 equities series is
+# in millions, GDP is in billions. Getting that wrong produces a ratio off by
+# a factor of a thousand that still looks like a number.
+UNIT_SCALE = {
+    "mil. of $": 1e6, "millions of dollars": 1e6,
+    "bil. of $": 1e9, "billions of dollars": 1e9,
+    "thous. of $": 1e3, "thousands of dollars": 1e3,
+    "$": 1.0, "dollars": 1.0,
+}
 
 
 class FredProvider:
@@ -41,6 +54,61 @@ class FredProvider:
             for obs in r.json().get("observations", []):
                 if obs.get("value") not in (".", "", None):
                     return float(obs["value"])
+        except Exception as e:                       # noqa: BLE001
+            log.warning("FRED %s failed: %s", series_id, e)
+        return None
+
+    def series_meta(self, series_id: str) -> Dict[str, Any]:
+        """Title, units and frequency for one series.
+
+        Used to SCALE rather than to assume. Two series that look comparable on
+        a chart can be published in different units, and a ratio built on that
+        assumption is wrong by orders of magnitude while remaining perfectly
+        plausible on screen.
+        """
+        if not self.enabled:
+            return {}
+        try:
+            r = requests.get(FRED_META_URL, timeout=20, params={
+                "series_id": series_id,
+                "api_key": self.api_key,
+                "file_type": "json",
+            })
+            if r.status_code != 200:
+                log.warning("FRED meta %s -> HTTP %s", series_id, r.status_code)
+                return {}
+            rows = r.json().get("seriess") or []
+            if not rows:
+                return {}
+            s = rows[0]
+            units = str(s.get("units_short") or s.get("units") or "").strip()
+            return {"id": series_id, "title": s.get("title"), "units": units,
+                    "scale": UNIT_SCALE.get(units.lower()),
+                    "frequency": s.get("frequency_short"),
+                    "last_updated": s.get("last_updated")}
+        except Exception as e:                       # noqa: BLE001
+            log.warning("FRED meta %s failed: %s", series_id, e)
+        return {}
+
+    def latest_observation(self, series_id: str):
+        """(date, value) of the most recent real observation, or None.
+
+        The date matters for the Buffett Indicator: both halves of the ratio
+        are quarterly and they are not always published together, so a stale
+        numerator over a fresh denominator would quietly misstate the level.
+        """
+        if not self.enabled:
+            return None
+        try:
+            r = requests.get(FRED_URL, timeout=20, params={
+                "series_id": series_id, "api_key": self.api_key,
+                "file_type": "json", "sort_order": "desc", "limit": 10,
+            })
+            if r.status_code != 200:
+                return None
+            for obs in r.json().get("observations", []):
+                if obs.get("value") not in (".", "", None):
+                    return obs["date"], float(obs["value"])
         except Exception as e:                       # noqa: BLE001
             log.warning("FRED %s failed: %s", series_id, e)
         return None
