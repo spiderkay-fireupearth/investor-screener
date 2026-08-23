@@ -4782,6 +4782,697 @@ def test_owner_auto_update():
               bool(block.get("cik")), True)
 
 
+def test_nyse_layer():
+    """NYSE / NYSE American coverage, and the ADR trap that nearly broke it.
+
+    The US universe was S&P 500 + Nasdaq, which reads as complete and is not:
+    a NYSE company outside the S&P 500 had no route in at all. Alibaba was the
+    reported case; 21 of Oaktree's 49 disclosed holdings had the same problem.
+    """
+    from unittest.mock import patch
+    from src import run as R
+
+    # Real otherlisted.txt layout. The column order differs from
+    # nasdaqlisted.txt in a way that a shared parser would get silently wrong:
+    # ETF is column 4 here and 6 there, Test Issue is 6 here and 3 there. Both
+    # are Y/N, so an index mix-up would not crash — it would just build the
+    # wrong universe.
+    HEAD = ("ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|"
+            "Round Lot Size|Test Issue|NASDAQ Symbol")
+
+    def row(sym, name, exch="N", etf="N", test="N"):
+        return f"{sym}|{name}|{exch}|{sym}|{etf}|100|{test}|{sym}"
+
+    lines = [HEAD,
+        row("BABA", "Alibaba Group Holding Limited American Depositary Shares "
+                    "each representing eight Ordinary share"),
+        row("ITUB", "Itau Unibanco Holding S.A. American Depositary Shares "
+                    "(Each representing 500 Preferred Shares)"),
+        row("BBD",  "Banco Bradesco S.A. American Depositary Shares (each "
+                    "representing one Preferred Share)"),
+        row("ERJ",  "Embraer S.A. American Depositary Shares (Each "
+                    "representing 4 Common Shares)"),
+        row("SE",   "Sea Limited American Depositary Shares"),
+        row("UTHR", "United Therapeutics Corp Common Stock"),
+        row("MINE", "Mayfair Gold Corp. Common Shares", exch="A"),
+        row("BATL", "Battalion Oil Corporation Common Stock", exch="A"),
+        row("BRK.A", "Berkshire Hathaway Inc. Class A Common Stock"),
+        row("BAC.B", "Bank of America Corporation Depositary Shares each "
+                     "representing a 1/1000th interest in a share of 6.000% "
+                     "Non-Cumulative Preferred Stock Series GG"),
+        row("JPM.C", "JPMorgan Chase & Co. Depositary Shares each representing "
+                     "a 1/400th interest in a share of 6.75% Series LL "
+                     "Preferred Stock"),
+        row("WFC.L", "Wells Fargo & Company 7.5% Non-Cumulative Perpetual "
+                     "Convertible Class A Preferred Stock Series L"),
+        row("XYZW", "Some Corp Warrants expiring 2030"),
+        row("RTSU", "Acme Corp Rights"),
+        row("UNTS", "SPAC Acquisition Units"),
+        row("AAA",  "Alternative Access First Priority CLO Bond ETF",
+            exch="P", etf="Y"),
+        row("AAAU", "Goldman Sachs Physical Gold ETF Shares", exch="Z", etf="Y"),
+        row("TSTZ", "Test Issue Corp Common Stock", test="Y"),
+        "File Creation Time: 0822202610:30|||||||"]
+    sample = "\n".join(lines)
+
+    with patch.object(R, "_http_get", return_value=sample):
+        got = R.other_listed({"exchanges": ["N", "A"], "exclude_etfs": True})
+
+    check("Alibaba is finally reachable", "BABA" in got, True)
+    check("NYSE American names come in too", ("MINE" in got, "BATL" in got),
+          (True, True))
+    check("class shares are normalised to the dash spelling Yahoo wants",
+          "BRK-A" in got, True)
+
+    # The ADR trap. A Brazilian ADR's description legitimately contains the
+    # word "preferred" — those preferred shares are the primary traded class.
+    # The Nasdaq filter would have dropped all three, because it word-matches
+    # "preferred" over a name format that file does not use.
+    for adr in ("ITUB", "BBD"):
+        check(f"{adr} survives despite 'Preferred' in its ADR description",
+              adr in got, True)
+    check("and a plain common-share ADR obviously does", "ERJ" in got, True)
+    # The genuine preference issues must still go.
+    for pfd in ("BAC-B", "JPM-C", "WFC-L"):
+        check(f"{pfd} is dropped — it is a preference issue, not equity",
+              pfd not in got, True)
+    # The word "American" is the entire distinction, so test it directly.
+    check("a US depositary preferred is non-common",
+          R._is_non_common_other("Depositary Shares each representing a "
+                                 "1/1000th interest in a 6.5% Series B "
+                                 "Preferred Stock"), True)
+    check("a foreign equity ADR on preferred shares is common",
+          R._is_non_common_other("American Depositary Shares (Each "
+                                 "representing 500 Preferred Shares)"), False)
+
+    # Preferred-share tickers. In otherlisted.txt the ACT Symbol uses "$" to
+    # separate a preferred or warrant class from its issuer, while a plain
+    # share class uses a dot. The first live run let all of these through and
+    # spent several hundred price fetches on them, earning a wall of Yahoo
+    # rate-limit errors — a preferred stock is not a company, but it still
+    # gets looked up.
+    pfd_lines = [HEAD,
+        row("AHL$D", "Aspen Insurance Holdings Limited 5.625% Perpetual "
+                     "Non-Cumulative Preference Shares"),
+        row("MET$E", "MetLife Inc. 5.625% Non-Cumulative Preferred Stock Series E"),
+        row("TRTN$G", "Triton International Limited 5.00% Series G Cumulative "
+                      "Redeemable Perpetual Preference Shares"),
+        row("SCE$M", "SCE Trust VI Fixed-Rate Trading Preference Securities"),
+        row("BRK.A", "Berkshire Hathaway Inc. Class A Common Stock"),
+        row("BABA", "Alibaba Group Holding Limited American Depositary Shares")]
+    with patch.object(R, "_http_get", return_value="\n".join(pfd_lines)):
+        pfd = R.other_listed({"exchanges": ["N", "A"], "exclude_etfs": True})
+    for t in ("AHL$D", "MET$E", "TRTN$G", "SCE$M"):
+        check(f"{t} is dropped — a dollar in the symbol means preferred",
+              not any(t.replace("$", c) in pfd for c in ("$", "-", "")), True)
+    check("but a dotted share class is kept", "BRK-A" in pfd, True)
+    check("and so is an ordinary ADR", "BABA" in pfd, True)
+    # "Preference Shares" is the non-US spelling and slipped past "preferred".
+    check("'Preference Shares' is recognised as non-common",
+          R._is_non_common_other("5.00% Series G Cumulative Redeemable "
+                                 "Perpetual Preference Shares"), True)
+    check("while a foreign ADR on preferred shares is still common",
+          R._is_non_common_other("American Depositary Shares (Each "
+                                 "representing 500 Preferred Shares)"), False)
+
+    for junk in ("XYZW", "RTSU", "UNTS"):
+        check(f"{junk} is dropped as a non-common instrument", junk not in got,
+              True)
+    check("ETFs on Arca and Cboe are excluded",
+          ("AAA" not in got, "AAAU" not in got), (True, True))
+    check("test issues are excluded", "TSTZ" not in got, True)
+    # The 'unit'/'right' words must be word-matched, not substring-matched, or
+    # United Therapeutics disappears — the same bug already fixed once on the
+    # Nasdaq side.
+    check("'United' is not eaten by the 'unit' rule", "UTHR" in got, True)
+
+    with patch.object(R, "_http_get", return_value=sample):
+        n_only = R.other_listed({"exchanges": ["N"], "exclude_etfs": True})
+    check("the exchange filter actually filters", "MINE" in n_only, False)
+    with patch.object(R, "_http_get", return_value=None):
+        check("a failed directory fetch degrades to no coverage, not a crash",
+              R.other_listed({}), [])
+
+    # --- config wiring -------------------------------------------------------
+    uni = yaml.safe_load(open("config/universe.yml"))
+    oth = uni["markets"]["US"]["other_listed"]
+    check("the layer is enabled", oth["enabled"], True)
+    check("it reads the NYSE half of the symbol directory",
+          oth["url"].endswith("otherlisted.txt"), True)
+    check("covering NYSE and NYSE American", oth["exchanges"], ["N", "A"])
+    # The floor is the whole cost control. At the Nasdaq floor this layer would
+    # roughly double the US universe and blow the fetch budget.
+    nas = uni["markets"]["US"]["nasdaq_listed"]
+    check("its turnover floor is well above the Nasdaq one",
+          oth["min_median_turnover_usd"] > nas["min_median_turnover_usd"], True)
+    check("Alibaba is pinned so the floor can never drop it",
+          "BABA" in oth["always_include"], True)
+    check("as are the NYSE American microcaps in the Oaktree book",
+          all(t in oth["always_include"] for t in ("MINE", "BATL")), True)
+
+    # Pinned names on BOTH layers must be audited, or pinning on the new one
+    # reproduces exactly the silence the ledger exists to break.
+    src = open("src/run.py").read()
+    check("the pinned ledger reads both layers",
+          'for _layer in ("nasdaq_listed", "other_listed")' in src, True)
+    check("NYSE names are labelled distinctly from Nasdaq ones",
+          '"NYSE listed"' in src, True)
+
+
+def test_unsurfaced_names_are_findable():
+    """A covered name that did not clear a screen must not read as a missing one.
+
+    The live site carried CRSP, NVCR and CRM in its universe and reported
+    "Pinned names present: CRSP, NVCR" in the footer, yet they could not be
+    found by browsing — because "Surfaced only" is on by default and nothing on
+    the page connected the gap to that filter. Coverage was fine; the page was
+    just silent about why most of the universe was invisible.
+    """
+    page = rn.TEMPLATE
+
+    # The banner exists, and sits ABOVE the table — below it is where the first
+    # version put it, which is past the point a reader has already concluded
+    # the name is missing.
+    check("there is a hidden-count banner", "hiddenNotice" in page, True)
+    check("with a container to render into", 'id="hiddenNote"' in page, True)
+    i, j = page.find('id="hiddenNote"'), page.find('<table id="tbl"')
+    check("and it is above the table, not below it", i < j and i > 0, True)
+
+    # It must name the cause and offer the remedy, not merely state a count.
+    check("it says the names were hidden by a filter, not missed by the run",
+          "did not clear a screen" in page, True)
+    check("it distinguishes coverage from surfacing",
+          "arriving in the\n    universe and passing a screen are different things"
+          in page or "passing a screen are different things" in page, True)
+    check("it offers a one-click way out", 'id="showAll"' in page, True)
+    check("and points at search as the other way",
+          "which ignores every\n    filter" in page or "ignores every filter" in page,
+          True)
+
+    # Suppressed when it would be noise: during a search (which ignores filters
+    # anyway) and when the filter is already off.
+    check("suppressed while searching", "if(fQ.trim()) return '';" in page, True)
+    check("suppressed when the filter is off", "if(!fSurf || shown>=total)" in page,
+          True)
+
+    # The chip itself had no explanation anywhere on the page.
+    check("the Surfaced only chip now explains itself",
+          'id="surfOnly" title=' in page, True)
+
+    # Search must bypass every filter — this is what makes an unsurfaced name
+    # reachable at all, and the search hint promises it.
+    check("search short-circuits the other filters",
+          "if(searching){" in page, True)
+    check("and the page promises that in the search hint",
+          "including names that\n    failed every screen" in page
+          or "failed every screen" in page, True)
+
+
+def test_daily_history_chart():
+    """Ten years of real daily closes, and a cursor that can name a day."""
+    idx = pd.date_range("2015-09-01", periods=2600, freq="B")
+    rng = np.random.default_rng(11)
+    close = pd.Series(40 * np.exp(np.cumsum(rng.normal(.0006, .015, 2600))),
+                      index=idx)
+    df = pd.DataFrame({"Open": close, "High": close * 1.01, "Low": close * .99,
+                       "Close": close, "Volume": np.full(2600, 1e6)})
+
+    h = ta.daily_history(df)
+    check("ten years are produced", h["years"], 10.0)
+    check("as real daily bars, not samples", h["n"], 2520)
+    check("closes and dates stay in step", len(h["c"]), len(h["dx"]))
+    check("dates are a base plus offsets, not 2520 strings",
+          (isinstance(h["d0"], str), all(isinstance(x, int) for x in h["dx"])),
+          (True, True))
+    check("offsets start at zero and increase", (h["dx"][0], h["dx"][-1] > 0),
+          (0, True))
+    # The point of shipping daily data at all: a cursor must be able to report
+    # a real close on a real day. Spot-check against the source series.
+    import datetime as _d
+    base = _d.date.fromisoformat(h["d0"])
+    for k in (0, len(h["c"]) // 3, len(h["c"]) - 1):
+        want = float(close.iloc[-2520:].iloc[k])
+        got = h["c"][k]
+        check(f"close at index {k} matches the source to 6 sig figs",
+              abs(got - want) / want < 1e-5, True)
+        d = base + _d.timedelta(days=h["dx"][k])
+        check(f"and its date matches", str(close.iloc[-2520:].index[k])[:10],
+              d.isoformat())
+
+    # Only closes travel. The averages are computed in the browser, which is
+    # both smaller and more accurate than shipping sampled ones.
+    check("only closes are shipped, not four series",
+          sorted(k for k in h if isinstance(h[k], list)), ["c", "dx"])
+
+    check("a short history yields nothing rather than a stub",
+          ta.daily_history(df.iloc[-30:]), None)
+    check("and an empty frame likewise", ta.daily_history(pd.DataFrame()), None)
+
+    # --- the per-ticker filenames -------------------------------------------
+    # Tickers carry dots, dashes and worse. A slug that dropped them would map
+    # two companies onto one file; one that passed a slash through would write
+    # outside the directory.
+    check("a plain ticker is itself", rn.safe_slug("AAPL"), "AAPL")
+    check("a dot is encoded, not dropped", rn.safe_slug("8058.T"), "8058_2ET")
+    check("a dash likewise", rn.safe_slug("BRK-B"), "BRK_2DB")
+    check("so the two cannot collide",
+          rn.safe_slug("8058.T") != rn.safe_slug("8058-T"), True)
+    check("and a path separator cannot escape the directory",
+          "/" not in rn.safe_slug("A/B") and "\\" not in rn.safe_slug("A\\B"),
+          True)
+    check("an empty ticker still yields a filename", rn.safe_slug(""), "_")
+
+    # --- writing -------------------------------------------------------------
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        res = {"AAPL": {"ticker": "AAPL", "market": "US"},
+               "8058.T": {"ticker": "8058.T", "market": "JP"},
+               "NOHIST": {"ticker": "NOHIST", "market": "US"}}
+        met = {"AAPL": {"history": h}, "8058.T": {"history": h},
+               "NOHIST": {}}
+        n = rn.write_history(res, met, td)
+        check("one file per company that has history", n, 2)
+        check("named by the slug",
+              sorted(os.listdir(os.path.join(td, "history"))),
+              ["8058_2ET.json", "AAPL.json"])
+        check("a name with no history gets no file",
+              os.path.exists(os.path.join(td, "history", "NOHIST.json")), False)
+        with open(os.path.join(td, "history", "AAPL.json")) as f:
+            back = yaml.safe_load(f)
+        check("and the file round-trips", back["n"], 2520)
+
+    # --- the snapshot contract ----------------------------------------------
+    # The deep-dive deploy replaces the whole site root. A sidecar directory
+    # saved by one function and forgotten by the other is how the price charts
+    # broke once already: page loads, table works, charts 404.
+    from src import library as lib
+    check("history is a tracked sidecar directory",
+          "history" in lib.SIDECAR_DIRS, True)
+    check("and so is series", "series" in lib.SIDECAR_DIRS, True)
+    src = open("src/library.py").read()
+    check("snapshot and restore both iterate the same list",
+          src.count("for name in SIDECAR_DIRS:"), 2)
+
+    # --- the page ------------------------------------------------------------
+    page = rn.TEMPLATE
+    check("the chart offers a ten-year range", 'data-range="10"' in page, True)
+    check("and shorter ones", all(f'data-range="{r}"' in page
+                                  for r in (1, 2, 5)), True)
+    check("history is fetched per ticker, lazily",
+          "function loadHistory(t)" in page, True)
+    check("the browser computes the averages from daily closes",
+          "function sma(arr, n)" in page, True)
+    check("there is a daily chart distinct from the sampled one",
+          "function dailyChart(h, ccy, years)" in page, True)
+    check("the cursor branch reads real closes",
+          "const daily = !!d.daily;" in page, True)
+    check("the tooltip labels the number as a close",
+          "close ${esc(d.ccy)}" in page, True)
+    # The averages must travel with the chart. Recomputing them from the
+    # visible slice leaves the 200-day empty on a one-year view — drawn on the
+    # chart and missing from the tooltip.
+    check("averages are shipped with the chart, not recomputed from the slice",
+          "const m20=d.m20||[], m50=d.m50||[], m200=d.m200||[];" in page, True)
+    check("the fallback to the sampled series is stated, not silent",
+          "Showing the sampled series" in page, True)
+
+
+def test_market_sentiment():
+    """TRIN, breadth divergence, the Seven, and the oversold screen."""
+    from src import marketsentiment as mkt
+
+    idx = pd.date_range("2024-01-01", periods=320, freq="B")
+
+    def fr(close, vol):
+        s = pd.Series(close, index=idx, dtype=float)
+        return pd.DataFrame({"Open": s, "High": s * 1.01, "Low": s * 0.99,
+                             "Close": s,
+                             "Volume": pd.Series(vol, index=idx, dtype=float)})
+
+    def tape(heavy, n_fall=25, skew=3.0):
+        """A deterministic tape: some names fall, some rise, and one side
+        carries `skew` times the volume of the other."""
+        out = {}
+        for i in range(60):
+            falling = i < n_fall
+            px = (100 - np.arange(320) * 0.05 if falling
+                  else 100 + np.arange(320) * 0.05)
+            hv = (falling and heavy == "dec") or (not falling and heavy == "adv")
+            out[f"T{i}"] = fr(px, np.full(320, 1e6 * (skew if hv else 1.0)))
+        return out
+
+    # --- TRIN ----------------------------------------------------------------
+    # The whole point of the Arms Index is that it weighs volume against
+    # breadth. Same advancer/decliner counts, opposite volume — opposite verdict.
+    t_dec = mkt.trin(tape("dec"))
+    t_adv = mkt.trin(tape("adv"))
+    check("heavy volume on the decliners reads oversold", t_dec["band"],
+          "oversold")
+    check("heavy volume on the advancers reads overbought", t_adv["band"],
+          "overbought")
+    check("and the counts were identical in both — only volume differed",
+          (t_dec["advancers"], t_dec["decliners"]),
+          (t_adv["advancers"], t_adv["decliners"]))
+    check("a 3x volume skew produces a 3.0 reading", round(t_dec["value"], 2),
+          3.0)
+    check("and its inverse the reciprocal", round(t_adv["value"], 3), 0.333)
+
+    # Symmetric volume is the arithmetic identity check: TRIN must be exactly 1.
+    even = {}
+    for i in range(60):
+        falling = i < 30
+        px = (100 - np.arange(320) * 0.05 if falling
+              else 100 + np.arange(320) * 0.05)
+        even[f"E{i}"] = fr(px, np.full(320, 1e6))
+    t_even = mkt.trin(even)
+    check("proportional volume gives exactly 1.00", round(t_even["value"], 3),
+          1.0)
+    check("which is neutral", t_even["band"], "neutral")
+    check("the smoothing window is the one asked for", t_even["ma_days"], 10)
+    check("the population caveat is always attached",
+          "not the ~3,000 NYSE issues" in t_even["caveat"], True)
+    check("and a percentile is offered as the better guide",
+          t_even.get("percentile") is not None, True)
+
+    # Guards. A breadth statistic over a handful of names is noise with a
+    # percent sign on it.
+    check("too few names refuses rather than returning a number",
+          mkt.trin({f"X{i}": fr([100] * 320, [1] * 320) for i in range(5)}
+                   )["available"], False)
+    check("and says why",
+          "at least 30" in mkt.trin({f"X{i}": fr([100] * 320, [1] * 320)
+                                     for i in range(5)})["reason"], True)
+    no_vol = {f"V{i}": pd.DataFrame({"Close": pd.Series(
+        np.full(320, 100.0), index=idx)}) for i in range(40)}
+    check("no volume column means no TRIN, not a guessed one",
+          mkt.trin(no_vol)["available"], False)
+
+    # --- breadth divergence --------------------------------------------------
+    steep_down = 200 - np.arange(260) * 0.5
+    bounce = {f"B{i}": fr(np.concatenate(
+        [steep_down, steep_down[-1] + np.arange(60) * 0.1]),
+        np.full(320, 1e6)) for i in range(50)}
+    b = mkt.breadth_ma(bounce)
+    check("a bounce off a steep downtrend puts the short term ahead",
+          b["state"], "short-term ahead")
+    check("nearly all are above the 50-day", b["above_50d"] >= 90, True)
+    check("and almost none above the 200-day", b["above_200d"] <= 10, True)
+    check("participation is correctly called narrow", b["health"], "narrow")
+
+    steep_up = 100 + np.arange(260) * 0.5
+    pullback = {f"C{i}": fr(np.concatenate(
+        [steep_up, steep_up[-1] - np.arange(60) * 0.35]),
+        np.full(320, 1e6)) for i in range(50)}
+    b2 = mkt.breadth_ma(pullback)
+    check("a pullback inside an uptrend puts the short term behind",
+          b2["state"], "short-term behind")
+    check("with long-term participation still broad", b2["health"], "broad")
+
+    steady = {f"D{i}": fr(100 + np.arange(320) * 0.1, np.full(320, 1e6))
+              for i in range(50)}
+    check("a steady trend shows no divergence",
+          mkt.breadth_ma(steady)["state"], "aligned")
+    check("breadth needs 200 days of history to speak",
+          mkt.breadth_ma({})["available"], False)
+
+    # --- Magnificent Seven ---------------------------------------------------
+    m = {t: {"return_3m": 0.05, "return_12m": 0.2, "rsi_14": 55.0,
+             "price_above_sma200": 1, "pct_below_52w_high": 0.02,
+             "market_cap_usd": 1e12} for t in mkt.MAG7}
+    m7 = mkt.mag7(m)
+    check("all seven are reported", m7["n"], 7)
+    check("with none missing", m7["missing"], [])
+    check("and the count above the 200-day", m7["n_above_200d"], 7)
+    check("an Asia-only run says so rather than showing an empty table",
+          mkt.mag7({})["available"], False)
+    # Membership is FIXED. Deriving it from market cap would silently change
+    # who is in it and make one quarter incomparable with the next.
+    check("membership is the named seven, not a screen",
+          sorted(mkt.MAG7), ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA",
+                             "TSLA"])
+
+    # --- oversold, with the sector-shock flag --------------------------------
+    # Four healthcare names down 60% together, one industrial down alone. The
+    # flag must fire on the sector and not on the lone name.
+    res, met = {}, {}
+    for i in range(10):
+        t = f"H{i}"
+        crash = i < 4
+        res[t] = {"ticker": t, "name": f"Health {i}", "sector": "Healthcare",
+                  "market": "US"}
+        met[t] = {"pct_below_52w_high": 0.60 if crash else 0.05,
+                  "revenue_growth_1y": 0.05, "eps_growth_1y": 0.03,
+                  "free_cash_flow_ttm": 1e9, "net_debt_to_ebitda": 1.0,
+                  "loss_years_in_10": 0, "accruals_ratio": 0.05}
+    for i in range(10):
+        t = f"I{i}"
+        res[t] = {"ticker": t, "name": f"Indl {i}", "sector": "Industrials",
+                  "market": "US"}
+        met[t] = {"pct_below_52w_high": 0.70 if i == 0 else 0.03,
+                  "revenue_growth_1y": -0.60, "eps_growth_1y": -0.80,
+                  "free_cash_flow_ttm": -5e8, "net_debt_to_ebitda": 7.0,
+                  "loss_years_in_10": 6, "accruals_ratio": 0.05}
+    ov = mkt.oversold(res, met)
+    hits = {r["ticker"]: r for r in ov["rows"]}
+    check("only names down more than half are listed", ov["n"], 5)
+    check("the sector that fell together is flagged", ov["sectors_shocked"],
+          ["Healthcare"])
+    check("so its names carry the sector-shock marker",
+          hits["H0"]["sector_shock"], True)
+    # The lone faller is the control: one company breaking is not a shock.
+    check("but a name that fell alone does not",
+          hits["I0"]["sector_shock"], False)
+    check("healthy accounts behind a big fall are flagged as intact",
+          hits["H0"]["accounts_intact"], True)
+    check("and collapsing ones as explaining the fall",
+          hits["I0"]["accounts_intact"], False)
+    check("the reason is spelled out rather than left to a chip",
+          "accounts tests passed" in hits["H0"]["accounts_note"], True)
+    # A name with no fundamentals is neither exonerated nor condemned.
+    res["Z"] = {"ticker": "Z", "name": "Nofunda", "sector": "Energy"}
+    met["Z"] = {"pct_below_52w_high": 0.8}
+    ovz = mkt.oversold(res, met)
+    zr = next(r for r in ovz["rows"] if r["ticker"] == "Z")
+    check("missing fundamentals give no verdict, not a false one",
+          zr["accounts_intact"], None)
+    check("and the row explains that",
+          "neither explained nor unexplained" in zr["accounts_note"], True)
+
+    # --- cross asset ---------------------------------------------------------
+    xa = mkt.cross_asset({}, b2, t_dec,
+                         {"signals": {"curve_10y2y": {"value": -0.4},
+                                      "hy_oas": {"value": 6.5}}},
+                         {"rows": [{"name": "Gold", "return_3m": 0.12}]})
+    reads = {r["asset"]: r["reads"] for r in xa["rows"]}
+    check("an inverted curve with wide spreads reads cautious",
+          reads["Bonds & credit"], "cautious")
+    check("gold up 12% reads constructive", reads["Precious metals"],
+          "constructive")
+    check("every row carries the evidence behind its label",
+          all(r["evidence"] for r in xa["rows"]), True)
+    check("disagreement between classes is surfaced, not averaged away",
+          xa["disagree"], True)
+    # TRIN is contrarian, so an oversold reading must lean constructive — and
+    # it must count, or "Reads" would be summarising evidence it ignored.
+    stocks_ev = next(r for r in xa["rows"] if r["asset"] == "Stocks")
+    check("TRIN appears in the stocks evidence",
+          any("TRIN" in e for e in stocks_ev["evidence"]), True)
+
+    # --- render --------------------------------------------------------------
+    built = mkt.build(tape("dec"), m, res,
+                      debt={"signals": {"curve_10y2y": {"value": -0.4}}},
+                      commodities={"rows": [{"name": "Gold", "return_3m": 0.1}]})
+    tab, body = rn._market_sentiment_panel(built)
+    check("a tab button is produced", 'data-view="sentiment"' in tab, True)
+    for want in ("Arms Index", "Market breadth", "Magnificent Seven",
+                 "Down more than half", "Across the three asset classes"):
+        check(f"the tab contains the {want} panel", want in body, True)
+    check("the TRIN population caveat reaches the page",
+          "not the ~3,000 NYSE issues" in body, True)
+    check("the tab states what it cannot do",
+          "does not read the news" in body, True)
+    check("and that it is not advice", "Not investment advice" in body, True)
+    check("no tab at all with no data", rn._market_sentiment_panel({}), ("", ""))
+
+    page = rn.TEMPLATE
+    check("the template has the sentiment view", 'id="view-sentiment"' in page,
+          True)
+    check("and its slots", "__SENTTAB__" in page and "__SENTPANEL__" in page,
+          True)
+    check("the switcher handles three views by name",
+          "VIEWS={screen:'view-screen'" in page, True)
+
+
+def test_sentiment_report_tool():
+    """The report restates computed facts; it never invents them."""
+    import json as _json
+    import subprocess
+    from tools import sentiment_report as sr
+
+    check("1st/2nd/3rd/82nd are formed correctly",
+          [sr._ord(n) for n in (1, 2, 3, 4, 11, 12, 13, 21, 82, 100)],
+          ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "82nd",
+           "100th"])
+
+    facts = {"asof": "2026-08-22 14:00 UTC", "universe_size": 44,
+             "market_sentiment": {
+                 "breadth": {"available": True, "names": 44, "above_50d": 91.0,
+                             "above_200d": 40.0, "gap": 51.0,
+                             "state": "short-term ahead", "health": "mixed",
+                             "note": "N", "divergence_at": 15.0,
+                             "n_above_200d": 18, "caveat": "C"},
+                 "trin": {"available": True, "value": 1.55, "ma_days": 10,
+                          "band": "oversold", "percentile": 82.0,
+                          "meaning": "M", "caveat": "TRIN caveat",
+                          "raw_today": 1.6, "advancers": 24, "decliners": 20,
+                          "overbought_at": 0.8, "oversold_at": 1.2,
+                          "dropped_days": 1},
+                 "mag7": {"available": True, "n": 1, "n_above_200d": 1,
+                          "rows": [{"ticker": "AAPL", "name": "Apple",
+                                    "return_3m": 0.05, "return_12m": 0.2,
+                                    "rsi": 55.0, "pct_below_high": 0.02}],
+                          "missing": [], "note": "N"},
+                 "oversold": {"available": True, "n": 1,
+                              "sectors_shocked": ["Healthcare"], "note": "N",
+                              "rows": [{"ticker": "MRNA", "off_high": 0.6,
+                                        "sector": "Healthcare",
+                                        "sector_shock": True,
+                                        "accounts_intact": True,
+                                        "accounts_note": "6 of 6"}]},
+                 "cross_asset": {"available": True, "note": "N", "links": [],
+                                 "rows": [{"asset": "Stocks",
+                                           "reads": "constructive",
+                                           "evidence": ["e1"]}]}}}
+    body = sr.deterministic_section(facts)
+    for want in ("91% of 44 names", "82nd percentile", "TRIN caveat",
+                 "AAPL", "MRNA", "Healthcare"):
+        check(f"the computed section states {want}", want in body, True)
+    check("and says plainly that no model wrote it",
+          "No part of this section is" in body, True)
+
+    # The degraded path is the one that must never break: no key, no network,
+    # still a usable report that says why the narrative is absent.
+    tmp = "/tmp/_sr_facts.json"
+    with open(tmp, "w") as f:
+        _json.dump(facts, f)
+    out = "/tmp/_sr_report.md"
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    r = subprocess.run([sys.executable, "-m", "tools.sentiment_report",
+                        "--facts", tmp, "--out", out],
+                       capture_output=True, text=True, cwd=os.getcwd(), env=env)
+    check("it runs with no API key at all", r.returncode, 0)
+    txt = open(out).read()
+    check("and still produces the computed indicators", "82nd percentile" in txt,
+          True)
+    check("while saying why the narrative is missing",
+          "No `ANTHROPIC_API_KEY` is configured" in txt, True)
+    check("a missing facts file is refused rather than invented",
+          subprocess.run([sys.executable, "-m", "tools.sentiment_report",
+                          "--facts", "/tmp/_nope.json", "--out", out],
+                         capture_output=True, text=True,
+                         cwd=os.getcwd()).returncode, 1)
+
+    # The system prompt is the only thing standing between this feature and
+    # fabricated market data. Assert its load-bearing clauses exist.
+    for clause in ("NEVER state a market statistic",
+                   "no reliable memory of market",
+                   "must carry an inline source",
+                   "Attributing a cause without a source is fabrication",
+                   "not advice"):
+        check(f"the system prompt forbids/requires: {clause[:38]}",
+              clause in sr.SYSTEM, True)
+
+
+def test_owner_holdings_tab():
+    """The holdings tab renders the FILING, not the screener's own rows."""
+    from src import owners as ow
+
+    cfg = ow.load("config/owners.yml")
+    panels = ow.panel(cfg)
+    check("one panel per owner", sorted(p["key"] for p in panels), ["BK", "OT"])
+    bk = next(p for p in panels if p["key"] == "BK")
+    ot = next(p for p in panels if p["key"] == "OT")
+
+    check("Berkshire's whole book is carried", len(bk["positions"]), 29)
+    check("and Oaktree's", len(ot["positions"]), 49)
+    check("largest first", bk["positions"][0]["ticker"], "AAPL")
+    check("and genuinely sorted by value",
+          all(bk["positions"][i]["value"] >= bk["positions"][i + 1]["value"]
+              for i in range(len(bk["positions"]) - 1)), True)
+
+    # Every row needs a company name or the table is a wall of tickers.
+    for p in panels:
+        missing = [r["ticker"] for r in p["positions"] if not r.get("name")
+                   or r["name"] == r["ticker"]]
+        check(f"{p['key']}: every holding has a company name", missing, [])
+
+    # "Bought" means money IN. A trim is the opposite and a hold is not a
+    # purchase; including either would make the section meaningless.
+    check("purchases are new positions and additions only",
+          {b["change"] for b in bk["buys"]}, {"new", "add"})
+    check("Berkshire's single new name is in there",
+          "DHI" in [b["ticker"] for b in bk["buys"]], True)
+    check("and the big Alphabet add leads it", bk["buys"][0]["ticker"], "GOOGL")
+    check("a trimmed name is NOT a purchase",
+          "COF" in [b["ticker"] for b in bk["buys"]], False)
+    check("nor is an unchanged one",
+          "AAPL" in [b["ticker"] for b in bk["buys"]], False)
+    check("Oaktree bought more names than Berkshire",
+          len(ot["buys"]) > len(bk["buys"]), True)
+
+    check("exits are carried separately", [e["ticker"] for e in bk["exited"]],
+          ["STZ"])
+    check("with the prior size", bk["exited"][0]["value_prior"], 94934)
+    check("the Japanese stakes ride along as manual holdings",
+          sorted(m["ticker"] for m in bk["manual"]),
+          ["8001.T", "8002.T", "8031.T", "8053.T", "8058.T"])
+
+    # --- render --------------------------------------------------------------
+    # `covered` deliberately holds only a few tickers: the tab must render the
+    # whole book regardless, marking what the screener cannot reach. Building
+    # it from the page's rows would show half of Oaktree and call it the book.
+    covered = {"AAPL", "GOOGL", "TRMD"}
+    tab, body = rn._owner_holdings_panel(panels, covered)
+    check("a tab button is produced", 'data-view="owners"' in tab, True)
+    check("named for both managers",
+          "Berkshire Hathaway" in tab and "Oaktree" in tab, True)
+
+    for t in ("AAPL", "DHI", "STZ", "TRMD", "SE", "CX", "8058.T"):
+        check(f"{t} appears in the tab", f">{t}<" in body, True)
+    check("covered names link into the screener", '?q=AAPL' in body, True)
+    check("uncovered names do NOT get a dead link", '?q=CX' in body, False)
+    check("and are marked as outside the universe", 'class="uncov"' in body, True)
+    check("the tab says how many are unreachable",
+          "not in the screener universe" in body, True)
+
+    check("purchases are shown before the full list",
+          body.find("Bought this quarter") < body.find("All 29 holdings"), True)
+    check("the exits table says its figures are last quarter's",
+          "previous</b> quarter" in body or "previous</b> quarter&rsquo;s" in body,
+          True)
+    check("the 13F caveat is repeated in this view",
+          "not a recommendation" in body, True)
+    check("values scale rather than rounding to $0m",
+          "$581k" in body, True)          # Berkshire's D.R. Horton starter
+
+    check("no tab at all when there are no owners",
+          rn._owner_holdings_panel([], set()), ("", ""))
+
+    # --- the page wiring -----------------------------------------------------
+    page = rn.TEMPLATE
+    check("the template has both view containers",
+          'id="view-screen"' in page and 'id="view-owners"' in page, True)
+    check("and slots for the tab and its body",
+          "__OWNERTAB__" in page and "__OWNERPANEL__" in page, True)
+    check("the switcher is wired", "document.querySelectorAll('.vtab')" in page,
+          True)
+    check("the view survives a shared link", "p.set('view','owners')" in page,
+          True)
+    check("and is restored from one", "p.get('view')==='owners'" in page, True)
+    check("a ticker click searches instead of reloading the page",
+          "e.preventDefault();" in page, True)
+
+
 def test_owner_weekly_sweep():
     """The weekly run must do real work in the 11 weeks out of 13 with no new 13F.
 
@@ -5872,6 +6563,12 @@ if __name__ == "__main__":
     test_biotech_healthcare_category()
     test_owner_badges()
     test_owner_auto_update()
+    test_nyse_layer()
+    test_unsurfaced_names_are_findable()
+    test_daily_history_chart()
+    test_market_sentiment()
+    test_sentiment_report_tool()
+    test_owner_holdings_tab()
     test_owner_weekly_sweep()
     test_owner_verify_gate()
     test_nasdaq_coverage()

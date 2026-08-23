@@ -756,7 +756,7 @@ white-space:nowrap;letter-spacing:.03em;text-transform:uppercase}
    indecision candle has no direction, so "confirmed" is the wrong question
    rather than an unanswered one, and the chip should not look like a pending
    one. */
-.st.n\/a{background:var(--panel);color:var(--tx3);border:1px dashed var(--line)}
+.st.n\\/a{background:var(--panel);color:var(--tx3);border:1px dashed var(--line)}
 .verdict{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:9px}
 .verdict .big{font-size:15px;font-weight:700}
 .verdict .big.buy{color:var(--ok)} .verdict .big.sell{color:var(--bad)}
