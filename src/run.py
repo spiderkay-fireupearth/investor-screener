@@ -612,6 +612,55 @@ def auto_themes(rec: CompanyRecord, rules: Dict[str, List[str]]) -> List[str]:
     return [name for name, secs in rules.items() if sec in secs]
 
 
+def merge_owner_holdings(owners_cfg: Dict[str, Any],
+                         resolved: Dict[str, List[str]],
+                         markets: List[str]) -> Dict[str, List[str]]:
+    """Pull every badged holding into the universe, the way themes are pulled.
+
+    IF YOU BADGE IT, THE READER MUST BE ABLE TO OPEN IT. Without this the
+    holdings tab lists forty-nine Oaktree positions and the screener can only
+    show the handful that happened to clear a turnover floor — the rest are
+    greyed out, and the honest note explaining why does not make them any more
+    useful. Most of that book is small and mid-cap by design; a liquidity cut
+    tuned for "what is worth screening in general" was never going to admit
+    "what this specific manager actually owns", which is precisely the gap
+    always_include exists to close.
+
+    This costs roughly eighty extra names, not the six hundred that lowering
+    the NYSE floor to match Nasdaq's would have cost — targeted where a blanket
+    change would have been broad and slow.
+
+    Deduplicated against everything already resolved, and skipped for markets
+    this run does not cover, so the US job does not reach for Tokyo tickers.
+    """
+    if not owners_cfg:
+        return resolved
+    wanted: Dict[str, List[str]] = {}
+    for _key, block in owners_cfg.items():
+        for group in ("positions", "manual"):
+            for tkr in (block.get(group) or {}):
+                t = str(tkr).upper()
+                mkt = next((m for suf, m in SUFFIX_MARKET.items()
+                            if t.endswith(suf)), "US")
+                wanted.setdefault(mkt, []).append(t)
+    added_total = 0
+    for mkt, tickers in wanted.items():
+        if mkt not in markets:
+            continue
+        pool = resolved.setdefault(mkt, [])
+        have = {t.upper() for t in pool}
+        for t in tickers:
+            if t not in have:
+                pool.append(t)
+                have.add(t)
+                added_total += 1
+    if added_total:
+        log.info("Owner holdings: %d new name(s) pulled into the universe so "
+                 "every badged position can be opened",
+                 added_total)
+    return resolved
+
+
 def merge_themes(universe_cfg: Dict, resolved: Dict[str, List[str]],
                  markets: List[str]) -> Dict[str, List[str]]:
     """Union thematic tickers into whichever market they list on.
@@ -930,10 +979,24 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         except Exception as e:                       # noqa: BLE001
             log.warning("CPI history failed: %s", e)
 
+    # Disclosed institutional owners. Loaded HERE, before the universe is
+    # resolved, because their holdings are pulled into it — a badge on a row
+    # the screener cannot open is only half a feature.
+    owners_cfg = own.load(os.environ.get("OWNERS_CONFIG", "config/owners.yml"))
+    if owners_cfg:
+        log.info("Owner badges: %s", ", ".join(
+            f"{b.get('badge', k)} {len(b.get('positions') or {})} positions"
+            f" (as of {b.get('period') or '?'})"
+            for k, b in owners_cfg.items()))
+
     listing_by_ticker: Dict[str, str] = {}
-    tickers_by_market = merge_themes(
-        universe_cfg,
-        resolve_universe(universe_cfg, markets, listing_by_ticker), markets)
+    tickers_by_market = merge_owner_holdings(
+        owners_cfg,
+        merge_themes(
+            universe_cfg,
+            resolve_universe(universe_cfg, markets, listing_by_ticker),
+            markets),
+        markets)
 
     # Nasdaq coverage beyond the Nasdaq-100, deduplicated against everything
     # already resolved. Done here rather than in resolve_universe because the
@@ -991,25 +1054,25 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         except Exception as e:                    # noqa: BLE001
             log.warning("NYSE extra coverage failed, continuing without it: %s", e)
 
+    _owner_tickers = {str(t).upper()
+                      for _b in (owners_cfg or {}).values()
+                      for _g in ("positions", "manual")
+                      for t in (_b.get(_g) or {})}
     for _mkt, _lst in tickers_by_market.items():
         for _t in _lst:
-            listing_by_ticker.setdefault(str(_t).upper(), "Theme list")
+            _u = str(_t).upper()
+            # An owner holding that no index supplied is here BECAUSE a tracked
+            # manager owns it. Labelling it "Theme list" would hide the reason.
+            listing_by_ticker.setdefault(
+                _u, "Owner holding" if _u in _owner_tickers else "Theme list")
     _lcounts: Dict[str, int] = {}
     for _v in listing_by_ticker.values():
         _lcounts[_v] = _lcounts.get(_v, 0) + 1
     log.info("Listings: %s", ", ".join(f"{k} {v}" for k, v in
                                        sorted(_lcounts.items(), key=lambda kv: -kv[1])))
 
-    # Disclosed institutional owners. Static config, no network, so this cannot
-    # slow or break a refresh; a missing file simply turns the badges off.
-    owners_cfg = own.load(os.environ.get("OWNERS_CONFIG", "config/owners.yml"))
     owners_by_ticker = own.by_ticker(owners_cfg)
     owner_exits_by_ticker = own.exits_by_ticker(owners_cfg)
-    if owners_cfg:
-        log.info("Owner badges: %s", ", ".join(
-            f"{b.get('badge', k)} {len(b.get('positions') or {})} positions"
-            f" (as of {b.get('period') or '?'})"
-            for k, b in owners_cfg.items()))
 
     themes_by_ticker = theme_map(universe_cfg)
     sector_rules = sector_themes(universe_cfg)

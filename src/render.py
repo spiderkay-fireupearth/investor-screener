@@ -2253,7 +2253,9 @@ function detail(r){
     if(r.syn.what) h+=`<div class="what"><b>What it is.</b> ${esc(r.syn.what)}</div>`;
     h+=(r.syn.numbers||[]).map(x=>`<p>${esc(x)}</p>`).join('');
     h+='<div class="src">Written from this row&rsquo;s own figures'
-      +(r.syn.what_source==='feed'
+      +(r.syn.what_source==='unavailable'
+        ? ' — the profile feed returned nothing for this company on the last run'
+        : r.syn.what_source==='feed'
         ? ' plus the company description carried by the data feed'
         : (r.syn.what_source==='classification'
            ? ' — the feed carries no business description for this name, only its sector'

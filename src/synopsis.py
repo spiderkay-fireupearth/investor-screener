@@ -413,6 +413,16 @@ def build(res: Dict[str, Any], metrics: Dict[str, Any],
         elif sector or industry:
             desc = f"Classified by the feed as {industry or sector}."
             what_source = "classification"
+        else:
+            # Neither a description nor a classification came back. Say so.
+            # Omitting the section entirely reads as "this company needs no
+            # explanation", when the truth is that the profile fetch failed —
+            # usually to a rate limit — and the next run will probably have it.
+            desc = ("No business description was returned for this company on "
+                    "the last refresh, and no sector classification either. "
+                    "Every number below is still computed from its own filings "
+                    "and prices; only the description is missing.")
+            what_source = "unavailable"
 
     numbers = [_verdict(res, fw, labels, total), _valuation(m)]
     for fn in (_quality, _price_action):
