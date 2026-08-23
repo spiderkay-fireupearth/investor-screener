@@ -12,7 +12,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import synopsis as syn
 
@@ -505,6 +505,47 @@ def write_series(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     return counts
 
 
+def safe_slug(ticker: str) -> str:
+    """A filename that survives every ticker this app holds.
+
+    Tickers contain dots (8058.T), dashes (BRK-B), and on some feeds carets and
+    slashes. A slug that let a slash through would write outside the directory,
+    and one that collapsed 8058.T and 8058-T onto the same name would serve one
+    company's decade under the other's ticker. Both are avoided by allowing
+    only letters, digits and underscore, and by encoding everything else as its
+    hex code rather than dropping it — dropping is what creates collisions.
+    """
+    out = []
+    for ch in (ticker or "").upper():
+        out.append(ch if (ch.isalnum() and ch.isascii()) else f"_{ord(ch):02X}")
+    return "".join(out) or "_"
+
+
+def write_history(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
+                  out_dir: str) -> int:
+    """Ten years of daily closes, one file per company.
+
+    Per TICKER, not per market, and that is the whole design. Daily history for
+    a thousand names is tens of megabytes; nobody opens a thousand drawers. One
+    company's decade is a small file fetched at the moment it is wanted, and
+    never fetched at all for the rows a reader scrolls past.
+    """
+    dest = os.path.join(out_dir, "history")
+    os.makedirs(dest, exist_ok=True)
+    n = 0
+    for ticker, r in results.items():
+        m = metrics.get(ticker) or r.get("metrics") or {}
+        h = m.get("history")
+        if not h:
+            continue
+        with open(os.path.join(dest, f"{safe_slug(ticker)}.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump(h, f, separators=(",", ":"), default=str)
+        n += 1
+    log.info("Wrote %d daily-history files to %s", n, dest)
+    return n
+
+
 TEMPLATE = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -785,6 +826,75 @@ border-radius:0 9px 9px 0;padding:12px 15px;margin-bottom:13px;font-size:13px;li
 padding:8px 11px;margin-bottom:12px;font-size:12px;color:var(--warn)}
 .note{background:var(--panel);border-left:3px solid var(--acc);border-radius:0 8px 8px 0;
 padding:11px 15px;margin:14px 0;font-size:13px;color:var(--tx2)}
+/* The view switcher. Sits directly under the title so it reads as two views of
+   one app rather than a control buried among the filters. */
+.viewtabs{display:flex;gap:4px;margin:16px 0 2px;border-bottom:1px solid var(--line)}
+.vtab{background:none;border:none;border-bottom:2px solid transparent;color:var(--tx2);
+ font:600 13px/1 inherit;padding:9px 14px;cursor:pointer;white-space:nowrap;
+ border-radius:6px 6px 0 0}
+.vtab:hover{color:var(--tx);background:var(--panel)}
+.vtab.on{color:var(--acc);border-bottom-color:var(--acc)}
+/* Percentage bars for breadth. Two bars, direct-labelled, no legend box —
+   a key would make the reader hold a colour mapping for two values. */
+.rng{float:right;display:inline-flex;gap:3px;margin-left:10px}
+.rbtn{background:none;border:1px solid var(--line);color:var(--tx3);
+ font:600 10.5px/1 inherit;padding:4px 8px;border-radius:5px;cursor:pointer}
+.rbtn:hover{color:var(--tx);border-color:var(--tx3)}
+.rbtn.on{color:var(--acc);border-color:var(--acc)}
+.rbtn:disabled{opacity:.35;cursor:not-allowed}
+.pbrow{display:flex;align-items:center;gap:12px;margin:9px 0}
+.pbl{flex:0 0 210px;font-size:12.5px;color:var(--tx2)}
+.pbtrack{flex:1;height:14px;background:var(--panel2);border-radius:7px;
+ overflow:hidden;border:1px solid var(--line)}
+.pbfill{display:block;height:100%;border-radius:7px}
+.pbv{flex:0 0 46px;text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
+.bignum{display:flex;align-items:baseline;gap:12px;margin:10px 0 4px}
+.bignum .bv{font-size:34px;font-weight:700;letter-spacing:-.02em;
+ font-variant-numeric:tabular-nums}
+.bignum .bl{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--tx3)}
+.bv.t-oversold{color:var(--ok)} .bv.t-overbought{color:var(--warn)}
+.bv.t-neutral{color:var(--tx)}
+.lean{font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;
+ border:1px solid;white-space:nowrap}
+.lean.l-constructive{color:var(--ok);border-color:var(--ok)}
+.lean.l-cautious{color:var(--warn);border-color:var(--warn)}
+.lean.l-neutral{color:var(--tx3);border-color:var(--tx3)}
+.shock{font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;
+ color:var(--bad);border:1px solid var(--bad);margin-right:5px}
+.ownpanel{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+ padding:18px 20px;margin:18px 0}
+.ownpanel h3{margin:0 0 4px;font-size:16px;display:flex;align-items:center;gap:8px;
+ flex-wrap:wrap}
+.omgr{font-size:12px;font-weight:500;color:var(--tx3)}
+.ometa{font-size:12.5px;color:var(--tx2);margin-bottom:6px;line-height:1.6}
+h4.oh{margin:20px 0 6px;font-size:13px;letter-spacing:.02em;display:flex;
+ align-items:baseline;gap:9px;flex-wrap:wrap}
+h4.oh span{font-size:11px;font-weight:500;color:var(--tx3);letter-spacing:0}
+/* Wide tables scroll inside their own box; the page body must never scroll
+   sideways on a phone. */
+.otwrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.otab{width:100%;border-collapse:collapse;font-size:12.5px;min-width:560px}
+.otab th{text-align:left;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+ color:var(--tx3);padding:6px 10px 6px 0;border-bottom:1px solid var(--line);font-weight:600}
+.otab td{padding:6px 10px 6px 0;border-bottom:1px solid var(--line);color:var(--tx2)}
+.otab td.num{text-align:right;font-variant-numeric:tabular-nums}
+.otab th.num{text-align:right}
+.otab .tkc{font-weight:700;color:var(--tx)}
+.otab .tkc a{color:var(--acc);text-decoration:none}
+.otab .tkc a:hover{text-decoration:underline}
+/* Not in the universe: legible, but visibly outside the app's reach, and with
+   no link to promise a click that would do nothing. */
+.otab tr.uncov td{opacity:.62}
+.otab tr.uncov .tkc{color:var(--tx3)}
+/* The "your filter is hiding things" banner. Styled as information rather than
+   as a warning: nothing is wrong, the reader simply cannot see the cause of a
+   gap they have noticed. */
+.hidden-note{background:var(--panel);border:1px solid var(--line);
+ border-left:3px solid var(--acc);border-radius:0 8px 8px 0;padding:10px 15px;
+ margin:0 0 14px;font-size:12.5px;color:var(--tx2);line-height:1.6}
+.hidden-note b{color:var(--tx)}
+.hidden-note .linkbtn{margin-left:4px}
+.hn-or{display:inline-block;margin-left:2px}
 .tagrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
 .tag.lst{border-color:var(--acc);color:var(--acc)}
 .tag{font-size:10.5px;padding:2px 8px;border-radius:20px;background:var(--panel2);
@@ -839,6 +949,13 @@ padding:11px 15px;margin:14px 0;font-size:13px;color:var(--tx2)}
 <h1>Value + Technical Screener</h1>
 <div class="meta">__COVERAGE__ &nbsp;·&nbsp; generated __TS__ &nbsp;·&nbsp; <a href="deepdive/">Deep dives &rarr;</a></div>
 
+<div class="viewtabs" id="viewtabs">
+  <button class="vtab on" data-view="screen">Screener</button>
+  __SENTTAB__
+  __OWNERTAB__
+</div>
+
+<div id="view-screen">
 <div class="statbar" id="statbar"></div>
 __GATE__
 
@@ -860,7 +977,7 @@ __GATE__
   <button class="chip" id="grwOnly" title="Priced on what it will earn rather than on what it owns — technology and related industries carry a growth tilt by sector">Growth</button>
   <button class="chip" id="bOnly" title="Buffett's three business tenets: inside the circle of competence you declared, showing the footprint of a durable moat, and with a consistent operating history">B &mdash; business tenets</button>
   <button class="chip" id="rfxOnly" title="Soros stage DE or EF — price rising through an earnings setback, or expectations run far ahead of reality">Reflexive risk</button>
-  <button class="chip on" id="surfOnly">Surfaced only</button>
+  <button class="chip on" id="surfOnly" title="ON: show only names that cleared at least one screen. OFF: show every name the run fetched, each with its per-test results. A name can be fully covered and still not surface — that is what most of the universe does on any given day.">Surfaced only</button>
   <span class="sep"></span>
   <span class="searchwrap">
     <input type="search" id="q" placeholder="Search ticker or name — e.g. MSFT, DBS, 0700">
@@ -869,6 +986,8 @@ __GATE__
   <div class="searchnote">Search looks across the whole universe, including names that
     failed every screen — so you can always check a stock you already hold.</div>
 </div>
+
+<div class="hidden-note" id="hiddenNote" style="display:none"></div>
 
 <table id="tbl"><thead><tr>
   <th>Ticker</th><th>Name</th><th>Market</th><th class="num">Price</th><th class="num">Mkt cap</th>
@@ -883,6 +1002,10 @@ test could not be evaluated — data was missing — which under the default str
 counts as a fail. Faded means the framework doesn't apply (Greenblatt and Klarman skip
 financials, REITs and utilities, where EV/EBIT and return-on-capital are meaningless).
 Click any row to see exactly which test failed and on what value.</div>
+</div>
+
+<div id="view-sentiment" style="display:none">__SENTPANEL__</div>
+<div id="view-owners" style="display:none">__OWNERPANEL__</div>
 
 <div class="foot">Fundamentals: SEC EDGAR XBRL (US, audited filings) · Yahoo Finance (SGX, HKEX, SET, IDX).
 Prices: Yahoo Finance, split and dividend adjusted, computed on each market's own trading calendar.
@@ -1006,6 +1129,11 @@ function loadUrl(){
   if(li){ fList=li;
     document.querySelectorAll('[data-listing]').forEach(b=>
       b.classList.toggle('on', b.dataset.listing===li)); }
+  const wantView=p.get('view');
+  if(wantView){
+    const t=document.querySelector('.vtab[data-view="'+wantView+'"]');
+    if(t) t.click();
+  }
   const ow=p.get('owner');
   if(ow){ fOwner=ow;
     document.querySelectorAll('[data-owner]').forEach(b=>
@@ -1099,10 +1227,73 @@ function fillPriceCharts(root){
         return;
       }
       const row = DATA.find(x => x.ticker === t) || {};
-      const chg = ((sp.last / sp.first - 1) * 100);
-      head.textContent = `${sp.years}y · ${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%`
-        + ` · ${row.currency || ''} ${sp.lo} – ${sp.hi}`;
-      slot.innerHTML = priceChart(sp, row.currency);
+      // One payload, three views. The series covers five years; a shorter
+      // range is a slice of it, so switching costs no fetch and the whole
+      // history is already in memory when the drawer opens.
+      // Two sources, in preference order. The daily file is the real thing —
+      // every close, so the cursor can name a day. The sampled series is the
+      // fallback for a market that has not re-run since this was added, and
+      // the chart says which one it is drawing rather than looking identical
+      // either way.
+      const N = sp.px.length;
+      const drawSampled = (years) => {
+        const span = sp.years || 5;
+        const from = (years >= span) ? 0
+          : Math.max(0, Math.round(N - (N - 1) * (years / span)) - 1);
+        const seg = sp.px.slice(from);
+        const chg = (seg[seg.length - 1] / seg[0] - 1) * 100;
+        const toReal = v => v / 100 * sp.first;
+        const lo = Math.min.apply(null, seg), hi = Math.max.apply(null, seg);
+        head.textContent = `${Math.min(years, span)}y · `
+          + `${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%`
+          + ` · ${row.currency || ''} ${fmtPx(toReal(lo))} – ${fmtPx(toReal(hi))}`;
+        slot.innerHTML = priceChart(sp, row.currency, from);
+      };
+      const drawDaily = (h, years) => {
+        const span = h.years || 10;
+        const yrs = Math.min(years, span);
+        const from = (years >= span) ? 0
+          : Math.max(0, h.c.length - Math.round(h.c.length * (years / span)));
+        const seg = h.c.slice(from);
+        // Change and range are computed over the SLICE. A ten-year change
+        // printed above a one-year chart is the kind of mismatch a reader
+        // carries away as a fact.
+        const chg = (seg[seg.length - 1] / seg[0] - 1) * 100;
+        head.textContent = `${yrs}y · ${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%`
+          + ` · ${row.currency || ''} `
+          + `${fmtPx(Math.min.apply(null, seg))} – ${fmtPx(Math.max.apply(null, seg))}`;
+        slot.innerHTML = dailyChart(h, row.currency, years);
+      };
+      let hist = null, range = 10;
+      const draw = () => hist ? drawDaily(hist, range) : drawSampled(range);
+      card.querySelectorAll('.rbtn').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();          // the row itself toggles open on click
+          card.querySelectorAll('.rbtn').forEach(x => x.classList.remove('on'));
+          btn.classList.add('on');
+          range = parseFloat(btn.dataset.range);
+          draw();
+        };
+      });
+      drawSampled(Math.min(range, sp.years || 5));   // instant, from the shard
+      loadHistory(t).then(h => {
+        if(h && h.c && h.c.length > 30){ hist = h; draw(); }
+        else {
+          // Say so, rather than silently serving a coarser chart that looks
+          // the same. The cursor's precision is the difference.
+          const cap = document.createElement('div');
+          cap.className = 'cap';
+          cap.innerHTML = 'Showing the sampled series — the daily file for this '
+            + 'row has not been written yet, so the cursor reads sampled points '
+            + 'rather than individual closes. Re-run the refresh for this market to get '
+            + 'the full daily history.';
+          slot.appendChild(cap);
+          // Ranges longer than the sampled window cannot be honoured.
+          card.querySelectorAll('.rbtn').forEach(x => {
+            if(parseFloat(x.dataset.range) > (sp.years || 5)) x.disabled = true;
+          });
+        }
+      });
       // The candlestick view lives in its own slot in the same card fetch, so
       // opening a drawer costs one request rather than two.
       const bslot = card.parentElement
@@ -1126,9 +1317,143 @@ function fillPriceCharts(root){
   });
 }
 
-function priceChart(sp, ccy){
+// The date at a sampled index. The series carries three date strings, not one
+// per point — a hundred and sixty ISO strings per company would cost more than
+// the price data itself. Sampling is even, so a linear interpolation between
+// the first and last is exact to the sampling step, which is all a date label
+// on a five-year chart can claim anyway.
+function seriesDate(sp, i, n){
+  if(!sp.d0 || !sp.d1) return '';
+  const a=Date.parse(sp.d0), b=Date.parse(sp.d1);
+  if(isNaN(a)||isNaN(b)) return '';
+  return new Date(a+(b-a)*i/Math.max(n-1,1)).toISOString().slice(0,10);
+}
+
+// `from` is an index into the full five-year series. Everything below is
+// computed from the SLICE — the scale, the axis, the percentage change — so a
+// one-year view is a real one-year chart rather than a five-year chart with
+// its left edge hidden.
+// One fetch per company, cached, and only when a drawer opens. A market shard
+// carrying ten years of daily closes for a thousand names would be tens of
+// megabytes; one company's decade is a few kilobytes.
+const HIST = {};
+function slug(t){
+  let o='';
+  for(const ch of String(t||'').toUpperCase())
+    o += /[A-Z0-9]/.test(ch) ? ch
+       : '_' + ch.charCodeAt(0).toString(16).toUpperCase().padStart(2,'0');
+  return o || '_';
+}
+function loadHistory(t){
+  if(HIST[t]) return HIST[t];
+  HIST[t] = fetch('history/' + slug(t) + '.json')
+    .then(r => r.ok ? r.json() : null).catch(() => null);
+  return HIST[t];
+}
+// The averages are computed HERE, from the daily closes, rather than shipped.
+// Four series would be four times the bytes, and these are then true daily
+// means instead of means of sampled points.
+function sma(arr, n){
+  const out = new Array(arr.length).fill(null);
+  let sum = 0;
+  for(let i=0;i<arr.length;i++){
+    sum += arr[i];
+    if(i >= n) sum -= arr[i-n];
+    if(i >= n-1) out[i] = sum/n;
+  }
+  return out;
+}
+
+// The long chart, drawn from REAL daily closes. Prices are in money here, not
+// normalised to 100 like the compact sparkline — a cursor that reports a
+// closing price has to report the price, and converting through a base would
+// put rounding between the reader and the number.
+function _r(v){ return Math.round(v*1e4)/1e4; }
+function dailyChart(h, ccy, years){
+  if(!h || !h.c || h.c.length < 30) return '';
+  const N = h.c.length;
+  const span = h.years || 10;
+  const from = (years >= span) ? 0
+    : Math.max(0, N - Math.round(N * (years / span)));
+  const c = h.c.slice(from);
+  const dx = h.dx.slice(from);
+  const n = c.length;
+  if(n < 10) return '';
+  // Averages are computed over the FULL history and then sliced, so the
+  // 200-day line at the left edge of a one-year view is a real 200-day mean
+  // and not one that has to warm up from the edge of the window.
+  const A = [[sma(h.c,200).slice(from), 3, '200-day'],
+             [sma(h.c,50).slice(from),  2, '50-day'],
+             [sma(h.c,20).slice(from),  4, '20-day']];
+  const all = c.concat(...A.map(a => a[0].filter(isNum)));
+  let lo = Math.min.apply(null, all), hi = Math.max.apply(null, all);
+  const pad = (hi-lo) || 1; lo -= pad*0.06; hi += pad*0.06;
+  const W=880, H=320, padL=8, padR=78, padT=14, padB=26;
+  const pw=W-padL-padR, ph=H-padT-padB;
+  const X = i => padL + i*pw/Math.max(n-1,1);
+  const Y = v => padT + ph - (v-lo)/(hi-lo)*ph;
+
+  let grid='';
+  for(let k=0;k<5;k++){
+    const v = lo+(hi-lo)*k/4, y = Y(v);
+    grid += `<line x1="${padL}" y1="${y.toFixed(1)}" x2="${(padL+pw).toFixed(1)}"
+      y2="${y.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>
+      <text x="${(padL+pw+6).toFixed(1)}" y="${(y+3.5).toFixed(1)}" font-size="10.5"
+        fill="var(--tx3)">${fmtPx(v)}</text>`;
+  }
+  const path = vals => {
+    let d='', pen=false;
+    vals.forEach((v,i)=>{ if(!isNum(v)){pen=false;return;}
+      d += (pen?'L':'M') + X(i).toFixed(1) + ',' + Y(v).toFixed(1) + ' '; pen=true; });
+    return d.trim();
+  };
+  let lines='';
+  A.forEach(a => { lines += `<path d="${path(a[0])}" fill="none"
+    stroke="var(--series-${a[1]})" stroke-width="1.6" stroke-linejoin="round"/>`; });
+  lines += `<path d="${path(c)}" fill="none" stroke="var(--series-1)"
+    stroke-width="1.7" stroke-linejoin="round"/>`;
+
+  const base = Date.parse(h.d0);
+  const dateAt = i => isNaN(base) ? ''
+    : new Date(base + dx[i]*864e5).toISOString().slice(0,10);
+  let xlab='';
+  [[0,'start'],[Math.floor((n-1)/2),'middle'],[n-1,'end']].forEach(t=>{
+    const d = dateAt(t[0]); if(!d) return;
+    xlab += `<text x="${X(t[0]).toFixed(1)}" y="${H-7}" font-size="10.5"
+      fill="var(--tx3)" text-anchor="${t[1]}">${esc(d.slice(0,7))}</text>`;
+  });
+
+  // The averages travel WITH the chart rather than being recomputed by the
+  // cursor. They were derived from the full ten years and then sliced, so the
+  // 200-day is a real 200-day mean even on a one-year view; recomputing from
+  // the 252 visible closes would leave it empty for the first 199 of them —
+  // the line would be drawn on the chart and missing from the tooltip.
+  const data = JSON.stringify({c:c, dx:dx, d0:h.d0, ccy:ccy||'', daily:1,
+    m20:A[2][0].map(v=>isNum(v)?_r(v):null),
+    m50:A[1][0].map(v=>isNum(v)?_r(v):null),
+    m200:A[0][0].map(v=>isNum(v)?_r(v):null)});
+  return `<div class="pchart"><svg viewBox="0 0 ${W} ${H}" role="img"
+    data-series='${data.replace(/'/g,"&#39;")}'
+    aria-label="Daily closing price with 20, 50 and 200-day averages, ${years} years to ${dateAt(n-1)}">
+    ${grid}${lines}${xlab}
+    <g class="cross" style="display:none">
+      <line y1="${padT}" y2="${padT+ph}" stroke="var(--tx3)" stroke-width="1"
+        stroke-dasharray="3 3"/>
+      <circle r="3.5" fill="var(--series-1)" stroke="var(--panel2)" stroke-width="2"/>
+    </g>
+    <rect class="hit" x="${padL}" y="${padT}" width="${pw}" height="${ph}"
+      fill="transparent"/>
+  </svg><div class="ptip" style="display:none"></div>
+  <div class="cap">${n.toLocaleString()} daily closes &middot; move the cursor
+  across the chart to read the close on any single day.</div></div>`;
+}
+
+function priceChart(sp, ccy, from){
   if(!sp || !sp.px || sp.px.length < 8) return '';
-  const px=sp.px, m20=sp.ma20||[], m50=sp.ma50||[], m200=sp.ma||[];
+  const N=sp.px.length;
+  const f=Math.max(0, Math.min(N-8, from|0));
+  const px=sp.px.slice(f), m20=(sp.ma20||[]).slice(f),
+        m50=(sp.ma50||[]).slice(f), m200=(sp.ma||[]).slice(f);
   const all=px.concat(m20.filter(isNum)).concat(m50.filter(isNum)).concat(m200.filter(isNum));
   let lo=Math.min.apply(null,all), hi=Math.max.apply(null,all);
   const span=(hi-lo)||1; lo-=span*0.06; hi+=span*0.06;
@@ -1189,22 +1514,27 @@ function priceChart(sp, ccy){
         fill="var(--series-${s[1]})">${s[2]}</text>`;
   });
 
+  // Axis dates for the SLICE. Reusing the stored d0/dmid/d1 would label a
+  // one-year view with the five-year start date — the chart would be right and
+  // its axis would be lying.
   let xlab='';
-  [[0,sp.d0,'start'],[Math.floor((px.length-1)/2),sp.dmid,'middle'],
-   [px.length-1,sp.d1,'end']].forEach(t=>{
-    if(!t[1]) return;
+  [[0,'start'],[Math.floor((px.length-1)/2),'middle'],[px.length-1,'end']]
+   .forEach(t=>{
+    const d=seriesDate(sp, f+t[0], N);
+    if(!d) return;
     xlab+=`<text x="${X(t[0]).toFixed(1)}" y="${H-7}" font-size="10.5"
-      fill="var(--tx3)" text-anchor="${t[2]}">${esc(t[1].slice(0,7))}</text>`;
+      fill="var(--tx3)" text-anchor="${t[1]}">${esc(d.slice(0,7))}</text>`;
   });
 
   // The hover layer. A line chart without one makes the reader guess at values
   // between the three axis labels, which is exactly the guess the chart exists
   // to remove.
   const data=JSON.stringify({px:px,m20:m20,m50:m50,m200:m200,first:sp.first,
-    d0:sp.d0,d1:sp.d1,ccy:ccy||''});
+    d0:seriesDate(sp,f,N)||sp.d0, d1:seriesDate(sp,N-1,N)||sp.d1,
+    ccy:ccy||''});
   return `<div class="pchart"><svg viewBox="0 0 ${W} ${H}" role="img"
     data-series='${data.replace(/'/g,"&#39;")}'
-    aria-label="Close with 20-day, 50-day and 200-day moving averages over ${sp.years} years">
+    aria-label="Close with 20-day, 50-day and 200-day moving averages, ${(px.length/(N-1)*(sp.years||5)).toFixed(1)} years to ${seriesDate(sp,N-1,N)}">
     ${grid}${lines}${labels}${xlab}
     <g class="cross" style="display:none">
       <line y1="${padT}" y2="${padT+ph}" stroke="var(--tx3)" stroke-width="1"
@@ -1548,9 +1878,46 @@ document.addEventListener('mousemove', function(ev){
   const wrap=svg.parentElement;
   let d; try{ d=JSON.parse(svg.getAttribute('data-series')); }catch(e){ return; }
   const box=svg.getBoundingClientRect();
-  const padL=8,padR=78,padT=14,padB=26,W=880,H=300;
+  // The daily chart is taller than the sampled one, and reading the wrong
+  // height here would put the crosshair dot a few pixels off the line — close
+  // enough to look right and be wrong.
+  const daily = !!d.daily;
+  const padL=8,padR=78,padT=14,padB=26,W=880,H=daily?320:300;
   const pw=W-padL-padR, ph=H-padT-padB;
   const sx=(ev.clientX-box.left)/box.width*W;
+
+  if(daily){
+    // Real daily closes: the cursor reports the close on an actual trading
+    // day, at that day's date, in money. No interpolation anywhere.
+    const n=d.c.length;
+    let i=Math.round((sx-padL)/pw*(n-1));
+    i=Math.max(0,Math.min(n-1,i));
+    const m20=d.m20||[], m50=d.m50||[], m200=d.m200||[];
+    const all=d.c.concat(m50.filter(isNum)).concat(m200.filter(isNum));
+    let lo=Math.min.apply(null,all), hi=Math.max.apply(null,all);
+    const sp2=(hi-lo)||1; lo-=sp2*0.06; hi+=sp2*0.06;
+    const X=k=>padL+k*pw/Math.max(n-1,1);
+    const Y=v=>padT+ph-(v-lo)/(hi-lo)*ph;
+    const g=svg.querySelector('.cross');
+    g.style.display='';
+    g.querySelector('line').setAttribute('x1',X(i).toFixed(1));
+    g.querySelector('line').setAttribute('x2',X(i).toFixed(1));
+    g.querySelector('circle').setAttribute('cx',X(i).toFixed(1));
+    g.querySelector('circle').setAttribute('cy',Y(d.c[i]).toFixed(1));
+    const base=Date.parse(d.d0);
+    const when=isNaN(base)?'':new Date(base+d.dx[i]*864e5)
+      .toISOString().slice(0,10)+' · ';
+    const f=v=>isNum(v)?fmtPx(v):'—';
+    const tip=wrap.querySelector('.ptip');
+    tip.innerHTML=`<b>${when}close ${esc(d.ccy)} ${f(d.c[i])}</b>`
+      +`<span><i style="background:var(--series-4)"></i>20-day ${f(m20[i])}</span>`
+      +`<span><i style="background:var(--series-2)"></i>50-day ${f(m50[i])}</span>`
+      +`<span><i style="background:var(--series-3)"></i>200-day ${f(m200[i])}</span>`;
+    tip.style.display='';
+    tip.style.left=Math.max(0,Math.min(72,X(i)/W*100))+'%';
+    return;
+  }
+
   let i=Math.round((sx-padL)/pw*(d.px.length-1));
   i=Math.max(0,Math.min(d.px.length-1,i));
   const all=d.px.concat(d.m50.filter(isNum)).concat(d.m200.filter(isNum));
@@ -1797,7 +2164,13 @@ function technicalPanel(r){
   if(r.has_series){
     cards+=`<div class="chart wide" data-series-for="${esc(r.ticker)}"
       data-market="${esc(r.market||'')}"><h5>Close, 20-day, 50-day and 200-day averages
-      <span class="phead"></span></h5>
+      <span class="phead"></span>
+      <span class="rng">
+        <button class="rbtn" data-range="1">1y</button>
+        <button class="rbtn" data-range="2">2y</button>
+        <button class="rbtn" data-range="5">5y</button>
+        <button class="rbtn on" data-range="10">10y</button>
+      </span></h5>
       <div class="pslot"><div class="cap">loading price history&hellip;</div></div>
       <div class="lgd"><i><b style="background:var(--series-1)"></b>Close</i>
       <i><b style="background:var(--series-4)"></b>20-day</i>
@@ -2006,8 +2379,44 @@ function detail(r){
   return h+'</div>';
 }
 
+// How many names the current filters are holding back, and — more to the point
+// — WHICH filter is doing it.
+//
+// "Surfaced only" is on by default and hides every name that did not clear a
+// screen, which on a normal run is most of the universe. The stat bar has
+// always shown "320 shown / 1139 in universe", but a reader who is hunting for
+// one specific ticker does not read that as "your filter is hiding it" — they
+// read it as "the run missed it", and go looking for a coverage bug that isn't
+// there. Naming the cause and offering the remedy in one click is the fix.
+function hiddenNotice(shown){
+  if(fQ.trim()) return '';                    // a search already ignores filters
+  const total=DATA.length;
+  if(!fSurf || shown>=total) return '';
+  const unsurfaced=DATA.filter(r=>!r.surfaced).length;
+  if(!unsurfaced) return '';
+  return `<div class="hidden-note"><b>${unsurfaced.toLocaleString()}</b> of the
+    <b>${total.toLocaleString()}</b> names in this run are hidden because they did
+    not clear a screen. They were fetched and scored &mdash; arriving in the
+    universe and passing a screen are different things &mdash; so if you are
+    looking for a specific company it is probably in there.
+    <button class="linkbtn" id="showAll">Show all ${total.toLocaleString()}</button>
+    <span class="hn-or">or type a ticker in the search box, which ignores every
+    filter.</span></div>`;
+}
+
 function render(){
   const rows=visible(); stats(rows); syncUrl();
+  const hn=document.getElementById('hiddenNote');
+  if(hn){
+    hn.innerHTML=hiddenNotice(rows.length);
+    hn.style.display=hn.innerHTML?'block':'none';
+    const btn=document.getElementById('showAll');
+    if(btn) btn.onclick=()=>{
+      fSurf=false;
+      document.getElementById('surfOnly').classList.remove('on');
+      render();
+    };
+  }
   const tb=document.getElementById('tbody'); tb.innerHTML='';
   const emptyEl=document.getElementById('empty');
   emptyEl.style.display=rows.length?'none':'block';
@@ -2099,6 +2508,38 @@ document.querySelectorAll('[data-theme]').forEach(b=>b.onclick=()=>{
 document.querySelectorAll('[data-listing]').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('[data-listing]').forEach(x=>x.classList.remove('on'));
   b.classList.add('on'); fList=b.dataset.listing; render();});
+// The view switcher. Deliberately a real tab rather than another collapsible
+// panel: the holdings view answers a different question from the screener and
+// wants the whole width, and burying it in the stack of reference panels at
+// the foot of the page is where things go to not be found.
+document.querySelectorAll('.vtab').forEach(b=>b.onclick=()=>{
+  const v=b.dataset.view;
+  document.querySelectorAll('.vtab').forEach(x=>x.classList.toggle('on',x===b));
+  // Every view is addressed by name, so adding a fourth later is one entry
+  // here rather than another pair of branches.
+  const VIEWS={screen:'view-screen', sentiment:'view-sentiment', owners:'view-owners'};
+  for(const [name,id] of Object.entries(VIEWS)){
+    const el=document.getElementById(id);
+    if(el) el.style.display = (name===v) ? (name==='screen'?'':'block') : 'none';
+  }
+  const p=new URLSearchParams(location.search);
+  if(v!=='screen') p.set('view',v); else p.delete('view');
+  history.replaceState(null,'',p.toString()?('?'+p):location.pathname);
+  window.scrollTo(0,0);
+});
+// A ticker in the holdings tab links back into the screener. Handled here
+// rather than by letting the href navigate, because a full page load would
+// drop the sidecar caches and re-fetch everything.
+document.querySelectorAll('#view-owners a[href^="?q="], #view-sentiment a[href^="?q="]').forEach(a=>{
+  a.onclick=(e)=>{
+    e.preventDefault();
+    const t=decodeURIComponent(a.getAttribute('href').slice(3));
+    document.querySelector('.vtab[data-view="screen"]').click();
+    const box=document.getElementById('q');
+    box.value=t; fQ=t; render();
+    box.scrollIntoView({block:'center'});
+  };
+});
 document.querySelectorAll('[data-owner]').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('[data-owner]').forEach(x=>x.classList.remove('on'));
   b.classList.add('on'); fOwner=b.dataset.owner; render();});
@@ -2347,6 +2788,431 @@ def _candle_legend() -> str:
         'screen in this app is measured in years. Use a pattern to choose an '
         'entry into a company the frameworks already justify &mdash; never as '
         'the reason to own it.</div></details>')
+
+
+def _money_k(v: Optional[float]) -> str:
+    """A 13F value in $000, printed at whatever scale keeps it readable.
+
+    One filing spans five orders of magnitude — Berkshire's Apple stake is
+    $66bn and Oaktree's SunOpta rump is $406k — so a fixed unit renders the
+    small end as "$0m", which reads as an error rather than as a position being
+    wound down.
+    """
+    if v is None:
+        return "—"
+    if v >= 1e6:
+        return f"${v / 1e6:,.1f}bn".replace(".0bn", "bn")
+    if v >= 1e3:
+        return f"${v / 1e3:,.0f}m"
+    return f"${v:,.0f}k"
+
+
+def _pctbar(pct: Optional[float], series: int, label: str) -> str:
+    """One horizontal bar for a percentage. Labelled directly, no legend.
+
+    Direct labels rather than a key: two bars do not justify making the reader
+    hold a colour mapping in their head, and the label survives being printed
+    in monochrome or read by someone who cannot separate the two hues.
+    """
+    if pct is None:
+        return f'<div class="pbrow"><span class="pbl">{e_attr(label)}</span>' \
+               f'<span class="cgs">not available</span></div>'
+    w = max(0.0, min(100.0, float(pct)))
+    return (f'<div class="pbrow"><span class="pbl">{e_attr(label)}</span>'
+            f'<span class="pbtrack"><span class="pbfill" style="width:{w:.1f}%;'
+            f'background:var(--series-{series})"></span></span>'
+            f'<b class="pbv">{w:.0f}%</b></div>')
+
+
+def _market_sentiment_panel(ms: Dict[str, Any]) -> Tuple[str, str]:
+    """The market-sentiment tab: readings, and what each one means.
+
+    Every panel states its own population and its own caveat, because these are
+    market-wide statistics computed over a universe that is not the market. A
+    breadth number with no denominator is an opinion wearing a percent sign.
+
+    Nothing here issues a verdict on what to buy. Each indicator carries the
+    STANDARD reading of the indicator — what a TRIN below 0.8 conventionally
+    means — which is a claim about the measure, not advice about a portfolio.
+    """
+    if not ms:
+        return "", ""
+    tab = '<button class="vtab" data-view="sentiment">Market sentiment</button>'
+    b = ms.get("breadth") or {}
+    t = ms.get("trin") or {}
+    m7 = ms.get("mag7") or {}
+    xa = ms.get("cross_asset") or {}
+    ov = ms.get("oversold") or {}
+    body = ""
+
+    # ---- cross-asset first: it is the summary the rest explains -------------
+    if xa.get("available"):
+        rows = "".join(
+            f'<tr><td><b>{e_attr(r["asset"])}</b></td>'
+            f'<td><span class="lean l-{e_attr(r["reads"])}">'
+            f'{e_attr(r["reads"])}</span></td>'
+            f'<td class="cgs">{"<br>".join(e_attr(x) for x in r["evidence"]) or "—"}</td>'
+            f'</tr>' for r in xa["rows"])
+        links = "".join(
+            f'<tr><td class="cgs"><b>{e_attr(a)}</b></td>'
+            f'<td class="cgs">&rarr; {e_attr(bq)}</td>'
+            f'<td class="cgs">{e_attr(why)}</td></tr>'
+            for a, bq, why in xa["links"])
+        body += (
+            '<div class="ownpanel"><h3>Across the three asset classes</h3>'
+            f'<div class="ometa">{e_attr(xa.get("note") or "")}</div>'
+            '<div class="otwrap"><table class="otab"><thead><tr>'
+            '<th>Asset class</th><th>Reads</th><th>On this evidence</th>'
+            '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+            '<h4 class="oh">How a move in one reaches the others '
+            '<span>mechanism, not forecast</span></h4>'
+            '<div class="otwrap"><table class="otab"><thead><tr>'
+            '<th>If this</th><th>Then</th><th>Because</th></tr></thead>'
+            '<tbody>' + links + '</tbody></table></div>'
+            '<div class="cap">&ldquo;Reads&rdquo; is a summary of the evidence '
+            'in the same row and nothing else. It is not a recommendation, and '
+            'three asset classes are deliberately not collapsed into one score '
+            '&mdash; when they disagree, that disagreement is the finding.</div>'
+            '</div>')
+
+    # ---- breadth ------------------------------------------------------------
+    if b.get("available"):
+        body += (
+            '<div class="ownpanel"><h3>Market breadth &mdash; short trend '
+            'versus long</h3>'
+            f'<div class="ometa">Across <b>{b["names"]}</b> names with a full '
+            f'200 days of history.</div>'
+            + _pctbar(b["above_50d"], 4, "Above the 50-day average")
+            + _pctbar(b["above_200d"], 3, "Above the 200-day average")
+            + f'<div class="note" style="border-left-color:var(--acc)">'
+              f'<b>{"+" if b["gap"] > 0 else ""}{b["gap"]:.0f} percentage points '
+              f'&mdash; {e_attr(b["state"])}.</b> {e_attr(b["note"])}</div>'
+            + f'<div class="cap">Participation is <b>{e_attr(b["health"])}</b> '
+              f'on the 200-day measure ({b["n_above_200d"]} of {b["names"]} '
+              f'names). A gap of {b["divergence_at"]:.0f}pp or more is what this '
+              f'page calls a divergence. {e_attr(b.get("caveat") or "")}</div>'
+              '</div>')
+
+    # ---- TRIN ---------------------------------------------------------------
+    if t.get("available"):
+        pctl = (f'<b>{t["percentile"]:.0f}th percentile</b> of its own trailing '
+                f'year' if t.get("percentile") is not None
+                else "percentile unavailable — too little history")
+        body += (
+            '<div class="ownpanel"><h3>TRIN &mdash; the Arms Index, '
+            f'{t["ma_days"]}-day average</h3>'
+            f'<div class="bignum"><span class="bv t-{e_attr(t["band"])}">'
+            f'{t["value"]:.2f}</span>'
+            f'<span class="bl">{e_attr(t["band"])}</span></div>'
+            f'<div class="ometa">Today&rsquo;s unsmoothed reading '
+            f'{t["raw_today"]:.2f} &middot; {pctl} &middot; '
+            f'{t["advancers"]} advancing / {t["decliners"]} declining today'
+            f'</div>'
+            f'<div class="note" style="border-left-color:var(--acc)">'
+            f'{e_attr(t["meaning"])}</div>'
+            '<div class="cap"><b>(advancers &divide; decliners) &divide; '
+            '(advancing volume &divide; declining volume).</b> Above 1 means '
+            f'the declining side carries more volume per name &mdash; selling '
+            f'with conviction. Below {t["overbought_at"]} is conventionally '
+            f'overbought, above {t["oversold_at"]} oversold; it is a '
+            f'<i>contrarian</i> measure, so the labels read backwards from '
+            f'what they sound like.</div>'
+            f'<div class="cap"><b>Population caveat.</b> '
+            f'{e_attr(t.get("caveat") or "")}'
+            + (f' {t["dropped_days"]} day(s) were dropped for having no '
+               f'decliners or no declining volume &mdash; an undefined ratio, '
+               f'left out rather than clamped.' if t.get("dropped_days") else "")
+            + '</div></div>')
+    elif t.get("reason"):
+        body += ('<div class="ownpanel"><h3>TRIN</h3><div class="cap">Not '
+                 f'computed: {e_attr(t["reason"])}.</div></div>')
+
+    # ---- Magnificent Seven --------------------------------------------------
+    if m7.get("available"):
+        def _pc(v):
+            return f"{v * 100:+.1f}%" if isinstance(v, (int, float)) else "—"
+
+        def _off(v):
+            # A distance below the high, not a change. "+0.0%" reads as a gain
+            # of nothing; "0.0%" reads as "at the high", which is the fact.
+            return f"{v * 100:.1f}%" if isinstance(v, (int, float)) else "—"
+        r7 = "".join(
+            f'<tr><td class="tkc"><a href="?q={e_attr(r["ticker"])}">'
+            f'{e_attr(r["ticker"])}</a></td><td>{e_attr(r["name"])}</td>'
+            f'<td class="num">{_pc(r["return_3m"])}</td>'
+            f'<td class="num">{_pc(r["return_12m"])}</td>'
+            f'<td class="num">{_fmt_num(r["rsi"], 0)}</td>'
+            f'<td class="num">{_off(r["pct_below_high"])}</td>'
+            f'<td>{"above" if r["above_200d"] else "below"}</td></tr>'
+            for r in m7["rows"])
+        body += (
+            '<div class="ownpanel"><h3>The Magnificent Seven</h3>'
+            f'<div class="ometa"><b>{m7["n_above_200d"]} of {m7["n"]}</b> are '
+            f'above their 200-day average'
+            + (f' &middot; 12-month returns span '
+               f'{m7["dispersion_12m"] * 100:.0f} percentage points'
+               if m7.get("dispersion_12m") else "")
+            + (f' &middot; {len(m7["missing"])} not in this run: '
+               f'{e_attr(", ".join(m7["missing"]))}' if m7.get("missing") else "")
+            + '</div>'
+            '<div class="otwrap"><table class="otab"><thead><tr>'
+            '<th>Ticker</th><th>Company</th><th class="num">3m</th>'
+            '<th class="num">12m</th><th class="num">RSI</th>'
+            '<th class="num">Off high</th><th>200-day</th>'
+            '</tr></thead><tbody>' + r7 + '</tbody></table></div>'
+            f'<div class="cap">{e_attr(m7["note"])} Compare the count above '
+            f'their 200-day with the market-wide figure in the breadth panel: '
+            f'when the seven are above and most names are not, the index is '
+            f'describing them rather than the market.</div></div>')
+
+    # ---- deeply oversold ----------------------------------------------------
+    if ov.get("available"):
+        rws = ov.get("rows") or []
+        if rws:
+            def _flag(r):
+                if r["accounts_intact"] is True:
+                    return ('<span class="ochg c-new">accounts intact</span>',
+                            r["accounts_note"])
+                if r["accounts_intact"] is False:
+                    return ('<span class="ochg c-exit">accounts explain it</span>',
+                            r["accounts_note"])
+                return ('<span class="ochg c-hold">not testable</span>',
+                        r["accounts_note"])
+            trs = ""
+            for r in rws[:40]:
+                chip, note = _flag(r)
+                sect = (f'<span class="shock">sector-wide</span> '
+                        f'{e_attr(r["sector"])} ({r["sector_peers"]} of '
+                        f'{r["sector_covered"]})' if r["sector_shock"]
+                        else e_attr(r["sector"]))
+                trs += (f'<tr><td class="tkc"><a href="?q={e_attr(r["ticker"])}">'
+                        f'{e_attr(r["ticker"])}</a></td>'
+                        f'<td>{e_attr(r["name"])}</td>'
+                        f'<td class="num">&minus;{r["off_high"] * 100:.0f}%</td>'
+                        f'<td class="cgs">{sect}</td>'
+                        f'<td>{chip}<div class="cgs">{e_attr(note)}</div></td>'
+                        f'</tr>')
+            body += (
+                '<div class="ownpanel"><h3>Down more than half from their '
+                '52-week high</h3>'
+                f'<div class="ometa"><b>{ov["n"]}</b> name(s) in this run'
+                + (f' &middot; sector-wide falls in: '
+                   f'{e_attr(", ".join(ov["sectors_shocked"]))}'
+                   if ov.get("sectors_shocked") else
+                   ' &middot; no sector fell as a group')
+                + '</div>'
+                '<div class="otwrap"><table class="otab"><thead><tr>'
+                '<th>Ticker</th><th>Company</th><th class="num">Off high</th>'
+                '<th>Sector</th><th>Do the accounts explain it?</th>'
+                '</tr></thead><tbody>' + trs + '</tbody></table></div>'
+                + (f'<div class="cap">Showing the 40 largest falls of '
+                   f'{ov["n"]}.</div>' if len(rws) > 40 else "")
+                + f'<div class="cap"><b>{e_attr(ov["note"])}</b> A sector is '
+                  f'flagged when {e_attr(ov["sector_rule"])} &mdash; which is '
+                  f'what a systemic shock looks like in data, as distinct from '
+                  f'one company breaking on its own.</div></div>')
+        else:
+            body += ('<div class="ownpanel"><h3>Down more than half from their '
+                     '52-week high</h3><div class="cap">No name in this run is '
+                     'down more than 50% from its 52-week high.</div></div>')
+
+    if body:
+        body += (
+            '<div class="note"><b>What this tab does not do.</b> It reports '
+            'measurements taken from price and volume this app already holds. '
+            'It does not read the news, so it cannot tell you why anything '
+            'moved, cannot attribute a fall to a named event, and offers no '
+            'view on what to buy or when. Where a cause matters &mdash; a '
+            'central bank decision, a sector shock &mdash; that judgement is '
+            'yours, and the on-demand report is where a narrative belongs. '
+            'Not investment advice.</div>')
+    return tab, body
+
+
+def _owner_holdings_panel(panels: List[Dict[str, Any]],
+                          covered: set) -> Tuple[str, str]:
+    """The holdings tab: what each manager owns, and what they bought.
+
+    Returns (tab button, panel body) so the tab can be omitted entirely when
+    there are no owners rather than opening onto an empty page.
+
+    Two decisions worth stating:
+
+    * PURCHASES COME FIRST, above the full book. "What did they buy" is the
+      question this tab gets opened for; the complete holdings list is
+      reference material underneath it.
+
+    * IT RENDERS THE FILING, NOT THE SCREENER. A position the universe cannot
+      reach still gets a row, marked as not covered. Building this from the
+      page's own rows would have shown 28 of Oaktree's 49 holdings and called
+      it the portfolio — the missing 21 are NYSE names, and their absence is a
+      fact about this app rather than about Oaktree.
+    """
+    if not panels:
+        return "", ""
+    tabs = "".join(
+        f'<button class="vtab" data-view="owners">{e_attr(p["badge"])} &amp; '
+        for p in panels[:1])
+    tab = ('<button class="vtab" data-view="owners">Holdings &mdash; '
+           + " &amp; ".join(e_attr(p["name"]) for p in panels) + "</button>")
+
+    body = ""
+    for p in panels:
+        val = p.get("portfolio_value_usd")
+        val_s = (f"${val / 1e9:,.1f}bn" if val and val >= 1e9 else "—")
+        exc = p.get("excluded") or {}
+        _exname = {"convertible_bonds": "convertible bonds", "options": "options",
+                   "warrants": "warrants", "etfs": "ETFs", "other": "other"}
+        exbits = [f"{v} {_exname.get(k, k)}" for k, v in exc.items() if v]
+
+        def rows(items, kind):
+            out = ""
+            for r in items:
+                tk = str(r["ticker"]).upper()
+                on = tk in covered
+                # A ticker the screener carries is a link into the table; one
+                # it does not carry is plain text with a reason. Making the
+                # second look like the first would promise a click that does
+                # nothing.
+                tkcell = (f'<a href="?q={e_attr(tk)}" title="open this row in '
+                          f'the screener">{e_attr(tk)}</a>' if on
+                          else f'<span title="not in the screener universe — '
+                               f'see the note below">{e_attr(tk)}</span>')
+                if kind == "exit":
+                    out += (f'<tr class="{"" if on else "uncov"}"><td class="tkc">{tkcell}</td>'
+                            f'<td>{e_attr(r["name"])}</td>'
+                            f'<td class="num">{r["shares_prior"]:,}</td>'
+                            f'<td class="num">{_money_k(r["value_prior"])}</td>'
+                            f'<td class="num">—</td>'
+                            f'<td><span class="ochg c-exit">sold out</span></td></tr>')
+                    continue
+                dp = ""
+                if r.get("delta_pct") is not None and r["change"] != "hold":
+                    sign = "+" if r["delta_pct"] > 0 else ""
+                    dp = (f' <b class="{"up" if r["delta_pct"] > 0 else "dn"}">'
+                          f'{sign}{r["delta_pct"]}%</b>')
+                out += (f'<tr class="{"" if on else "uncov"}"><td class="tkc">{tkcell}</td>'
+                        f'<td>{e_attr(r["name"])}</td>'
+                        f'<td class="num">{(r["shares"] or 0):,}</td>'
+                        f'<td class="num">{_money_k(r["value"])}</td>'
+                        f'<td class="num">{r["pct"]:.2f}%</td>'
+                        f'<td><span class="ochg c-{e_attr(r["change"])}">'
+                        f'{e_attr(r["change_label"])}</span>{dp}</td></tr>')
+            return out
+
+        head = ('<thead><tr><th>Ticker</th><th>Company</th>'
+                '<th class="num">Shares</th><th class="num">Value</th>'
+                '<th class="num">% of book</th><th>Change</th></tr></thead>')
+
+        buys = p.get("buys") or []
+        buy_html = ""
+        if buys:
+            bought = sum(b["value"] or 0 for b in buys)
+            buy_html = (
+                f'<h4 class="oh">Bought this quarter '
+                f'<span>{len(buys)} position(s) &middot; {_money_k(bought)} '
+                f'at the quarter-end mark</span></h4>'
+                f'<div class="otwrap"><table class="otab">{head}<tbody>'
+                + rows(buys, "buy") + '</tbody></table></div>'
+                '<div class="cap">New positions and additions only. A 13F shows '
+                'the share count on two dates, so this is what the count went '
+                'UP by &mdash; not what was paid, and not when in the quarter '
+                'it was bought.</div>')
+
+        ex = p.get("exited") or []
+        ex_html = ""
+        if ex:
+            ex_html = (
+                f'<h4 class="oh">Sold out <span>{len(ex)} position(s)</span></h4>'
+                f'<div class="otwrap"><table class="otab">{head}<tbody>'
+                + rows(ex, "exit") + '</tbody></table></div>'
+                '<div class="cap">Shares and value here are the <b>previous</b> '
+                'quarter&rsquo;s — the position is zero now. They say how big '
+                'the thing sold was, not what it fetched.</div>')
+
+        man = p.get("manual") or []
+        man_html = ""
+        if man:
+            man_html = (
+                '<h4 class="oh">Held but not in any 13F '
+                '<span>from company disclosure</span></h4>'
+                '<div class="otwrap"><table class="otab"><thead><tr>'
+                '<th>Ticker</th><th>Company</th><th>Source</th>'
+                '</tr></thead><tbody>'
+                + "".join(
+                    f'<tr class="{"" if str(m["ticker"]).upper() in covered else "uncov"}">'
+                    f'<td class="tkc">{e_attr(m["ticker"])}</td>'
+                    f'<td>{e_attr(m["name"])}</td>'
+                    f'<td class="cgs">{e_attr(m["source"])}'
+                    + (f' &mdash; {e_attr(m["note"])}' if m.get("note") else "")
+                    + '</td></tr>' for m in man)
+                + '</tbody></table></div>'
+                '<div class="cap">A 13F covers US-listed equity only. These are '
+                'real holdings that no filing of that kind can ever show.</div>')
+
+        stakes = [s for s in (p.get("stake_filings") or [])
+                  if (s.get("filed") or "") > (p.get("period") or "")]
+        stake_html = ""
+        if stakes:
+            stake_html = (
+                '<h4 class="oh">Filed since the quarter ended '
+                '<span>Schedule 13D/G &mdash; days old, not 45</span></h4>'
+                '<div class="otwrap"><table class="otab"><thead><tr>'
+                '<th>Filed</th><th>Company</th><th>Form</th>'
+                '</tr></thead><tbody>'
+                + "".join(
+                    f'<tr><td class="cgs">{e_attr(s.get("filed") or "")}</td>'
+                    f'<td><b>{e_attr(s.get("subject") or "—")}</b></td>'
+                    f'<td class="cgs">{e_attr(s.get("form") or "")}'
+                    + (f' &middot; <a href="{e_attr(s["url"])}" target="_blank" '
+                       f'rel="noopener">filing</a>' if s.get("url") else "")
+                    + '</td></tr>' for s in stakes[:12])
+                + '</tbody></table></div>'
+                '<div class="cap">These are filed within days of crossing 5% of '
+                'a company, so they can contradict the tables above: a position '
+                'still listed from the quarter-end filing may already have been '
+                'sold.</div>')
+
+        n_uncov = sum(1 for r in p["positions"]
+                      if str(r["ticker"]).upper() not in covered)
+        uncov_note = ""
+        if n_uncov:
+            uncov_note = (
+                f'<div class="note" style="border-left-color:var(--warn)">'
+                f'<b>{n_uncov} of these {len(p["positions"])} holdings are not in '
+                f'the screener universe</b> and are shown greyed, without a link. '
+                f'They are real positions &mdash; this app simply does not cover '
+                f'them, usually because they are listed outside the index and '
+                f'exchange lists it draws from. Widening those lists in '
+                f'<code>config/universe.yml</code> is what closes the gap.</div>')
+
+        body += (
+            f'<div class="ownpanel"><h3><span class="own o-{e_attr(p["key"])}">'
+            f'{e_attr(p["badge"])}</span> {e_attr(p["long_name"])}'
+            f'<span class="omgr">{e_attr(p.get("manager") or "")}</span></h3>'
+            f'<div class="ometa">{val_s} across <b>{len(p["positions"])}</b> '
+            f'common-stock positions as at <b>{e_attr(p["period"])}</b> '
+            f'&middot; {e_attr(p.get("source") or "13F")} filed '
+            f'{e_attr(p.get("filed") or "?")}'
+            + (f' &middot; <a href="{e_attr(p["url"])}" target="_blank" '
+               f'rel="noopener">the filing</a>' if p.get("url") else "")
+            + (f'<br>Excluded from this table: {e_attr(", ".join(exbits))} '
+               f'&mdash; see the note at the foot of the screener tab for why.'
+               if exbits else "")
+            + '</div>'
+            + uncov_note + buy_html + ex_html + man_html + stake_html
+            + f'<h4 class="oh">All {len(p["positions"])} holdings '
+              f'<span>largest first</span></h4>'
+              f'<div class="otwrap"><table class="otab">{head}<tbody>'
+            + rows(p["positions"], "hold") + '</tbody></table></div></div>')
+
+    body += ('<div class="note"><b>None of this is a recommendation.</b> A 13F is '
+             'filed up to 45 days after quarter end and covers US-listed long '
+             'equity only &mdash; no shorts, no bonds, no foreign listings. '
+             'Copying one is not a strategy: it is a stale, partial view of a '
+             'book run to a mandate, a tax position and a time horizon that are '
+             'not yours.</div>')
+    return tab, body
 
 
 def _owner_legend(ledger: List[Dict[str, Any]]) -> str:
@@ -3549,6 +4415,13 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     cnd_html = _candle_legend()
     bol_html = _bollinger_legend()
     own_html = _owner_legend(screened.get("owners") or [])
+    # The holdings tab renders the FILING; `covered` is only used to decide
+    # which rows link into the screener and which are greyed as out of scope.
+    _covered = {str(r.get("ticker", "")).upper() for r in rows}
+    owner_tab, owner_panel = _owner_holdings_panel(
+        screened.get("owners_panel") or [], _covered)
+    sent_tab, sent_panel = _market_sentiment_panel(
+        screened.get("market_sentiment") or {})
     dis_html = _dislocation_panel(screened.get("dislocation_summary") or {})
     sen_html = _sentiment_panel(screened.get("sentiment") or {})
     mf_html = _magic_formula_panel(screened.get("magic_formula") or {})
@@ -3595,6 +4468,7 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
     # count that never appears.
     os.makedirs(out_dir, exist_ok=True)
     series_counts = write_series(results, metrics, out_dir)
+    write_history(results, metrics, out_dir)
 
     html = (TEMPLATE
             .replace("__DATA__", json.dumps(rows, default=str))
@@ -3609,6 +4483,10 @@ def render(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             .replace("__THEMEROW__", theme_row)
             .replace("__LISTINGROW__", listing_row)
             .replace("__OWNERROW__", owner_row)
+            .replace("__OWNERTAB__", owner_tab)
+            .replace("__OWNERPANEL__", owner_panel)
+            .replace("__SENTTAB__", sent_tab)
+            .replace("__SENTPANEL__", sent_panel)
             .replace("__COVERAGE__", coverage)
             .replace("__GATE__", debt_html + sen_html + mf_html + buf_html
                      + mun_html + cmd_html

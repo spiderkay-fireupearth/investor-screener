@@ -250,6 +250,76 @@ def coverage(owners: Dict[str, Any], seen: Dict[str, List[str]]
     return out
 
 
+def panel(owners: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The whole book, per owner, for the holdings tab.
+
+    Distinct from `coverage()`, which answers "did the badges arrive on the
+    page". This answers "what does this manager own", and the difference
+    matters: 21 of Oaktree's 49 disclosed positions are NYSE names that a
+    S&P-500-plus-Nasdaq universe could never reach, so a tab built from the
+    screener's own rows would silently show half the book and call it the book.
+    This reads the FILING, not the universe, and marks which rows the screener
+    happens to cover.
+
+    Sorted by value descending, because that is the order the manager's own
+    conviction is expressed in and the order a reader scans.
+    """
+    out: List[Dict[str, Any]] = []
+    for key, block in owners.items():
+        pos = []
+        for tkr, row in (block.get("positions") or {}).items():
+            pos.append({
+                "ticker": tkr,
+                "name": row.get("name") or tkr,
+                "shares": row.get("shares"),
+                "value": row.get("value"),
+                "pct": row.get("pct"),
+                "change": row.get("change"),
+                "change_label": CHANGE_LABEL.get(row.get("change"), ""),
+                "delta_pct": row.get("delta_pct"),
+            })
+        pos.sort(key=lambda r: -(r["value"] or 0))
+        man = [{"ticker": t, "name": (r or {}).get("name") or t,
+                "source": (r or {}).get("source") or "company disclosure",
+                "note": (r or {}).get("note") or ""}
+               for t, r in (block.get("manual") or {}).items()]
+        ex = [{"ticker": t, "name": (r or {}).get("name") or t,
+               "shares_prior": (r or {}).get("shares_prior"),
+               "value_prior": (r or {}).get("value_prior"),
+               "note": (r or {}).get("note") or ""}
+              for t, r in (block.get("exited") or {}).items()]
+        ex.sort(key=lambda r: -(r["value_prior"] or 0))
+        # "Recent purchases" in the only sense a 13F supports: money that went
+        # IN during the quarter. A new position and an addition are both
+        # buying; a hold is not, and a trim is the opposite. Sorted by size so
+        # the meaningful ones lead — Berkshire's 3,564-share D.R. Horton
+        # starter is a new position and is not news at $581k.
+        buys = [p for p in pos if p["change"] in ("new", "add")]
+        buys.sort(key=lambda r: -(r["value"] or 0))
+        out.append({
+            "key": key,
+            "badge": block.get("badge") or key,
+            "name": block.get("name") or key,
+            "long_name": block.get("long_name") or block.get("name") or key,
+            "manager": block.get("manager") or "",
+            "period": block.get("period") or "",
+            "filed": block.get("filed") or "",
+            "url": block.get("url") or "",
+            "source": block.get("source") or "",
+            "portfolio_value_usd": block.get("portfolio_value_usd"),
+            "reported_rows": block.get("reported_rows"),
+            "excluded": block.get("excluded") or {},
+            "note": block.get("note") or "",
+            "positions": pos,
+            "buys": buys,
+            "exited": ex,
+            "manual": man,
+            "stake_filings": list(block.get("stake_filings") or []),
+            "unmapped": list(block.get("unmapped") or []),
+        })
+    return out
+
+
 def tags_for(rec_ticker: str, index: Dict[str, List[Dict[str, Any]]]
              ) -> List[Dict[str, Any]]:
     """The owner tags for one ticker, matched case-insensitively.

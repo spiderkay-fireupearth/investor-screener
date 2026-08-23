@@ -78,8 +78,22 @@ def obv(df: pd.DataFrame) -> pd.Series:
     return (direction * df["Volume"].fillna(0.0)).cumsum()
 
 
-SPARK_POINTS = 100
-SPARK_YEARS = 2
+# Five years, sampled to 160 points.
+#
+# The window was two years, which is the right length for judging a setup and
+# the wrong one for judging a company: it cannot show a full drawdown and
+# recovery, and it starts after the last real bear market. Five years covers
+# both, and ten years of daily history is already stored per ticker, so the
+# longer window costs nothing at the source.
+#
+# 160 points rather than 100 because the chart now carries a range toggle. At
+# 100 points a 5-year series samples every 12 trading days, and slicing that
+# down to one year would leave 20 points — a chart with visible corners. 160
+# gives a step of 8 days, so the one-year view still has ~32 points. The cost
+# is a 1.6x payload on the sidecar files, which is the price of the toggle and
+# is paid once per market rather than per row.
+SPARK_POINTS = 160
+SPARK_YEARS = 5
 # Sixty sessions of candles — about three months. Matched deliberately to the
 # scanner's own scan_bars: a chart showing bars the scanner never looked at
 # would invite "why is there no marker on that obvious hammer?".
@@ -162,6 +176,64 @@ def sparkline(df: pd.DataFrame, points: int = SPARK_POINTS,
         # The Bollinger lines over the same window as the candles, so the two
         # charts in the drawer describe the same sixty sessions.
         "bb": _band_series(df),
+    }
+
+
+HISTORY_YEARS = 10
+
+
+def daily_history(df: pd.DataFrame, years: int = HISTORY_YEARS
+                  ) -> Optional[Dict[str, Any]]:
+    """Ten years of REAL daily closes, for the long chart and its cursor.
+
+    Separate from `sparkline`, and separate for a reason worth stating.
+
+    The sparkline is a SHAPE: two hundred sampled points, enough to see a trend
+    at thumbnail size, cheap enough to ship for every row in a market at once.
+    A cursor on a sampled series can only ever report the sampled point — put a
+    crosshair on it and it will say a stock closed at 41.20 on a Tuesday it was
+    never priced on. That is not a rounding error, it is a wrong fact.
+
+    So this ships every close, on every trading day, and is fetched ONE TICKER
+    AT A TIME when a drawer opens. A market shard carrying daily history for a
+    thousand names would be forty megabytes; a single company's decade is about
+    twenty-five kilobytes, and eight once the server gzips it.
+
+    ONLY CLOSES ARE SENT. The 20-, 50- and 200-day averages are computed in the
+    browser from these same closes, which is both smaller — four series would
+    be four times the bytes — and more accurate, because they are then true
+    daily means rather than means of samples.
+
+    Dates are a base plus integer day offsets. Twenty-five hundred ISO strings
+    cost about 32KB on their own, more than the prices they label.
+    """
+    if df is None or "Close" not in df:
+        return None
+    close = df["Close"].astype(float).dropna()
+    if len(close) < 60:
+        return None
+    window = close.iloc[-(years * 252):]
+    if len(window) < 60:
+        return None
+    dates = [str(x)[:10] for x in window.index]
+    try:
+        base = _dt.date.fromisoformat(dates[0])
+        offs = [(_dt.date.fromisoformat(d) - base).days for d in dates]
+    except ValueError:
+        return None
+    return {
+        "d0": dates[0],
+        "dx": offs,
+        # Six significant figures, not two decimals. A Hong Kong stock at
+        # 0.8624 and a US one at 1,204.55 are both on this page, and a fixed
+        # decimal rule loses one or bloats the other.
+        "c": [_sig(float(v), 6) for v in window],
+        "n": len(window),
+        "years": round(len(window) / 252.0, 1),
+        "first": round(float(window.iloc[0]), 4),
+        "last": round(float(window.iloc[-1]), 4),
+        "lo": round(float(window.min()), 4),
+        "hi": round(float(window.max()), 4),
     }
 
 
@@ -336,6 +408,11 @@ def compute(df: pd.DataFrame,
     out["pct_above_5y_low"] = (price - low5) / low5 if low5 else None
     out["years_of_price_history"] = round(n / 252, 1)
     out["spark"] = sparkline(df)
+    # The decade of daily closes, for the long chart and its cursor. Kept out
+    # of the market shard by write_history(), which gives it its own per-ticker
+    # file — see daily_history() for why a sampled series cannot carry a
+    # crosshair honestly.
+    out["history"] = daily_history(df)
     # Candlestick patterns. Kept COMPACT on purpose: the full scan can find
     # dozens of signals over sixty sessions, and the row only needs the live
     # ones plus the verdict. The rest stays in the scan and is recomputed on
