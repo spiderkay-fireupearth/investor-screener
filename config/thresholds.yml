@@ -1067,6 +1067,95 @@ graham:
       operator: gte
 
 # ---------------------------------------------------------------------------
+# The compounder test. Not a famous investor's framework but a modern
+# quality-growth checklist: is this a strong business, and is the price already
+# paying for everything it could plausibly do?
+#
+# The first three tests ask about the BUSINESS — pricing power, returns on the
+# capital it employs, and how much of its cash flow it must spend just to stand
+# still. The fourth asks about the PRICE, by inverting the discounted cash flow
+# model: instead of guessing a growth rate and producing a value, it takes
+# today's enterprise value as given and solves for the revenue growth the market
+# must already be assuming. A low implied growth rate is a low hurdle.
+#
+# The fifth test in the original framework — does the addressable market exist
+# to support that growth? — is deliberately ABSENT. It cannot be computed from
+# financial statements, and a checkbox that always passes is worse than no
+# checkbox. The panel prints the implied revenue in ten years as a multiple of
+# today's instead, so the reader can make that judgement against a market they
+# know. That is the one part of this framework the app hands back to you.
+compounder:
+  label: Compounder
+  min_tests_passed: 5      # of 6
+  # WHY 5 AND NOT 6. These bars are stringent by design — a business clearing
+  # all six at once is rare, and a framework that passes nobody tells you
+  # nothing. Margin expansion is the softest of the six (a company already at
+  # a 40% operating margin has little room to expand and should not be marked
+  # down for it), so allowing one miss keeps the screen discriminating.
+  assumptions:
+    # Every input to the cost of capital and the reverse DCF, in one place, so
+    # that changing a view about the equity risk premium is a config edit
+    # rather than a code change. The risk-free rate is NOT here: it comes from
+    # FRED's 10-year Treasury on each run.
+    equity_risk_premium: 0.05
+    default_beta: 1.0        # used only when the feed carries no beta, and said so on the page
+    fallback_risk_free: 0.042
+    horizon_years: 10
+    terminal_growth: 0.025
+    max_tax_rate: 0.35
+    min_wacc: 0.04
+    max_wacc: 0.25
+  tests:
+    # 1. Pricing power, as it shows up in the accounts. Above 20% means the
+    #    company keeps more than a fifth of every dollar of revenue after the
+    #    cost of running the business — which in a competitive market it could
+    #    not do unless customers had somewhere else to go and chose not to.
+    operating_margin:
+      metric: compounder_operating_margin
+      threshold: 0.20
+      operator: gte
+    # 2. And WIDENING, not merely wide. A five-year slope of the operating
+    #    margin: positive means the moat is getting deeper, negative means
+    #    competition is arriving. Needs five years of statements to mean
+    #    anything, so shallow feeds report it as unevaluable, not failed.
+    margin_expanding:
+      metric: compounder_margin_slope
+      threshold: 0.0
+      operator: gt
+      min_history_years: 5
+    # 3. Return on the capital actually employed. 15% is the conventional line
+    #    between a business that compounds and one that merely grows.
+    roic:
+      metric: compounder_roic
+      threshold: 0.15
+      operator: gte
+    # 4. The spread that matters more than the level. A company earning 15% on
+    #    capital that costs it 14% creates almost nothing; one earning 15% on
+    #    capital that costs 7% doubles its owners' money roughly every decade.
+    #    WACC is CAPM-based, with the beta from the data feed and every input
+    #    printed beside the answer.
+    spread_over_cost_of_capital:
+      metric: compounder_spread
+      threshold: 0.05
+      operator: gte
+    # 5. How much of the cash the business generates must be spent simply to
+    #    keep it where it is. Below half leaves real owner earnings; above it,
+    #    the reported cash flow is largely a maintenance budget in disguise.
+    #    Uses the same maintenance-capex estimate as the Buffett panel.
+    maintenance_capex_coverage:
+      metric: compounder_maint_capex_to_cfo
+      threshold: 0.50
+      operator: lte
+    # 6. The hurdle already in the price. Solved by bisection on revenue growth
+    #    with today's operating margin held constant, so the answer is "what
+    #    must revenue do", not "what must management do". Below 10% a year
+    #    means the market is not demanding heroics.
+    implied_growth_hurdle:
+      metric: compounder_implied_growth
+      threshold: 0.10
+      operator: lte
+
+# ---------------------------------------------------------------------------
 technical:
   label: Technical timing overlay
   min_tests_passed: 4      # of 6
