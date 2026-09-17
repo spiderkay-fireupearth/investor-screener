@@ -228,6 +228,12 @@ class YahooProvider:
                 # you to judge a business you cannot name.
                 info["business_summary"] = full.get("longBusinessSummary")
                 info["trailing_pe"] = full.get("trailingPE")
+                # Beta, for the CAPM cost of equity in the compounder screen.
+                # Yahoo's is the 5-year monthly figure against the S&P 500 —
+                # crude for a non-US name measured against a US index, which is
+                # why the page reports which beta it used rather than only the
+                # rate it produced.
+                info["beta"] = full.get("beta")
                 # ETF / MUTUALFUND / EQUITY. A fund has no revenue, equity or
                 # ROE, so the value frameworks must be skipped rather than
                 # failed on missing data.
