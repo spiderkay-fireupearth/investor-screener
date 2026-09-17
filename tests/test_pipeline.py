@@ -514,8 +514,8 @@ def test_end_to_end_with_config():
     check("GOOD is surfaced", res["GOOD"]["surfaced"], True)
     check("every framework evaluated",
           sorted(res["GOOD"]["frameworks"].keys()),
-          ["buffett", "graham", "greenblatt", "klarman", "lynch", "marks",
-           "munger", "rogers", "schloss", "soros", "templeton"])
+          ["buffett", "compounder", "graham", "greenblatt", "klarman", "lynch",
+           "marks", "munger", "rogers", "schloss", "soros", "templeton"])
 
     # Size/liquidity gate must suppress a name entirely.
     mets["GOOD"]["market_cap_usd"] = 1_000_000.0
@@ -1036,7 +1036,7 @@ def test_soros_and_rogers_from_source():
     check("Rogers is gated to commodity themes", rog["themes_only"], True)
     check("Rogers is registered in the renderer",
           "rogers" in [k for k, _ in rn.FRAMEWORKS], True)
-    check("renderer now shows 11 frameworks", len(rn.FRAMEWORKS), 11)
+    check("renderer now shows 12 frameworks", len(rn.FRAMEWORKS), 12)
 
     # Capex against depreciation is the company-level supply gauge.
     miner = [mkyear(2025, revenue=1000.0, net_income=120.0, capex=60.0,
@@ -1082,7 +1082,7 @@ def test_buffett_additions_and_graham():
     check("Buffett now has 16 tests", len(th["buffett"]["tests"]), 16)
     check("Buffett bar is 11 of 16", th["buffett"]["min_tests_passed"], 11)
     check("Graham has 9 tests", len(th["graham"]["tests"]), 9)
-    check("renderer shows 11 frameworks", len(rn.FRAMEWORKS), 11)
+    check("renderer shows 12 frameworks", len(rn.FRAMEWORKS), 12)
 
     def mk(**over):
         base = dict(revenue=1000.0, gross_profit=400.0, operating_income=200.0,
@@ -3614,7 +3614,12 @@ def test_technical_charts():
     check("a price series is produced", sp is not None, True)
     check("downsampled, not 500 daily bars", sp["points"] <= ta.SPARK_POINTS, True)
     check("and enough points left to draw a shape", sp["points"] >= 40, True)
-    check("over about two years", 1.8 <= sp["years"] <= 2.1, True)
+    # The fixture is 620 business days, about two and a half years. The window
+    # used to be capped at two, so this read 2.0; the chart now carries five
+    # years and the sparkline keeps whatever it is given up to that. Asserting
+    # 2.0 again would be asserting the old cap, not the new behaviour.
+    check("the whole fixture, not a two-year slice",
+          2.4 <= sp["years"] <= 2.6, True)
     check("normalised to 100 at the start", sp["px"][0], 100.0)
     check("and rounded to one decimal",
           all(round(v, 1) == v for v in sp["px"]), True)
@@ -5843,6 +5848,154 @@ def test_candlestick_patterns():
           "split and dividend" in html, True)
 
 
+# ---------------------------------------------------------------------------
+def test_compounder_framework():
+    """Cost of capital, the reverse DCF, and the framework it feeds.
+
+    The reverse DCF is checked by ROUND TRIP rather than against a hand-typed
+    expected value: feed the solved growth rate back into the same valuation
+    and it must reproduce the enterprise value it was solved from. That catches
+    a sign error or a stale discount rate, which a fixed expected number would
+    also catch, but it additionally catches the solver and the valuation
+    drifting apart — which is the failure that would otherwise be silent.
+    """
+    print("\n[35] The compounder framework")
+    from src import compounder as cp
+
+    th = yaml.safe_load(open("config/thresholds.yml"))
+    cfg = th["compounder"]
+    asm = cfg["assumptions"]
+
+    check("the framework is registered in the renderer",
+          ("compounder", "Compounder") in rn.FRAMEWORKS, True)
+    check("and it runs on every company", "compounder" in open(
+        "src/screens.py").read().split("framework_names = ")[1][:300], True)
+    check("six tests", len(cfg["tests"]), 6)
+    check("operating margin at 20%",
+          cfg["tests"]["operating_margin"]["threshold"], 0.20)
+    check("ROIC at 15%", cfg["tests"]["roic"]["threshold"], 0.15)
+    check("spread at 5 points",
+          cfg["tests"]["spread_over_cost_of_capital"]["threshold"], 0.05)
+    check("maintenance capex under half of operating cash flow",
+          cfg["tests"]["maintenance_capex_coverage"]["threshold"], 0.50)
+    check("and the implied growth hurdle at 10%",
+          cfg["tests"]["implied_growth_hurdle"]["threshold"], 0.10)
+    check("the margin trend needs five years before it is judged",
+          cfg["tests"]["margin_expanding"]["min_history_years"], 5)
+
+    y0 = mkyear(2025, revenue=100e9, operating_income=30e9, pretax_income=30e9,
+                net_income=24e9, total_debt=20e9, interest_expense=0.8e9,
+                cfo=32e9, capex=6e9, current_assets=50e9,
+                cash_and_equivalents=20e9, current_liabilities=20e9,
+                net_ppe=50e9)
+    check("invested capital = NWC + net PPE", y0.invested_capital, 60e9)
+
+    # --- the cost of capital, input by input --------------------------------
+    w = cp.wacc({"market_cap_stmt_ccy": 300e9}, y0, beta=1.10,
+                risk_free=0.042, cfg=asm)
+    check("WACC is available", w["available"], True)
+    # 0.042 + 1.10 x 0.05 = 0.097
+    check("cost of equity is CAPM", w["cost_of_equity"], 0.097)
+    # 0.8 / 20 = 4%, tax-effected at 24/30 -> 20% -> 4% x 0.8 = 3.2%
+    check("cost of debt is interest over debt", w["cost_of_debt_pretax"], 0.04)
+    check("effective tax rate comes off the accounts", w["tax_rate"], 0.20)
+    check("after tax", w["cost_of_debt_after_tax"], 0.032)
+    check("weighted by market values", w["weight_debt"], 20.0 / 320.0)
+    check("and the basis is printed for the reader",
+          "risk-free" in w["basis"] and "premium" in w["basis"], True)
+
+    # A beta the feed did not carry must be DECLARED, not silently substituted.
+    w_nb = cp.wacc({"market_cap_stmt_ccy": 300e9}, y0, beta=None,
+                   risk_free=0.042, cfg=asm)
+    check("a missing beta falls back to 1.0", w_nb["beta"], 1.0)
+    check("and says so", w_nb["beta_source"].startswith("assumed"), True)
+
+    # --- the reverse DCF round trip -----------------------------------------
+    m = {"enterprise_value": 890e9, "market_cap_stmt_ccy": 890e9,
+         "operating_margin_ttm": 0.30, "operating_margin_slope_5y": 0.012,
+         "ebit_to_invested_capital": 0.50, "roic_5y_avg": 0.45,
+         "maintenance_capex": 4e9, "history_years": 10}
+    m.update(cp.assess(m, y0=y0, beta=1.10, risk_free=0.042, cfg=asm))
+    rd = m["compounder_reverse_dcf"]
+    check("the growth rate solves", rd["available"], True)
+    check("it is not at a search bound", rd["bounded"], None)
+    ev_back = cp._ev_at_growth(
+        rd["implied_growth"], 100e9, 0.30, w["tax_rate"],
+        rd["sales_to_capital"], rd["discount_rate"],
+        rd["horizon_years"], rd["terminal_growth"])
+    check("and feeding it back reproduces the enterprise value",
+          abs(ev_back - 890e9) / 890e9 < 0.001, True)
+    check("the margin is held, not improved", rd["margin_held"], 0.30)
+    check("revenue in ten years is stated as a multiple",
+          abs(rd["revenue_multiple"]
+              - (1 + rd["implied_growth"]) ** 10) < 1e-6, True)
+
+    # A cheaper price must imply a LOWER hurdle. This is the direction the
+    # whole test depends on, and a sign error would invert it.
+    cheap = {**m, "enterprise_value": 300e9, "market_cap_stmt_ccy": 300e9}
+    cheap.update(cp.assess(cheap, y0=y0, beta=1.10, risk_free=0.042, cfg=asm))
+    check("a cheaper price implies a lower growth hurdle",
+          cheap["compounder_implied_growth"] < m["compounder_implied_growth"],
+          True)
+
+    # --- the spread ---------------------------------------------------------
+    check("spread is ROIC less WACC",
+          abs(m["compounder_spread"]
+              - (m["compounder_roic"] - m["compounder_wacc"])) < 1e-9, True)
+
+    # --- the framework ------------------------------------------------------
+    r = sc.run_framework("compounder", cfg, m, "fail")
+    check("the richly-priced name fails its growth hurdle",
+          [t["result"] for t in r["tests"]
+           if t["name"] == "implied_growth_hurdle"][0], False)
+    check("but passes the other five", r["n_passed"], 5)
+    r2 = sc.run_framework("compounder", cfg, cheap, "fail")
+    check("the cheaper one clears all six", r2["n_passed"], 6)
+    check("and passes", r2["passed"], True)
+
+    # --- honest refusal, not a plausible number -----------------------------
+    loss = {"enterprise_value": 50e9, "market_cap_stmt_ccy": 50e9,
+            "operating_margin_ttm": -0.05, "history_years": 10}
+    loss.update(cp.assess(loss, y0=y0, beta=1.0, risk_free=0.042, cfg=asm))
+    check("a loss-making company gets no implied growth rate",
+          loss["compounder_implied_growth"], None)
+    check("and the reason is stated rather than blank",
+          "not currently profitable"
+          in (loss["compounder_reverse_dcf"].get("reason") or ""), True)
+
+    no_cap = dict(m); no_cap.pop("market_cap_stmt_ccy")
+    w_none = cp.wacc(no_cap, y0, beta=1.0, risk_free=0.042, cfg=asm)
+    check("no market cap means no cost of capital, not a guess",
+          w_none["available"], False)
+
+    # --- a short feed is OUR limitation, not the company's ------------------
+    shallow = {k: v for k, v in cheap.items() if not k.startswith("compounder_")}
+    shallow.update({"operating_margin_slope_5y": None, "history_years": 3})
+    shallow.update(cp.assess(shallow, y0=y0, beta=1.10, risk_free=0.042, cfg=asm))
+    r3 = sc.run_framework("compounder", cfg, shallow, "fail")
+    check("the margin-trend test leaves the denominator on a short feed",
+          r3["effective_total"], 5)
+    check("rather than being scored as a failure", r3["n_failed"], 0)
+
+    # --- the evidence lines -------------------------------------------------
+    lines = cp.explain(m)
+    joined = " ".join(lines)
+    check("the spread is in percentage points, not raw fractions",
+          "40.4 points" in joined, True)
+    check("the reader is told the TAM judgement is theirs",
+          "this page cannot make for you" in joined, True)
+    sh_lines = " ".join(cp.explain(shallow))
+    check("an unknown margin trend is never reported as flat",
+          "flat" not in sh_lines and "could not be struck" in sh_lines, True)
+
+    for key in ("compounder_spread", "compounder_implied_growth",
+                "compounder_wacc_detail", "compounder_evidence"):
+        check(f"{key} survives the round trip through the store",
+              key in rn.DISPLAY_METRICS, True)
+    check("and the drawer prints the evidence",
+          "r.cmp_ev" in rn.TEMPLATE, True)
+
+
 if __name__ == "__main__":
     test_schema_identities()
     test_metrics_math()
@@ -5890,6 +6043,7 @@ if __name__ == "__main__":
     test_lynch_never_asks_for_six_years()
     test_buffett_and_munger_lists()
     test_munger_full_framework()
+    test_compounder_framework()
 
     print("\n" + "=" * 62)
     print(f"  {PASS} passed, {FAIL} failed")
