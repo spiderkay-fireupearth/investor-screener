@@ -650,12 +650,14 @@ def screen_universe(records: List[Any],
         records, metrics_by_ticker, macro, thresholds.get("buffett", {}))
 
     framework_names = ["buffett", "munger", "schloss", "klarman", "lynch",
-                       "templeton", "marks", "soros", "rogers", "graham"]
+                       "templeton", "marks", "soros", "rogers", "graham",
+                       "compounder"]
     # Frameworks that read a company's accounts. A fund has none of the inputs,
     # so these are marked not-applicable rather than failed — failing an ETF on
     # "missing ROE" is noise dressed as a finding.
     COMPANY_FRAMEWORKS = {"buffett", "munger", "schloss", "klarman", "lynch",
-                          "templeton", "marks", "rogers", "graham"}
+                          "templeton", "marks", "rogers", "graham",
+                          "compounder"}
     results: Dict[str, Any] = {}
 
     for rec in records:

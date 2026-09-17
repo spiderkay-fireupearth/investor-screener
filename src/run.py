@@ -43,6 +43,7 @@ from . import owners as own
 from . import commodities as cmd
 from . import reflexivity as rfx
 from . import dislocation as dis
+from . import compounder as cmp_
 from . import events as evt
 from . import buffett as bf
 from . import sentiment as sen
@@ -858,6 +859,7 @@ def build_record(ticker: str, market_cfg: Dict, market_key: str,
     rec.sector = prof.get("sector")
     rec.industry = prof.get("industry")
     rec.business_summary = prof.get("business_summary")
+    rec.beta = prof.get("beta")
     rec.insider_ownership = prof.get("insider_ownership")
     rec.institutional_ownership = prof.get("institutional_ownership")
     rec.dividend_yield = prof.get("dividend_yield")
@@ -1185,6 +1187,16 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         if r:
             fx_rates[ccy.upper()] = r
 
+    # The compounder framework needs the risk-free rate, which is a property of
+    # the world rather than of any one company — so it is read once, here, and
+    # converted from FRED's percent to the fraction the maths works in. When
+    # FRED is unreachable the module says so on the page rather than quietly
+    # substituting a number nobody can see.
+    _rf_pct = macro.get("us_10y")
+    risk_free = (float(_rf_pct) / 100.0
+                 if isinstance(_rf_pct, (int, float)) else None)
+    compounder_cfg = (thresholds.get("compounder", {}) or {}).get("assumptions", {})
+
     metrics_by_ticker: Dict[str, Dict[str, Any]] = {}
     for rec in records:
         m = mx.compute_metrics(
@@ -1193,6 +1205,20 @@ def run(region: str, cfg_dir: str = "config", out_dir: str = "out",
         fx = fx_rates.get((rec.currency or "USD").upper()) or 1.0
         m["market_cap_usd"] = rec.market_cap * fx if rec.market_cap else None
         m["fx_to_usd"] = fx
+        # Cost of capital, the ROIC-WACC spread and the reverse DCF. Runs after
+        # compute_metrics because it reads that function's output (enterprise
+        # value, ROIC, maintenance capex) rather than recomputing any of it —
+        # two panels disagreeing about the same company is worse than one panel.
+        try:
+            y0 = (rec.years or [None])[0]
+            m.update(cmp_.assess(m, y0=y0, beta=getattr(rec, "beta", None),
+                                 risk_free=risk_free, cfg=compounder_cfg))
+            # Rendered here, not in the browser, so that a row merged in from
+            # the other region's last run carries its own explanation instead
+            # of a column of numbers with nothing to justify them.
+            m["compounder_evidence"] = cmp_.explain(m)
+        except Exception as e:                       # noqa: BLE001
+            log.warning("compounder metrics failed for %s: %s", rec.ticker, e)
         metrics_by_ticker[rec.ticker] = m
 
     # Where are we in the cycle? Computed from the primary index, our own

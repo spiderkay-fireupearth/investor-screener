@@ -181,6 +181,9 @@ class CompanyRecord:
     institutional_ownership: Optional[float] = None   # fraction held by funds
     dividend_yield: Optional[float] = None
     first_trade_date: Optional[str] = None            # ISO date of first quote
+    # Five-year monthly beta from the price feed, for the CAPM cost of equity.
+    # Absent for many names; the compounder screen substitutes 1.0 and says so.
+    beta: Optional[float] = None
     currency: str = "USD"            # currency the SHARES TRADE in
     financial_currency: Optional[str] = None   # currency the STATEMENTS use
     standard: str = "ifrs"
