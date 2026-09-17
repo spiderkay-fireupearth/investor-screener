@@ -23,6 +23,7 @@ FRAMEWORKS = [
     ("klarman", "Klarman"), ("lynch", "Lynch"), ("templeton", "Templeton"),
     ("marks", "Marks"), ("greenblatt", "Greenblatt"), ("soros", "Soros"),
     ("rogers", "Rogers"), ("graham", "Graham"),
+    ("compounder", "Compounder"),
 ]
 
 
@@ -104,6 +105,21 @@ DISPLAY_METRICS = (
     "candle_action", "candle_why", "candle_trend", "candle_stop",
     "candle_bullish", "candle_bearish", "candle_signals", "candle_caveat",
     "atr_pct", "max_drawdown_1y", "max_drawdown_5y",
+    # Compounder. `compounder_wacc_detail` and `compounder_reverse_dcf` are
+    # nested dicts rather than scalars, on purpose: they carry every input that
+    # produced the headline number. A cost of capital nobody can take apart is
+    # not something a reader can disagree with, and a figure nobody can
+    # disagree with is not analysis. `compounder_evidence` is the plain-English
+    # rendering of both, computed once at screen time so a merged row from the
+    # other region's last run still explains itself.
+    "compounder_operating_margin", "compounder_margin_slope",
+    "compounder_margin_expanding", "compounder_roic", "compounder_wacc",
+    "compounder_wacc_detail", "compounder_spread",
+    "compounder_maint_capex_to_cfo", "compounder_maint_capex",
+    "compounder_reverse_dcf", "compounder_implied_growth",
+    "compounder_implied_revenue_10y", "compounder_revenue_multiple_10y",
+    "compounder_evidence",
+    "operating_margin_ttm", "operating_margin_slope_5y", "enterprise_value",
 )
 
 # Retained only so an older caller importing it does not break. The cap it
@@ -346,6 +362,11 @@ def build_payload(results: Dict[str, Any], metrics: Dict[str, Dict[str, Any]],
             "sty_score": m.get("style_score"),
             "sty_why": m.get("style_why") or "",
             "sty_ev": m.get("style_evidence") or [],
+            # The compounder read: margin, spread over the cost of capital,
+            # maintenance capex, and the growth the price is already paying
+            # for. Sent as finished sentences because every one of these
+            # numbers is meaningless without the assumption behind it.
+            "cmp_ev": m.get("compounder_evidence") or [],
             # Buffett's three business tenets, as a label plus its evidence.
             "b": bool(m.get("buffett_b_label")),
             "b_summary": m.get("buffett_tenets_summary") or "",
@@ -1001,7 +1022,16 @@ framework's tests at the thresholds in <code>config/thresholds.yml</code>. Amber
 test could not be evaluated — data was missing — which under the default strict setting
 counts as a fail. Faded means the framework doesn't apply (Greenblatt and Klarman skip
 financials, REITs and utilities, where EV/EBIT and return-on-capital are meaningless).
-Click any row to see exactly which test failed and on what value.</div>
+Click any row to see exactly which test failed and on what value.
+<br><br><b>Comp</b> is the one column not named after an investor. It is the compounder
+test: an operating margin above 20% and widening, a return on invested capital above 15%
+that beats the company's own cost of capital by more than five points, maintenance capital
+expenditure taking less than half of operating cash flow, and — by running a discounted
+cash flow backwards from today's price — an implied revenue growth hurdle below 10% a year.
+The fifth question that framework asks, whether the addressable market is big enough to
+support that growth, is not scored here: it cannot be read off a set of accounts. The row
+drawer prints the implied revenue in ten years as a multiple of today's instead, so that
+judgement stays with you rather than being faked by a checkbox.</div>
 </div>
 
 <div id="view-sentiment" style="display:none">__SENTPANEL__</div>
@@ -2253,7 +2283,9 @@ function detail(r){
     if(r.syn.what) h+=`<div class="what"><b>What it is.</b> ${esc(r.syn.what)}</div>`;
     h+=(r.syn.numbers||[]).map(x=>`<p>${esc(x)}</p>`).join('');
     h+='<div class="src">Written from this row&rsquo;s own figures'
-      +(r.syn.what_source==='feed'
+      +(r.syn.what_source==='unavailable'
+        ? ' — the profile feed returned nothing for this company on the last run'
+        : r.syn.what_source==='feed'
         ? ' plus the company description carried by the data feed'
         : (r.syn.what_source==='classification'
            ? ' — the feed carries no business description for this name, only its sector'
@@ -2341,9 +2373,21 @@ function detail(r){
            +esc(bd.moat.caveat)+'</div>' : '')
       +'</div>';
   }
+  // The compounder read, in sentences. Every figure here rests on an
+  // assumption — a beta, an equity risk premium, a terminal growth rate — and
+  // a number whose assumption is invisible cannot be argued with, so the
+  // assumptions travel with the numbers rather than living in a config file
+  // the reader will never open.
+  if(r.cmp_ev && r.cmp_ev.length){
+    const pass=r.fw&&r.fw.compounder==='pass';
+    h+='<div class="note" style="border-left-color:'+(pass?'var(--ok)':'var(--tx3)')+'">'
+      +'<b>Compounder read'+(pass?' — clears the bar':'')+'.</b><br>'
+      +r.cmp_ev.map(esc).join('<br>')
+      +'</div>';
+  }
   if(r.is_fund)
     h+='<div class="warn"><b>This is a fund, not an operating company.</b> Revenue, '
-      +'equity, ROE and EV/EBIT are undefined for an ETF, so the six value '
+      +'equity, ROE and EV/EBIT are undefined for an ETF, so the company '
       +'frameworks show n/a rather than fail. Prices, technicals and the Soros '
       +'regime read still apply.</div>';
   if(r.warnings && r.warnings.length)
