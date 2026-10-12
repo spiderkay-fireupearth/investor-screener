@@ -309,6 +309,12 @@ owners:
         note: long-term stake in the five Japanese trading houses
     stake_filings:
     - form: SCHEDULE 13G/A
+      filed: '2026-10-07'
+      accession: 0001193125-26-417254
+      subject: LENNAR CORP /NEW/
+      subject_cik: 0000920760
+      url: https://www.sec.gov/Archives/edgar/data/1067983/000119312526417254/0001193125-26-417254-index.htm
+    - form: SCHEDULE 13G/A
       filed: '2026-08-14'
       accession: 0001193125-26-352910
       subject: DELTA AIR LINES, INC.
@@ -374,13 +380,7 @@ owners:
       subject: BERKSHIRE HATHAWAY INC
       subject_cik: 0001067983
       url: https://www.sec.gov/Archives/edgar/data/1067983/000210011926000227/0002100119-26-000227-index.htm
-    - form: SCHEDULE 13G/A
-      filed: '2026-03-26'
-      accession: 0000102909-26-000775
-      subject: BERKSHIRE HATHAWAY INC
-      subject_cik: 0001067983
-      url: https://www.sec.gov/Archives/edgar/data/1067983/000010290926000775/0000102909-26-000775-index.htm
-    updated_utc: '2026-08-24T08:28:28Z'
+    updated_utc: '2026-10-12T14:49:50Z'
   OT:
     name: Oaktree
     long_name: Oaktree Capital Management, L.P.
