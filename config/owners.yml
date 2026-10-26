@@ -820,6 +820,12 @@ owners:
         note: PDD Holdings, exited
     manual: {}
     stake_filings:
+    - form: SCHEDULE 13G/A
+      filed: '2026-10-20'
+      accession: 0001140361-26-040304
+      subject: MATTHEWS INTERNATIONAL CORP
+      subject_cik: 0000063296
+      url: https://www.sec.gov/Archives/edgar/data/949509/000114036126040304/0001140361-26-040304-index.htm
     - form: SCHEDULE 13G
       filed: '2026-08-10'
       accession: 0001140361-26-032030
@@ -886,10 +892,4 @@ owners:
       subject: Garrett Motion Inc.
       subject_cik: '0001735707'
       url: https://www.sec.gov/Archives/edgar/data/949509/000119312523166916/0001193125-23-166916-index.htm
-    - form: SC 13D/A
-      filed: '2023-06-09'
-      accession: 0001193125-23-163894
-      subject: Garrett Motion Inc.
-      subject_cik: '0001735707'
-      url: https://www.sec.gov/Archives/edgar/data/949509/000119312523163894/0001193125-23-163894-index.htm
-    updated_utc: '2026-08-24T08:28:32Z'
+    updated_utc: '2026-10-26T12:31:30Z'
